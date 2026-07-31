@@ -6,6 +6,7 @@ import type {
   EmailStatsResponse,
   WorkspacesResponse,
 } from "@/lib/plusvibe-types";
+import type { JobRecord, StartJobPayload } from "@/lib/jobs/types";
 
 // Header our proxy reads the forwarded key from. Mirrors CLIENT_KEY_HEADER on
 // the server (kept as a literal here to avoid importing server-only code).
@@ -20,11 +21,20 @@ export class ApiClientError extends Error {
   }
 }
 
-async function request<T>(url: string, signal?: AbortSignal): Promise<T> {
+async function request<T>(
+  url: string,
+  init?: { method?: "GET" | "POST"; body?: unknown; signal?: AbortSignal }
+): Promise<T> {
   const key = getApiKey();
+  const headers: Record<string, string> = {};
+  if (key) headers[KEY_HEADER] = key;
+  if (init?.body !== undefined) headers["content-type"] = "application/json";
+
   const res = await fetch(url, {
-    headers: key ? { [KEY_HEADER]: key } : {},
-    signal,
+    method: init?.method ?? "GET",
+    headers,
+    body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+    signal: init?.signal,
   });
 
   const text = await res.text();
@@ -49,7 +59,7 @@ async function request<T>(url: string, signal?: AbortSignal): Promise<T> {
 }
 
 export function fetchWorkspaces(signal?: AbortSignal) {
-  return request<WorkspacesResponse>("/api/plusvibe/workspaces", signal);
+  return request<WorkspacesResponse>("/api/plusvibe/workspaces", { signal });
 }
 
 export function fetchAccounts(
@@ -60,7 +70,7 @@ export function fetchAccounts(
   if (params.tags) qs.set("tags", params.tags);
   return request<EmailAccountsResponse>(
     `/api/plusvibe/accounts?${qs.toString()}`,
-    signal
+    { signal }
   );
 }
 
@@ -82,6 +92,37 @@ export function fetchEmailStats(params: EmailStatsParams, signal?: AbortSignal) 
   }
   return request<EmailStatsResponse>(
     `/api/plusvibe/email-stats?${qs.toString()}`,
-    signal
+    { signal }
   );
+}
+
+// --- Bulk-delete (Remove Inboxes) background jobs ---------------------------
+
+export function startBulkDelete(payload: StartJobPayload, signal?: AbortSignal) {
+  return request<{ jobId: string }>("/api/jobs/bulk-delete/start", {
+    method: "POST",
+    body: payload,
+    signal,
+  });
+}
+
+export function getBulkDeleteJob(jobId: string, signal?: AbortSignal) {
+  return request<JobRecord>(
+    `/api/jobs/bulk-delete/status?jobId=${encodeURIComponent(jobId)}`,
+    { signal }
+  );
+}
+
+export function listBulkDeleteJobs(signal?: AbortSignal) {
+  return request<{ jobs: JobRecord[] }>("/api/jobs/bulk-delete/list", {
+    signal,
+  });
+}
+
+export function abortBulkDelete(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/bulk-delete/abort", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
 }

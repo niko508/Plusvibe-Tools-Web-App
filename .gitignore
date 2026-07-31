@@ -27,6 +27,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# background job records (Remove Inboxes tool)
+/.jobs
+
 # editors
 .vscode/
 .idea/

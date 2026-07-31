@@ -42,6 +42,11 @@ interface RequestOptions {
   signal?: AbortSignal;
 }
 
+interface FullRequestOptions extends RequestOptions {
+  method?: "GET" | "POST";
+  body?: unknown;
+}
+
 function buildUrl(path: string, query?: Record<string, string | undefined>) {
   const url = new URL(BASE_URL + path);
   if (query) {
@@ -54,26 +59,33 @@ function buildUrl(path: string, query?: Record<string, string | undefined>) {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export async function plusvibeGet<T>({
+// Shared request loop with retry/backoff on transient failures (429 / 5xx).
+// 4xx (e.g. 400, 404) are surfaced immediately as PlusvibeError, not retried.
+async function plusvibeRequest<T>({
   apiKey,
   path,
   query,
+  method = "GET",
+  body,
   retries = 2,
   signal,
-}: RequestOptions): Promise<T> {
+}: FullRequestOptions): Promise<T> {
   const url = buildUrl(path, query);
+  const headers: Record<string, string> = {
+    "x-api-key": apiKey,
+    accept: "application/json",
+  };
+  if (body !== undefined) headers["content-type"] = "application/json";
+  const payload = body !== undefined ? JSON.stringify(body) : undefined;
 
   let attempt = 0;
-  // Retry loop for transient failures (rate limiting: 5 req/s, and 5xx).
   while (true) {
     let res: Response;
     try {
       res = await fetch(url, {
-        method: "GET",
-        headers: {
-          "x-api-key": apiKey,
-          accept: "application/json",
-        },
+        method,
+        headers,
+        body: payload,
         signal,
         cache: "no-store",
       });
@@ -102,22 +114,33 @@ export async function plusvibeGet<T>({
     }
 
     const text = await res.text();
-    let body: unknown = undefined;
+    let respBody: unknown = undefined;
     if (text) {
       try {
-        body = JSON.parse(text);
+        respBody = JSON.parse(text);
       } catch {
-        body = text;
+        respBody = text;
       }
     }
 
     if (!res.ok) {
-      const message = extractErrorMessage(body) ?? `Plusvibe request failed (${res.status})`;
-      throw new PlusvibeError(message, res.status, body);
+      const message =
+        extractErrorMessage(respBody) ?? `Plusvibe request failed (${res.status})`;
+      throw new PlusvibeError(message, res.status, respBody);
     }
 
-    return body as T;
+    return respBody as T;
   }
+}
+
+export function plusvibeGet<T>(options: RequestOptions): Promise<T> {
+  return plusvibeRequest<T>({ ...options, method: "GET" });
+}
+
+export function plusvibePost<T>(
+  options: RequestOptions & { body: unknown }
+): Promise<T> {
+  return plusvibeRequest<T>({ ...options, method: "POST" });
 }
 
 function extractErrorMessage(body: unknown): string | undefined {

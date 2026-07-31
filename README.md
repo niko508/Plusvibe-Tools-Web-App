@@ -9,8 +9,41 @@ point it at a workspace, and run work that would otherwise take dozens of clicks
 | Tool | Status | What it does |
 | --- | --- | --- |
 | **Domain Performance Monitoring** | ✅ Live | Breaks a workspace's email stats down by **sending domain** over any date range — sent volume, reply / positive-reply rates, and bounce rate, side by side, with an over-time chart and CSV export. |
+| **Remove Inboxes** | ✅ Live | Paste a list of sending domains, scan every workspace to find their inboxes, preview exactly what will be removed, then delete them in a **server-side background job** you can leave running. |
 | Mailbox Health Audit | 🔜 Planned | Scan every mailbox for warmup health, bounce rates and disconnects. |
 | Bulk Mailbox Actions | 🔜 Planned | Apply daily-limit, warmup and tagging changes across many mailboxes at once. |
+
+## How Remove Inboxes works
+
+Plusvibe has no "find inboxes by domain" endpoint, so the tool:
+
+1. **Scans in the browser** — lists every inbox across the selected workspaces
+   (`/account/list`, paginated + throttled) and builds a `domain → inboxes`
+   index. This is one pass over your inventory (seconds to ~2 min), independent
+   of how many domains you paste.
+2. **Previews** — shows, per pasted domain, how many inboxes match and in which
+   workspace(s), the grand total to delete, and which domains weren't found.
+   Nothing is deleted yet; you arm the delete by typing the exact inbox count.
+3. **Deletes as a background job** — on confirm, the inbox list is handed to a
+   **server-side job** (`POST /account/delete` per inbox) that keeps running
+   after you close the app. Deletions across all jobs share one **global rate
+   limiter** (~4.5/s) to stay under Plusvibe's 5 req/s cap.
+4. **Reports** — jobs are persisted and shown in a Jobs panel with live progress
+   (by domains processed) and a summary: domains removed, inboxes deleted,
+   domains not found, and per-inbox errors (with copy/export).
+
+Jobs are tagged with a fingerprint of your API key (the key itself is held in
+memory only, **never written to disk**), so only a client using the same key
+sees them. A run is naturally resumable — re-scanning only finds inboxes that
+still exist, so an interrupted run continues safely.
+
+### Job storage (`JOBS_DIR`)
+
+Job records are written as JSON under `JOBS_DIR` (default `./.jobs`). Out of the
+box, history survives closing the browser. To also survive a **Railway
+redeploy**, mount a [Railway volume](https://docs.railway.app/reference/volumes)
+and set `JOBS_DIR` to a path on it (e.g. `/data/jobs`); otherwise records last
+only for the container's lifetime.
 
 ## How Domain Performance Monitoring works
 

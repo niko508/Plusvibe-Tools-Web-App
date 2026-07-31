@@ -13,6 +13,8 @@ export const dynamic = "force-dynamic";
 const PAGE_SIZE = 100;
 const MAX_PAGES = 100; // safety cap: up to 10k accounts
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 // GET /api/plusvibe/accounts?workspace_id=...&tags=...
 // Returns every email account in the workspace, paginating through the
 // underlying /account/list endpoint so the caller gets the full set in one go.
@@ -32,6 +34,9 @@ export async function GET(request: Request) {
 
     const accounts: EmailAccount[] = [];
     for (let page = 0; page < MAX_PAGES; page++) {
+      // Space out pages so a single large workspace's pagination alone stays
+      // under Plusvibe's 5 req/s limit (the bulk-remove scan can page deeply).
+      if (page > 0) await sleep(200);
       const data = await plusvibeGet<RawAccountsResponse>({
         apiKey,
         path: "/account/list",

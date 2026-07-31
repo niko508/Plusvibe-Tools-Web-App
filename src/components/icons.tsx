@@ -96,6 +96,17 @@ export function FireIcon({ className, size }: IconProps) {
   );
 }
 
+export function TrashIcon({ className, size }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  );
+}
+
 export function DownloadIcon({ className, size }: IconProps) {
   return (
     <svg {...base(size, className)}>

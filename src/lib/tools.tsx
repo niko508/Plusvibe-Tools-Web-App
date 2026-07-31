@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { GaugeIcon, MailIcon, SparklesIcon } from "@/components/icons";
+import { GaugeIcon, MailIcon, SparklesIcon, TrashIcon } from "@/components/icons";
 
 // Registry of tools shown on the landing page. Adding a new tool = add an entry
 // here and (for active tools) a page under src/app/tools/<slug>/page.tsx.
@@ -24,6 +24,15 @@ export const TOOLS: Tool[] = [
       "Break a workspace's email stats down by sending domain over any date range — sent volume, reply and positive-reply rates, bounce rate and more, side by side.",
     status: "active",
     Icon: GaugeIcon,
+  },
+  {
+    slug: "remove-inboxes",
+    name: "Remove Inboxes",
+    tagline: "Bulk-delete inboxes by domain across all your workspaces",
+    description:
+      "Paste a list of sending domains, scan every workspace to find their inboxes, then delete them in a background job you can leave running — with a full results report of what was removed.",
+    status: "active",
+    Icon: TrashIcon,
   },
   {
     slug: "mailbox-health",
