@@ -37,6 +37,7 @@ import { exportDomainsCsv } from "./csv";
 import type { DomainRow, SortKey, SortState } from "./types";
 
 const LAST_WS_KEY = "pv_last_workspace";
+const BURNED_THRESHOLD_KEY = "pv_burned_threshold";
 const DEFAULT_PRESET = "30d";
 
 interface RunParams {
@@ -73,10 +74,28 @@ export function DomainPerformanceTool() {
   const [ranMeta, setRanMeta] = useState<{ workspaceName: string } | null>(null);
 
   // "Burned domains" filter: show only domains whose reply rate is below a
-  // threshold, so they can be copied/exported for pausing or replacing.
+  // threshold, so they can be copied/exported for pausing or replacing. The
+  // threshold persists in localStorage so it's a set-once global default that
+  // applies across every workspace.
   const [burnedOnly, setBurnedOnly] = useState(false);
   const [threshold, setThreshold] = useState("0.2");
+  const [thresholdLoaded, setThresholdLoaded] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    const saved =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem(BURNED_THRESHOLD_KEY)
+        : null;
+    if (saved !== null) setThreshold(saved);
+    setThresholdLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (thresholdLoaded && typeof window !== "undefined") {
+      window.localStorage.setItem(BURNED_THRESHOLD_KEY, threshold);
+    }
+  }, [threshold, thresholdLoaded]);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -273,11 +292,12 @@ export function DomainPerformanceTool() {
   // threshold. Only "done" rows with a header qualify.
   const thresholdNum = parseFloat(threshold);
   const thresholdValid = Number.isFinite(thresholdNum);
+  const loadedRows = rows.filter((r) => r.status === "done" && r.header);
   const burnedRows = thresholdValid
-    ? rows.filter(
-        (r) => r.status === "done" && r.header && r.header.reply_rate < thresholdNum
-      )
+    ? loadedRows.filter((r) => r.header!.reply_rate < thresholdNum)
     : [];
+  const burnedPct =
+    loadedRows.length > 0 ? (burnedRows.length / loadedRows.length) * 100 : 0;
   const visibleRows = burnedOnly ? burnedRows : rows;
 
   async function handleCopyDomains() {
@@ -396,8 +416,18 @@ export function DomainPerformanceTool() {
           {/* Domain table + burned-domain filter */}
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-sm font-semibold">By sending domain</h2>
+                {loadedRows.length > 0 && thresholdValid && (
+                  <span
+                    className="pv-chip"
+                    title={`${burnedRows.length} of ${loadedRows.length} domains have a reply rate below ${threshold}%`}
+                  >
+                    <FireIcon size={13} className="text-danger" />
+                    {burnedPct.toFixed(1)}% burned · {burnedRows.length}/
+                    {loadedRows.length}
+                  </span>
+                )}
                 {selectedDomain && (
                   <button
                     type="button"
@@ -478,10 +508,11 @@ export function DomainPerformanceTool() {
               <p className="text-xs text-muted-foreground">
                 {thresholdValid ? (
                   <>
-                    Showing {burnedRows.length} domain
-                    {burnedRows.length === 1 ? "" : "s"} with reply rate below{" "}
-                    {threshold}%{busy ? " so far (still loading…)" : ""}. Copy
-                    grabs the domain names, one per line.
+                    Showing {burnedRows.length} of {loadedRows.length} loaded
+                    domain{loadedRows.length === 1 ? "" : "s"} (
+                    {burnedPct.toFixed(1)}%) with reply rate below {threshold}%
+                    {busy ? " so far (still loading…)" : ""}. Copy grabs the
+                    domain names, one per line.
                   </>
                 ) : (
                   <>Enter a valid reply-rate threshold.</>

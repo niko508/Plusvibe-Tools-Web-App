@@ -5,10 +5,29 @@ import {
   formatNumber,
   formatPercent,
   bounceRateHealth,
-  replyRateHealth,
+  replyRateHeat,
   uniqueContacted,
 } from "@/lib/format";
 import { HealthDot, healthText, Spinner } from "@/components/ui";
+
+// Heatmap-styled reply-rate cell: red → green tint by reply rate.
+function ReplyHeatCell({ rate, muted }: { rate: number; muted?: boolean }) {
+  const heat = replyRateHeat(rate);
+  return (
+    <td className="px-4 py-3 text-right tabular-nums">
+      <span
+        className="inline-block rounded-md px-2 py-0.5 tabular-nums"
+        style={{
+          color: heat.text,
+          backgroundColor: heat.bg,
+          opacity: muted ? 0.85 : 1,
+        }}
+      >
+        {formatPercent(rate)}
+      </span>
+    </td>
+  );
+}
 import { AlertIcon } from "@/components/icons";
 
 interface Props {
@@ -137,12 +156,8 @@ export function DomainTable({ rows, sort, onSort, selected, onSelect }: Props) {
                 <td className="px-4 py-3 text-right tabular-nums">
                   {formatNumber(totals.replies)}
                 </td>
-                <td className="px-4 py-3 text-right tabular-nums">
-                  {formatPercent(totals.replyRate)}
-                </td>
-                <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
-                  {formatPercent(totals.replyRateOoo)}
-                </td>
+                <ReplyHeatCell rate={totals.replyRate} />
+                <ReplyHeatCell rate={totals.replyRateOoo} muted />
                 <td className="px-4 py-3 text-right tabular-nums">
                   {formatPercent(totals.posRate)}
                 </td>
@@ -210,19 +225,8 @@ function DomainTableRow({
           <td className="px-4 py-3 text-right tabular-nums">
             {formatNumber(h.total_reply_count)}
           </td>
-          <td
-            className={`px-4 py-3 text-right tabular-nums ${healthText(
-              replyRateHealth(h.reply_rate)
-            )}`}
-          >
-            <span className="inline-flex items-center justify-end gap-1.5">
-              <HealthDot health={replyRateHealth(h.reply_rate)} />
-              {formatPercent(h.reply_rate)}
-            </span>
-          </td>
-          <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
-            {formatPercent(h.reply_rate_with_ooo)}
-          </td>
+          <ReplyHeatCell rate={h.reply_rate} />
+          <ReplyHeatCell rate={h.reply_rate_with_ooo} muted />
           <td className="px-4 py-3 text-right tabular-nums">
             {formatPercent(h.pos_reply_rate)}
           </td>

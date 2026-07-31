@@ -121,6 +121,56 @@ export function bounceRateHealth(rate: number): Health {
   return "bad";
 }
 
+// Reply-rate heat scale — a fine-grained gradient from "super red" (0% reply
+// rate) to "super green" (>1%), with the buckets concentrated between 0 and 1%
+// where cold-email reply rates actually vary. Buckets 0..10:
+//   0.0 | 0.1 | 0.2 | 0.3 | 0.4–0.5 | 0.51–0.6 | 0.61–0.7 | 0.71–0.8 |
+//   0.81–0.9 | 0.91–1 | >1%
+export function replyRateBucket(rate: number): number {
+  if (rate > 1) return 10;
+  if (rate <= 0.05) return 0;
+  if (rate <= 0.15) return 1;
+  if (rate <= 0.25) return 2;
+  if (rate <= 0.35) return 3;
+  if (rate <= 0.5) return 4;
+  if (rate <= 0.6) return 5;
+  if (rate <= 0.7) return 6;
+  if (rate <= 0.8) return 7;
+  if (rate <= 0.9) return 8;
+  return 9; // 0.91–1.0
+}
+
+// Heat colour (red → amber → green) for a reply-rate value, as a text colour
+// plus a translucent background tint for a heatmap-style cell.
+export function replyRateHeat(rate: number): { text: string; bg: string } {
+  const [r, g, b] = heatRgb(replyRateBucket(rate) / 10);
+  return {
+    text: `rgb(${r} ${g} ${b})`,
+    bg: `rgb(${r} ${g} ${b} / 0.16)`,
+  };
+}
+
+function heatRgb(t: number): [number, number, number] {
+  const red = [239, 68, 68];
+  const amber = [245, 158, 11];
+  const green = [34, 197, 94];
+  const lerp = (a: number, b: number, u: number) => Math.round(a + (b - a) * u);
+  if (t <= 0.5) {
+    const u = t / 0.5;
+    return [
+      lerp(red[0], amber[0], u),
+      lerp(red[1], amber[1], u),
+      lerp(red[2], amber[2], u),
+    ];
+  }
+  const u = (t - 0.5) / 0.5;
+  return [
+    lerp(amber[0], green[0], u),
+    lerp(amber[1], green[1], u),
+    lerp(amber[2], green[2], u),
+  ];
+}
+
 export function uniqueContacted(header: {
   total_unique_contacted_count?: number;
   total_new_lead_contacted_count?: number;
