@@ -51,7 +51,7 @@ const COLUMNS: Column[] = [
   { key: "sent", label: "Sent", align: "right", numeric: true },
   { key: "contacted", label: "Contacted", align: "right", numeric: true },
   { key: "replies", label: "Replies", align: "right", numeric: true },
-  { key: "reply_rate", label: "Reply %", align: "right", numeric: true },
+  { key: "reply_rate", label: "True reply %", align: "right", numeric: true },
   { key: "reply_rate_ooo", label: "Reply % (OOO)", align: "right", numeric: true },
   { key: "pos_reply_rate", label: "Pos %", align: "right", numeric: true },
   { key: "bounce_rate", label: "Bounce %", align: "right", numeric: true },

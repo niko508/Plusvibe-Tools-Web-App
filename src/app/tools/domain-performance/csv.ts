@@ -15,7 +15,7 @@ export function exportDomainsCsv(
     "ooo_replies",
     "positive_replies",
     "bounces",
-    "reply_rate",
+    "true_reply_rate",
     "reply_rate_with_ooo",
     "positive_reply_rate",
     "bounce_rate",

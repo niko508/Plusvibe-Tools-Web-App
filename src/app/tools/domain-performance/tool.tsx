@@ -372,9 +372,9 @@ export function DomainPerformanceTool() {
               loading={wsLoading && !header}
             />
             <StatCard
-              label="Reply rate"
+              label="True reply rate"
               value={formatPercent(header?.reply_rate)}
-              sub={header ? `${formatNumber(header.total_reply_count)} replies` : undefined}
+              sub={header ? `${formatNumber(header.total_reply_count)} replies · excl. OOO` : undefined}
               health={header ? replyRateHealth(header.reply_rate) : "neutral"}
               loading={wsLoading && !header}
             />
@@ -421,7 +421,7 @@ export function DomainPerformanceTool() {
                 {loadedRows.length > 0 && thresholdValid && (
                   <span
                     className="pv-chip"
-                    title={`${burnedRows.length} of ${loadedRows.length} domains have a reply rate below ${threshold}%`}
+                    title={`${burnedRows.length} of ${loadedRows.length} domains have a true reply rate below ${threshold}%`}
                   >
                     <FireIcon size={13} className="text-danger" />
                     {burnedPct.toFixed(1)}% burned · {burnedRows.length}/
@@ -454,7 +454,7 @@ export function DomainPerformanceTool() {
 
                 {burnedOnly && (
                   <div className="flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs">
-                    <span className="text-muted-foreground">Reply&nbsp;% below</span>
+                    <span className="text-muted-foreground">True&nbsp;reply&nbsp;% below</span>
                     <input
                       type="number"
                       step="0.1"
@@ -510,7 +510,7 @@ export function DomainPerformanceTool() {
                   <>
                     Showing {burnedRows.length} of {loadedRows.length} loaded
                     domain{loadedRows.length === 1 ? "" : "s"} (
-                    {burnedPct.toFixed(1)}%) with reply rate below {threshold}%
+                    {burnedPct.toFixed(1)}%) with true reply rate below {threshold}%
                     {busy ? " so far (still loading…)" : ""}. Copy grabs the
                     domain names, one per line.
                   </>
@@ -540,8 +540,9 @@ export function DomainPerformanceTool() {
             !busy &&
             (burnedOnly ? (
               <EmptyState icon={<FireIcon />} title="No burned domains">
-                No domains have a reply rate below {thresholdValid ? threshold : "0"}
-                % in this range. Raise the threshold or widen the date range.
+                No domains have a true reply rate below{" "}
+                {thresholdValid ? threshold : "0"}% in this range. Raise the
+                threshold or widen the date range.
               </EmptyState>
             ) : (
               <EmptyState title="No sending domains found">
