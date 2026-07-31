@@ -150,6 +150,48 @@ export function replyRateHeat(rate: number): { text: string; bg: string } {
   };
 }
 
+// Separate heat scale for reply rate *with* OOO, which runs higher than the
+// true reply rate. Buckets 0..6:
+//   0.0–0.5 | 0.51–1 | 1–1.5 | 1.51–2 | 2.1–2.5 | 2.51–3 | 3%+
+export function replyRateOooBucket(rate: number): number {
+  if (rate > 3) return 6;
+  if (rate <= 0.5) return 0;
+  if (rate <= 1) return 1;
+  if (rate <= 1.5) return 2;
+  if (rate <= 2) return 3;
+  if (rate <= 2.5) return 4;
+  return 5; // 2.51–3
+}
+
+export function replyRateOooHeat(rate: number): { text: string; bg: string } {
+  const [r, g, b] = heatRgb(replyRateOooBucket(rate) / 6);
+  return {
+    text: `rgb(${r} ${g} ${b})`,
+    bg: `rgb(${r} ${g} ${b} / 0.16)`,
+  };
+}
+
+// Bounce rate — lower is better, so this scale is inverted: super green at 0%,
+// super red above 2.5%. Buckets 0..5:
+//   0–0.5 | 0.51–1 | 1.1–1.5 | 1.51–2 | 2.1–2.5 | 2.5%+
+export function bounceRateBucket(rate: number): number {
+  if (rate > 2.5) return 5;
+  if (rate <= 0.5) return 0;
+  if (rate <= 1) return 1;
+  if (rate <= 1.5) return 2;
+  if (rate <= 2) return 3;
+  return 4; // 2.1–2.5
+}
+
+export function bounceRateHeat(rate: number): { text: string; bg: string } {
+  // Invert (1 - t): a low bounce rate maps to green, a high one to red.
+  const [r, g, b] = heatRgb(1 - bounceRateBucket(rate) / 5);
+  return {
+    text: `rgb(${r} ${g} ${b})`,
+    bg: `rgb(${r} ${g} ${b} / 0.16)`,
+  };
+}
+
 function heatRgb(t: number): [number, number, number] {
   const red = [239, 68, 68];
   const amber = [245, 158, 11];

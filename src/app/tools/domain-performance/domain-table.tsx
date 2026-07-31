@@ -4,26 +4,24 @@ import type { DomainRow, SortKey, SortState } from "./types";
 import {
   formatNumber,
   formatPercent,
-  bounceRateHealth,
   replyRateHeat,
+  replyRateOooHeat,
+  bounceRateHeat,
   uniqueContacted,
 } from "@/lib/format";
-import { HealthDot, healthText, Spinner } from "@/components/ui";
+import { Spinner } from "@/components/ui";
 
-// Heatmap-styled reply-rate cell: red → green tint by reply rate.
-function ReplyHeatCell({ rate, muted }: { rate: number; muted?: boolean }) {
-  const heat = replyRateHeat(rate);
+type Heat = { text: string; bg: string };
+
+// Heatmap-styled percentage cell: coloured number on a matching tint pill.
+function HeatCell({ value, heat }: { value: number; heat: Heat }) {
   return (
     <td className="px-4 py-3 text-right tabular-nums">
       <span
         className="inline-block rounded-md px-2 py-0.5 tabular-nums"
-        style={{
-          color: heat.text,
-          backgroundColor: heat.bg,
-          opacity: muted ? 0.85 : 1,
-        }}
+        style={{ color: heat.text, backgroundColor: heat.bg }}
       >
-        {formatPercent(rate)}
+        {formatPercent(value)}
       </span>
     </td>
   );
@@ -156,14 +154,21 @@ export function DomainTable({ rows, sort, onSort, selected, onSelect }: Props) {
                 <td className="px-4 py-3 text-right tabular-nums">
                   {formatNumber(totals.replies)}
                 </td>
-                <ReplyHeatCell rate={totals.replyRate} />
-                <ReplyHeatCell rate={totals.replyRateOoo} muted />
+                <HeatCell
+                  value={totals.replyRate}
+                  heat={replyRateHeat(totals.replyRate)}
+                />
+                <HeatCell
+                  value={totals.replyRateOoo}
+                  heat={replyRateOooHeat(totals.replyRateOoo)}
+                />
                 <td className="px-4 py-3 text-right tabular-nums">
                   {formatPercent(totals.posRate)}
                 </td>
-                <td className="px-4 py-3 text-right tabular-nums">
-                  {formatPercent(totals.bounceRate)}
-                </td>
+                <HeatCell
+                  value={totals.bounceRate}
+                  heat={bounceRateHeat(totals.bounceRate)}
+                />
               </tr>
             </tfoot>
           )}
@@ -225,21 +230,15 @@ function DomainTableRow({
           <td className="px-4 py-3 text-right tabular-nums">
             {formatNumber(h.total_reply_count)}
           </td>
-          <ReplyHeatCell rate={h.reply_rate} />
-          <ReplyHeatCell rate={h.reply_rate_with_ooo} muted />
+          <HeatCell value={h.reply_rate} heat={replyRateHeat(h.reply_rate)} />
+          <HeatCell
+            value={h.reply_rate_with_ooo}
+            heat={replyRateOooHeat(h.reply_rate_with_ooo)}
+          />
           <td className="px-4 py-3 text-right tabular-nums">
             {formatPercent(h.pos_reply_rate)}
           </td>
-          <td
-            className={`px-4 py-3 text-right tabular-nums ${healthText(
-              bounceRateHealth(h.bounce_rate)
-            )}`}
-          >
-            <span className="inline-flex items-center justify-end gap-1.5">
-              <HealthDot health={bounceRateHealth(h.bounce_rate)} />
-              {formatPercent(h.bounce_rate)}
-            </span>
-          </td>
+          <HeatCell value={h.bounce_rate} heat={bounceRateHeat(h.bounce_rate)} />
         </>
       ) : (
         <td
