@@ -79,6 +79,23 @@ export function ChevronDownIcon({ className, size }: IconProps) {
   );
 }
 
+export function CopyIcon({ className, size }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+export function FireIcon({ className, size }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z" />
+    </svg>
+  );
+}
+
 export function DownloadIcon({ className, size }: IconProps) {
   return (
     <svg {...base(size, className)}>

@@ -22,7 +22,14 @@ import { mapPool } from "@/lib/concurrency";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { StatCard } from "@/components/stat-card";
 import { EmptyState, Spinner } from "@/components/ui";
-import { AlertIcon, DownloadIcon, GaugeIcon } from "@/components/icons";
+import {
+  AlertIcon,
+  DownloadIcon,
+  GaugeIcon,
+  CopyIcon,
+  CheckIcon,
+  FireIcon,
+} from "@/components/icons";
 import { Controls } from "./controls";
 import { OverviewChart } from "./overview-chart";
 import { DomainTable } from "./domain-table";
@@ -64,6 +71,12 @@ export function DomainPerformanceTool() {
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
   const [sort, setSort] = useState<SortState>({ key: "sent", dir: "desc" });
   const [ranMeta, setRanMeta] = useState<{ workspaceName: string } | null>(null);
+
+  // "Burned domains" filter: show only domains whose reply rate is below a
+  // threshold, so they can be copied/exported for pausing or replacing.
+  const [burnedOnly, setBurnedOnly] = useState(false);
+  const [threshold, setThreshold] = useState("0.2");
+  const [copied, setCopied] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -256,6 +269,26 @@ export function DomainPerformanceTool() {
       : "";
   const hasResults = rows.length > 0 || !!wsStats;
 
+  // Burned-domain filtering: loaded domains whose reply rate is below the
+  // threshold. Only "done" rows with a header qualify.
+  const thresholdNum = parseFloat(threshold);
+  const thresholdValid = Number.isFinite(thresholdNum);
+  const burnedRows = thresholdValid
+    ? rows.filter(
+        (r) => r.status === "done" && r.header && r.header.reply_rate < thresholdNum
+      )
+    : [];
+  const visibleRows = burnedOnly ? burnedRows : rows;
+
+  async function handleCopyDomains() {
+    const text = visibleRows.map((r) => r.domain).join("\n");
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  }
+
   // --- Render --------------------------------------------------------------
   if (!ready) {
     return <div className="pv-card h-40 animate-pulse" />;
@@ -311,7 +344,7 @@ export function DomainPerformanceTool() {
       {hasResults && (
         <>
           {/* Summary cards */}
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
             <StatCard
               label="Emails sent"
               value={formatNumber(header?.total_sent_count)}
@@ -323,6 +356,19 @@ export function DomainPerformanceTool() {
               value={formatPercent(header?.reply_rate)}
               sub={header ? `${formatNumber(header.total_reply_count)} replies` : undefined}
               health={header ? replyRateHealth(header.reply_rate) : "neutral"}
+              loading={wsLoading && !header}
+            />
+            <StatCard
+              label="Reply rate (with OOO)"
+              value={formatPercent(header?.reply_rate_with_ooo)}
+              sub={
+                header
+                  ? `${formatNumber(
+                      header.total_reply_count + header.total_ooo_reply_count
+                    )} incl. out-of-office`
+                  : undefined
+              }
+              health={header ? replyRateHealth(header.reply_rate_with_ooo) : "neutral"}
               loading={wsLoading && !header}
             />
             <StatCard
@@ -347,44 +393,112 @@ export function DomainPerformanceTool() {
             loading={wsLoading && chartData.length === 0}
           />
 
-          {/* Domain table */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold">By sending domain</h2>
-              {selectedDomain && (
+          {/* Domain table + burned-domain filter */}
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold">By sending domain</h2>
+                {selectedDomain && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDomain(null)}
+                    className="pv-chip pv-chip-active"
+                  >
+                    {selectedDomain} · clear
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Burned-domain toggle */}
                 <button
                   type="button"
-                  onClick={() => setSelectedDomain(null)}
-                  className="pv-chip pv-chip-active"
+                  onClick={() => setBurnedOnly((v) => !v)}
+                  className={`pv-chip ${
+                    burnedOnly ? "pv-chip-active" : "hover:text-foreground"
+                  }`}
                 >
-                  {selectedDomain} · clear
+                  <FireIcon size={13} />
+                  {burnedOnly ? "Burned domains only" : "Filter burned domains"}
                 </button>
-              )}
+
+                {burnedOnly && (
+                  <div className="flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs">
+                    <span className="text-muted-foreground">Reply&nbsp;% below</span>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      value={threshold}
+                      onChange={(e) => setThreshold(e.target.value)}
+                      className="w-14 rounded-md border border-input bg-background px-1.5 py-0.5 text-right tabular-nums outline-none focus:border-accent focus:ring-2 focus:ring-accent/25"
+                    />
+                  </div>
+                )}
+
+                {burnedOnly && (
+                  <button
+                    type="button"
+                    className="pv-btn-ghost"
+                    disabled={burnedRows.length === 0}
+                    onClick={handleCopyDomains}
+                  >
+                    {copied ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+                    <span className="hidden sm:inline">
+                      {copied
+                        ? "Copied!"
+                        : `Copy ${burnedRows.length} domain${
+                            burnedRows.length === 1 ? "" : "s"
+                          }`}
+                    </span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  className="pv-btn-ghost"
+                  disabled={visibleRows.length === 0}
+                  onClick={() =>
+                    exportDomainsCsv(visibleRows, {
+                      workspace:
+                        (burnedOnly ? "burned-" : "") +
+                        (ranMeta?.workspaceName ?? "workspace"),
+                      start,
+                      end,
+                    })
+                  }
+                >
+                  <DownloadIcon size={16} />
+                  <span className="hidden sm:inline">Export CSV</span>
+                </button>
+              </div>
             </div>
-            <button
-              type="button"
-              className="pv-btn-ghost"
-              disabled={rows.length === 0}
-              onClick={() =>
-                exportDomainsCsv(rows, {
-                  workspace: ranMeta?.workspaceName ?? "workspace",
-                  start,
-                  end,
-                })
-              }
-            >
-              <DownloadIcon size={16} />
-              <span className="hidden sm:inline">Export CSV</span>
-            </button>
+
+            {burnedOnly && (
+              <p className="text-xs text-muted-foreground">
+                {thresholdValid ? (
+                  <>
+                    Showing {burnedRows.length} domain
+                    {burnedRows.length === 1 ? "" : "s"} with reply rate below{" "}
+                    {threshold}%{busy ? " so far (still loading…)" : ""}. Copy
+                    grabs the domain names, one per line.
+                  </>
+                ) : (
+                  <>Enter a valid reply-rate threshold.</>
+                )}
+              </p>
+            )}
           </div>
 
-          {rows.length > 0 ? (
+          {visibleRows.length > 0 ? (
             <>
-              <p className="-mt-2 text-xs text-muted-foreground">
-                Click a domain to focus the chart on it.
-              </p>
+              {!burnedOnly && (
+                <p className="-mt-2 text-xs text-muted-foreground">
+                  Click a domain to focus the chart on it.
+                </p>
+              )}
               <DomainTable
-                rows={rows}
+                rows={visibleRows}
                 sort={sort}
                 onSort={handleSort}
                 selected={selectedDomain}
@@ -392,12 +506,18 @@ export function DomainPerformanceTool() {
               />
             </>
           ) : (
-            !busy && (
+            !busy &&
+            (burnedOnly ? (
+              <EmptyState icon={<FireIcon />} title="No burned domains">
+                No domains have a reply rate below {thresholdValid ? threshold : "0"}
+                % in this range. Raise the threshold or widen the date range.
+              </EmptyState>
+            ) : (
               <EmptyState title="No sending domains found">
                 None of this workspace&apos;s mailboxes have a parseable sending
                 domain in the selected range.
               </EmptyState>
-            )
+            ))
           )}
         </>
       )}
@@ -451,4 +571,30 @@ function errMessage(err: unknown): string {
   if (err instanceof ApiClientError) return err.message;
   if (err instanceof Error) return err.message;
   return "Something went wrong.";
+}
+
+// Copies text to the clipboard, falling back to a hidden textarea when the
+// async Clipboard API is unavailable. Returns whether it succeeded.
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // fall through to the legacy path
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
 }

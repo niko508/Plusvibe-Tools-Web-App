@@ -77,6 +77,16 @@ export const DATE_PRESETS: { key: string; label: string; range: () => DateRange 
     range: () => ({ start: toApiDate(daysAgo(6)), end: toApiDate(new Date()) }),
   },
   {
+    key: "14d",
+    label: "Last 14 days",
+    range: () => ({ start: toApiDate(daysAgo(13)), end: toApiDate(new Date()) }),
+  },
+  {
+    key: "21d",
+    label: "Last 21 days",
+    range: () => ({ start: toApiDate(daysAgo(20)), end: toApiDate(new Date()) }),
+  },
+  {
     key: "30d",
     label: "Last 30 days",
     range: () => ({ start: toApiDate(daysAgo(29)), end: toApiDate(new Date()) }),

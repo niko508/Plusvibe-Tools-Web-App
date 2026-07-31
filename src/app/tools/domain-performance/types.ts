@@ -21,6 +21,7 @@ export type SortKey =
   | "contacted"
   | "replies"
   | "reply_rate"
+  | "reply_rate_ooo"
   | "pos_reply_rate"
   | "bounce_rate";
 

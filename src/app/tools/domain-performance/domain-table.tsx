@@ -33,6 +33,7 @@ const COLUMNS: Column[] = [
   { key: "contacted", label: "Contacted", align: "right", numeric: true },
   { key: "replies", label: "Replies", align: "right", numeric: true },
   { key: "reply_rate", label: "Reply %", align: "right", numeric: true },
+  { key: "reply_rate_ooo", label: "Reply % (OOO)", align: "right", numeric: true },
   { key: "pos_reply_rate", label: "Pos %", align: "right", numeric: true },
   { key: "bounce_rate", label: "Bounce %", align: "right", numeric: true },
 ];
@@ -51,6 +52,8 @@ export function metricValue(row: DomainRow, key: SortKey): number | string {
       return h.total_reply_count;
     case "reply_rate":
       return h.reply_rate;
+    case "reply_rate_ooo":
+      return h.reply_rate_with_ooo;
     case "pos_reply_rate":
       return h.pos_reply_rate;
     case "bounce_rate":
@@ -77,7 +80,7 @@ export function DomainTable({ rows, sort, onSort, selected, onSelect }: Props) {
   return (
     <div className="pv-card overflow-hidden">
       <div className="pv-scroll overflow-x-auto">
-        <table className="w-full min-w-[720px] text-sm">
+        <table className="w-full min-w-[820px] text-sm">
           <thead>
             <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
               {COLUMNS.map((col) => {
@@ -136,6 +139,9 @@ export function DomainTable({ rows, sort, onSort, selected, onSelect }: Props) {
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums">
                   {formatPercent(totals.replyRate)}
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                  {formatPercent(totals.replyRateOoo)}
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums">
                   {formatPercent(totals.posRate)}
@@ -214,6 +220,9 @@ function DomainTableRow({
               {formatPercent(h.reply_rate)}
             </span>
           </td>
+          <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+            {formatPercent(h.reply_rate_with_ooo)}
+          </td>
           <td className="px-4 py-3 text-right tabular-nums">
             {formatPercent(h.pos_reply_rate)}
           </td>
@@ -230,7 +239,7 @@ function DomainTableRow({
         </>
       ) : (
         <td
-          colSpan={6}
+          colSpan={7}
           className="px-4 py-3 text-right text-xs text-muted-foreground"
         >
           {row.status === "error" ? row.error || "Failed to load" : "Loading…"}
@@ -250,6 +259,7 @@ interface Totals {
   posReplies: number;
   bounces: number;
   replyRate: number;
+  replyRateOoo: number;
   posRate: number;
   bounceRate: number;
 }
@@ -278,6 +288,7 @@ export function computeTotals(rows: DomainRow[]): Totals {
   }
 
   const replyRate = contacted > 0 ? (replies / contacted) * 100 : 0;
+  const replyRateOoo = contacted > 0 ? ((replies + ooo) / contacted) * 100 : 0;
   const posRate = replies > 0 ? (posReplies / replies) * 100 : 0;
   const bounceRate = sent > 0 ? (bounces / sent) * 100 : 0;
 
@@ -291,6 +302,7 @@ export function computeTotals(rows: DomainRow[]): Totals {
     posReplies,
     bounces,
     replyRate,
+    replyRateOoo,
     posRate,
     bounceRate,
   };

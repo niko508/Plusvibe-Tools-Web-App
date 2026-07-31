@@ -117,6 +117,7 @@ function ChartTooltip({ active, payload, label }: any) {
       <div className="mb-1 font-medium">{label}</div>
       <Row color={ACCENT} label="Sent" value={point.total_sent_count} />
       <Row color={REPLY} label="Replies" value={point.total_reply_count} />
+      <Row label="Replies (OOO)" value={point.total_ooo_reply_count} />
       <Row label="Contacted" value={point.total_contacted_count} />
       <Row label="Bounces" value={point.total_bounce_count} />
     </div>
