@@ -13,33 +13,25 @@ export function parseDomains(raw: string): string[] {
   return Array.from(set).sort();
 }
 
-// Matches pasted domains against the scanned inbox index. Exact domain equality
-// by default; when includeSubdomains is on, also matches any indexed domain
-// that is a subdomain of a pasted one (e.g. "mail.acme.com" for "acme.com").
+// Matches pasted domains against the scanned inbox index by exact (case-
+// insensitive) domain equality.
 export function matchDomains(
   parsed: string[],
-  index: Map<string, IndexEntry[]>,
-  includeSubdomains: boolean
+  index: Map<string, IndexEntry[]>
 ): { matched: MatchedDomain[]; notFound: string[] } {
   const matched: MatchedDomain[] = [];
   const notFound: string[] = [];
 
   for (const domain of parsed) {
-    let inboxes = index.get(domain) ? [...index.get(domain)!] : [];
-    if (includeSubdomains) {
-      const suffix = "." + domain;
-      for (const [key, entries] of index) {
-        if (key !== domain && key.endsWith(suffix)) inboxes.push(...entries);
-      }
-    }
-    if (inboxes.length === 0) {
+    const inboxes = index.get(domain);
+    if (!inboxes || inboxes.length === 0) {
       notFound.push(domain);
       continue;
     }
     const workspaces = Array.from(
       new Set(inboxes.map((i) => i.workspaceName))
     ).sort();
-    matched.push({ domain, inboxes, workspaces });
+    matched.push({ domain, inboxes: [...inboxes], workspaces });
   }
 
   return { matched, notFound };

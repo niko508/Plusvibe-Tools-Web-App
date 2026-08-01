@@ -46,8 +46,6 @@ export function RemoveInboxesTool() {
   const [scopeOpen, setScopeOpen] = useState(false);
 
   const [raw, setRaw] = useState("");
-  const [includeSubdomains, setIncludeSubdomains] = useState(false);
-  const [fallbackEnabled, setFallbackEnabled] = useState(true);
   const parsed = useMemo(() => parseDomains(raw), [raw]);
 
   const [phase, setPhase] = useState<Phase>("idle");
@@ -184,15 +182,11 @@ export function RemoveInboxesTool() {
       mergeIndex(combinedIndex, first.index);
       Object.assign(workspaceNames, first.workspaceNames);
 
-      let { matched, notFound } = matchDomains(
-        parsed,
-        combinedIndex,
-        includeSubdomains
-      );
+      let { matched, notFound } = matchDomains(parsed, combinedIndex);
 
       // 3) Fallback — full-scan the remaining workspaces for anything the sheet
       //    couldn't place (unlisted domain, blank client, or drift).
-      if (usedSheet && fallbackEnabled && notFound.length > 0) {
+      if (usedSheet && notFound.length > 0) {
         const scanned = new Set(targetWorkspaces.map((w) => w._id));
         const remaining = scoped.filter((w) => !scanned.has(w._id));
         if (remaining.length > 0) {
@@ -211,11 +205,7 @@ export function RemoveInboxesTool() {
           );
           mergeIndex(combinedIndex, second.index);
           Object.assign(workspaceNames, second.workspaceNames);
-          ({ matched, notFound } = matchDomains(
-            parsed,
-            combinedIndex,
-            includeSubdomains
-          ));
+          ({ matched, notFound } = matchDomains(parsed, combinedIndex));
         }
       }
 
@@ -308,32 +298,10 @@ export function RemoveInboxesTool() {
             onChange={(e) => setRaw(e.target.value)}
             spellCheck={false}
           />
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="mt-2 text-xs">
             <span className="font-medium text-muted-foreground">
               {formatNumber(parsed.length)} domain{parsed.length === 1 ? "" : "s"}
             </span>
-            <div className="flex flex-wrap items-center gap-4">
-              {hasSheet && (
-                <label className="flex cursor-pointer items-center gap-2 text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    className="accent-accent"
-                    checked={fallbackEnabled}
-                    onChange={(e) => setFallbackEnabled(e.target.checked)}
-                  />
-                  Full-scan sheet misses
-                </label>
-              )}
-              <label className="flex cursor-pointer items-center gap-2 text-muted-foreground">
-                <input
-                  type="checkbox"
-                  className="accent-accent"
-                  checked={includeSubdomains}
-                  onChange={(e) => setIncludeSubdomains(e.target.checked)}
-                />
-                Include subdomains
-              </label>
-            </div>
           </div>
           {hasSheet ? (
             <div className="mt-2 flex items-center gap-1.5 text-xs text-success">
@@ -595,43 +563,35 @@ function PreviewPanel({
       )}
 
       {result.notFound.length > 0 && (
-        <details className="pv-card px-4 py-3">
-          <summary className="flex cursor-pointer items-center justify-between text-sm">
+        <div className="pv-card px-4 py-3">
+          <div className="flex items-center justify-between text-sm">
             <span className="font-medium">
               {formatNumber(result.notFound.length)} domain
               {result.notFound.length === 1 ? "" : "s"} not found
             </span>
             <span className="flex gap-2">
-              <button
-                type="button"
-                className="pv-chip"
-                onClick={(e) => {
-                  e.preventDefault();
-                  void copyNotFound();
-                }}
-              >
+              <button type="button" className="pv-chip" onClick={copyNotFound}>
                 {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
                 {copied ? "Copied" : "Copy"}
               </button>
               <button
                 type="button"
                 className="pv-chip"
-                onClick={(e) => {
-                  e.preventDefault();
-                  exportNotFound(result.notFound);
-                }}
+                onClick={() => exportNotFound(result.notFound)}
               >
                 <DownloadIcon size={13} />
                 Export
               </button>
             </span>
-          </summary>
-          <div className="pv-scroll mt-3 max-h-40 overflow-y-auto font-mono text-xs text-muted-foreground">
+          </div>
+          <div className="pv-scroll mt-3 max-h-52 overflow-y-auto font-mono text-xs text-muted-foreground">
             {result.notFound.map((d) => (
-              <div key={d}>{d}</div>
+              <div key={d} className="py-0.5">
+                {d}
+              </div>
             ))}
           </div>
-        </details>
+        </div>
       )}
 
       {/* Confirm bar */}
