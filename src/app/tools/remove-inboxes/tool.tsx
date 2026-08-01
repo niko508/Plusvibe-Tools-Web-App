@@ -8,9 +8,11 @@ import {
   startBulkDelete,
   listBulkDeleteJobs,
   abortBulkDelete,
+  fetchSheetMap,
   ApiClientError,
 } from "@/lib/api-client";
 import { useApiKey } from "@/lib/use-api-key";
+import { useSheetConfig } from "@/lib/use-sheet-config";
 import { formatNumber } from "@/lib/format";
 import { copyToClipboard } from "@/lib/clipboard";
 import { ConnectPrompt } from "@/components/connect-prompt";
@@ -24,16 +26,19 @@ import {
   DownloadIcon,
   RefreshIcon,
   ChevronDownIcon,
+  SheetIcon,
 } from "@/components/icons";
 import { buildDomainIndex } from "./scan";
 import { parseDomains, matchDomains } from "./parse";
 import { exportNotFound, exportErrors } from "./export";
-import type { Phase, ScanResult } from "./types";
+import { isDefaultExcluded } from "./constants";
+import type { Phase, ScanResult, IndexEntry } from "./types";
 
 const MAX_TABLE_ROWS = 200;
 
 export function RemoveInboxesTool() {
   const { hasKey, ready } = useApiKey();
+  const { config: sheetConfig, hasSheet } = useSheetConfig();
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspacesLoading, setWorkspacesLoading] = useState(false);
@@ -42,14 +47,17 @@ export function RemoveInboxesTool() {
 
   const [raw, setRaw] = useState("");
   const [includeSubdomains, setIncludeSubdomains] = useState(false);
+  const [fallbackEnabled, setFallbackEnabled] = useState(true);
   const parsed = useMemo(() => parseDomains(raw), [raw]);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [scanProgress, setScanProgress] = useState({ done: 0, total: 0 });
+  const [scanLabel, setScanLabel] = useState("Scanning…");
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [confirmText, setConfirmText] = useState("");
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sheetWarning, setSheetWarning] = useState<string | null>(null);
 
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [highlightJobId, setHighlightJobId] = useState<string | null>(null);
@@ -64,7 +72,10 @@ export function RemoveInboxesTool() {
       const res = await fetchWorkspaces();
       const list = res.workspaces ?? [];
       setWorkspaces(list);
-      setScopeIds(list.map((w) => w._id));
+      // Start with all workspaces selected except the default-excluded ones.
+      setScopeIds(
+        list.filter((w) => !isDefaultExcluded(w.name)).map((w) => w._id)
+      );
     } catch (err) {
       setError(errMessage(err));
     } finally {
@@ -109,19 +120,105 @@ export function RemoveInboxesTool() {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    const { signal } = controller;
 
     setPhase("scanning");
     setScanResult(null);
     setConfirmText("");
-    setScanProgress({ done: 0, total: scoped.length });
+    setSheetWarning(null);
+    setScanProgress({ done: 0, total: 0 });
+    setScanLabel("Scanning…");
 
     try {
-      const { index, workspaceNames } = await buildDomainIndex(
-        scoped,
-        { concurrency: 2, spacingMs: 250, signal: controller.signal },
+      // 1) Sheet targeting — resolve pasted domains to workspaces via the sheet
+      //    so we only scan the workspaces that actually hold them.
+      let targetWorkspaces = scoped; // default: full scan of the scope
+      let usedSheet = false;
+      if (sheetConfig) {
+        setScanLabel("Reading Email Infra sheet…");
+        try {
+          const sheet = await fetchSheetMap(
+            { url: sheetConfig.url, tab: sheetConfig.tab },
+            signal
+          );
+          const wsByName = new Map<string, Workspace>();
+          for (const w of scoped) wsByName.set(w.name.trim().toLowerCase(), w);
+          const targetSet = new Map<string, Workspace>();
+          for (const d of parsed) {
+            const client = sheet.map[d];
+            if (!client) continue;
+            const w = wsByName.get(client.trim().toLowerCase());
+            if (w) targetSet.set(w._id, w);
+          }
+          if (targetSet.size > 0) {
+            usedSheet = true;
+            targetWorkspaces = Array.from(targetSet.values());
+          }
+        } catch (err) {
+          if (isAbort(err)) {
+            setPhase("idle");
+            return;
+          }
+          // Sheet unreadable — warn and fall back to a full scan.
+          setSheetWarning(`Sheet not used: ${errMessage(err)}`);
+        }
+      }
+
+      const combinedIndex = new Map<string, IndexEntry[]>();
+      const workspaceNames: Record<string, string> = {};
+
+      // 2) Scan the targeted (or full) set of workspaces.
+      setScanLabel(
+        usedSheet
+          ? `Scanning ${targetWorkspaces.length} targeted workspace${
+              targetWorkspaces.length === 1 ? "" : "s"
+            } (via sheet)…`
+          : "Scanning workspaces for matching inboxes…"
+      );
+      setScanProgress({ done: 0, total: targetWorkspaces.length });
+      const first = await buildDomainIndex(
+        targetWorkspaces,
+        { concurrency: 2, spacingMs: 250, signal },
         (done, total) => setScanProgress({ done, total })
       );
-      const { matched, notFound } = matchDomains(parsed, index, includeSubdomains);
+      mergeIndex(combinedIndex, first.index);
+      Object.assign(workspaceNames, first.workspaceNames);
+
+      let { matched, notFound } = matchDomains(
+        parsed,
+        combinedIndex,
+        includeSubdomains
+      );
+
+      // 3) Fallback — full-scan the remaining workspaces for anything the sheet
+      //    couldn't place (unlisted domain, blank client, or drift).
+      if (usedSheet && fallbackEnabled && notFound.length > 0) {
+        const scanned = new Set(targetWorkspaces.map((w) => w._id));
+        const remaining = scoped.filter((w) => !scanned.has(w._id));
+        if (remaining.length > 0) {
+          setScanLabel(
+            `Full-scanning ${remaining.length} more workspace${
+              remaining.length === 1 ? "" : "s"
+            } for ${notFound.length} unmatched domain${
+              notFound.length === 1 ? "" : "s"
+            }…`
+          );
+          setScanProgress({ done: 0, total: remaining.length });
+          const second = await buildDomainIndex(
+            remaining,
+            { concurrency: 2, spacingMs: 250, signal },
+            (done, total) => setScanProgress({ done, total })
+          );
+          mergeIndex(combinedIndex, second.index);
+          Object.assign(workspaceNames, second.workspaceNames);
+          ({ matched, notFound } = matchDomains(
+            parsed,
+            combinedIndex,
+            includeSubdomains
+          ));
+        }
+      }
+
       const totalInboxes = matched.reduce((s, m) => s + m.inboxes.length, 0);
       setScanResult({ matched, notFound, totalInboxes, workspaceNames });
       setPhase("preview");
@@ -215,16 +312,40 @@ export function RemoveInboxesTool() {
             <span className="font-medium text-muted-foreground">
               {formatNumber(parsed.length)} domain{parsed.length === 1 ? "" : "s"}
             </span>
-            <label className="flex cursor-pointer items-center gap-2 text-muted-foreground">
-              <input
-                type="checkbox"
-                className="accent-accent"
-                checked={includeSubdomains}
-                onChange={(e) => setIncludeSubdomains(e.target.checked)}
-              />
-              Include subdomains
-            </label>
+            <div className="flex flex-wrap items-center gap-4">
+              {hasSheet && (
+                <label className="flex cursor-pointer items-center gap-2 text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    className="accent-accent"
+                    checked={fallbackEnabled}
+                    onChange={(e) => setFallbackEnabled(e.target.checked)}
+                  />
+                  Full-scan sheet misses
+                </label>
+              )}
+              <label className="flex cursor-pointer items-center gap-2 text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className="accent-accent"
+                  checked={includeSubdomains}
+                  onChange={(e) => setIncludeSubdomains(e.target.checked)}
+                />
+                Include subdomains
+              </label>
+            </div>
           </div>
+          {hasSheet ? (
+            <div className="mt-2 flex items-center gap-1.5 text-xs text-success">
+              <SheetIcon size={13} />
+              Sheet synced — scans target only the workspaces your domains map to.
+            </div>
+          ) : (
+            <div className="mt-2 text-xs text-muted-foreground">
+              Tip: sync your Email Infra sheet (top-right) to scan only the
+              relevant workspaces instead of all of them.
+            </div>
+          )}
         </div>
 
         <ScopeSelector
@@ -253,9 +374,16 @@ export function RemoveInboxesTool() {
           </button>
         </div>
 
+        {sheetWarning && (
+          <div className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+            <AlertIcon size={14} className="mt-0.5 shrink-0" />
+            <span>{sheetWarning}</span>
+          </div>
+        )}
+
         {scanning && (
           <ProgressLine
-            label="Scanning workspaces for matching inboxes…"
+            label={scanLabel}
             done={scanProgress.done}
             total={scanProgress.total}
           />
@@ -841,6 +969,19 @@ function relativeTime(ts: number): string {
   const h = Math.round(m / 60);
   if (h < 24) return `${h}h ago`;
   return new Date(ts).toLocaleDateString();
+}
+
+// Merges one domain index into another (workspaces are disjoint across scan
+// phases, so appending entries per domain is safe).
+function mergeIndex(
+  target: Map<string, IndexEntry[]>,
+  source: Map<string, IndexEntry[]>
+) {
+  for (const [domain, entries] of source) {
+    const existing = target.get(domain);
+    if (existing) existing.push(...entries);
+    else target.set(domain, [...entries]);
+  }
 }
 
 function isAbort(err: unknown): boolean {

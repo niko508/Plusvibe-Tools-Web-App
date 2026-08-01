@@ -23,6 +23,21 @@ export function domainFromEmail(email: string): string | null {
   return domain || null;
 }
 
+// Normalizes a single free-form token into a bare domain: lowercases, strips
+// mailto:/protocol/www., takes the part after @ for full emails, and drops any
+// path/query/fragment and trailing dots. Shared by the paste parser and the
+// Google Sheet parser so both derive domains identically.
+export function normalizeDomainToken(token: string): string | null {
+  let t = token.trim().toLowerCase();
+  if (!t) return null;
+  t = t.replace(/^mailto:/, "");
+  if (t.includes("@")) t = t.slice(t.lastIndexOf("@") + 1);
+  t = t.replace(/^https?:\/\//, "").replace(/^www\./, "");
+  t = t.split("/")[0].split("?")[0].split("#")[0];
+  t = t.replace(/\.+$/, "");
+  return t || null;
+}
+
 export interface DomainGroup {
   domain: string;
   mailboxes: number;

@@ -37,6 +37,30 @@ memory only, **never written to disk**), so only a client using the same key
 sees them. A run is naturally resumable — re-scanning only finds inboxes that
 still exist, so an interrupted run continues safely.
 
+Two workspaces are **unchecked by default** in the scope selector ("Ikoni
+Digital Lead Nurturing + Duplicate Workspace" and "Inbox Warmup") — re-check
+them anytime.
+
+### Faster scans with the Email Infra sheet (optional)
+
+Scanning every workspace is the slow part. If you keep an "Email Infra" Google
+Sheet mapping each **domain → client**, sync it via the **Sync sheet** button
+(top-right) — paste the sheet URL and tab name (default `📋 Domains`). Because
+the sheet's Client value equals the Plusvibe **workspace name**, a scan then
+resolves each pasted domain → client → workspace and lists **only those
+workspaces** instead of all of them — turning a minute-plus scan into seconds
+when your domains sit in one or a few workspaces.
+
+- Columns are matched **by header name** (`Domain`, `Client`), so column order
+  can change.
+- The sheet must be shared as **"anyone with the link can view"** (read
+  server-side via its public CSV export — no Google login).
+- **Full-scan sheet misses** (on by default) falls back to scanning the
+  remaining workspaces for any pasted domain the sheet can't place, so nothing
+  is silently missed. Turn it off to trust the sheet fully for maximum speed.
+- The deletion phase is unchanged — the sheet only speeds up finding the
+  inboxes, not the rate-limited deletes.
+
 ### Job storage (`JOBS_DIR`)
 
 Job records are written as JSON under `JOBS_DIR` (default `./.jobs`). Out of the

@@ -126,3 +126,19 @@ export function abortBulkDelete(jobId: string, signal?: AbortSignal) {
     signal,
   });
 }
+
+// --- Email Infra Google Sheet ----------------------------------------------
+
+export interface SheetMapResponse {
+  map: Record<string, string>; // normalized domain -> client
+  domains: number;
+  clients: number;
+}
+
+export function fetchSheetMap(
+  params: { url: string; tab: string },
+  signal?: AbortSignal
+) {
+  const qs = new URLSearchParams({ url: params.url, tab: params.tab });
+  return request<SheetMapResponse>(`/api/sheet?${qs.toString()}`, { signal });
+}

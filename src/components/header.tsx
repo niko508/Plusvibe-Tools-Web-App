@@ -4,8 +4,10 @@ import Link from "next/link";
 import { useState } from "react";
 import { ThemeToggle } from "@/components/theme";
 import { ApiKeyDialog } from "@/components/api-key-dialog";
+import { SheetDialog } from "@/components/sheet-dialog";
 import { useApiKey } from "@/lib/use-api-key";
-import { KeyIcon, ArrowLeftIcon } from "@/components/icons";
+import { useSheetConfig } from "@/lib/use-sheet-config";
+import { KeyIcon, SheetIcon, ArrowLeftIcon } from "@/components/icons";
 
 interface Props {
   // When set, shows a back link to the left of the brand.
@@ -14,7 +16,9 @@ interface Props {
 
 export function Header({ back }: Props) {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const { hasKey, ready } = useApiKey();
+  const { hasSheet, ready: sheetReady } = useSheetConfig();
 
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur">
@@ -40,6 +44,22 @@ export function Header({ back }: Props) {
         <div className="flex items-center gap-2">
           <button
             type="button"
+            onClick={() => setSheetOpen(true)}
+            className="pv-btn-ghost"
+            title="Sync your Email Infra Google Sheet"
+          >
+            <span
+              className={`h-2 w-2 rounded-full ${
+                sheetReady && hasSheet ? "bg-success" : "bg-muted-foreground/40"
+              }`}
+            />
+            <SheetIcon size={16} />
+            <span className="hidden md:inline">
+              {sheetReady && hasSheet ? "Sheet synced" : "Sync sheet"}
+            </span>
+          </button>
+          <button
+            type="button"
             onClick={() => setDialogOpen(true)}
             className="pv-btn-ghost"
           >
@@ -58,6 +78,7 @@ export function Header({ back }: Props) {
       </div>
 
       <ApiKeyDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
+      <SheetDialog open={sheetOpen} onClose={() => setSheetOpen(false)} />
     </header>
   );
 }

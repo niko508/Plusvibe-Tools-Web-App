@@ -1,3 +1,4 @@
+import { normalizeDomainToken } from "@/lib/format";
 import type { IndexEntry, MatchedDomain } from "./types";
 
 // Parses a blob of pasted text into a normalized, de-duplicated domain list.
@@ -6,13 +7,7 @@ import type { IndexEntry, MatchedDomain } from "./types";
 export function parseDomains(raw: string): string[] {
   const set = new Set<string>();
   for (const token of raw.split(/[\s,;]+/)) {
-    let t = token.trim().toLowerCase();
-    if (!t) continue;
-    t = t.replace(/^mailto:/, "");
-    if (t.includes("@")) t = t.slice(t.lastIndexOf("@") + 1);
-    t = t.replace(/^https?:\/\//, "").replace(/^www\./, "");
-    t = t.split("/")[0].split("?")[0].split("#")[0];
-    t = t.replace(/\.+$/, "");
+    const t = normalizeDomainToken(token);
     if (t) set.add(t);
   }
   return Array.from(set).sort();
