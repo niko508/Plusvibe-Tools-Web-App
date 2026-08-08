@@ -20,4 +20,5 @@ export interface ScanResult {
   notFound: string[];
   totalInboxes: number;
   workspaceNames: Record<string, string>;
+  excludedMaster: number;
 }

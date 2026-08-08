@@ -181,6 +181,7 @@ export function RemoveInboxesTool() {
       );
       mergeIndex(combinedIndex, first.index);
       Object.assign(workspaceNames, first.workspaceNames);
+      let excludedMaster = first.excludedMaster;
 
       let { matched, notFound } = matchDomains(parsed, combinedIndex);
 
@@ -205,12 +206,19 @@ export function RemoveInboxesTool() {
           );
           mergeIndex(combinedIndex, second.index);
           Object.assign(workspaceNames, second.workspaceNames);
+          excludedMaster += second.excludedMaster;
           ({ matched, notFound } = matchDomains(parsed, combinedIndex));
         }
       }
 
       const totalInboxes = matched.reduce((s, m) => s + m.inboxes.length, 0);
-      setScanResult({ matched, notFound, totalInboxes, workspaceNames });
+      setScanResult({
+        matched,
+        notFound,
+        totalInboxes,
+        workspaceNames,
+        excludedMaster,
+      });
       setPhase("preview");
     } catch (err) {
       if (isAbort(err)) {
@@ -521,6 +529,14 @@ function PreviewPanel({
         <StatCard label="Inboxes to delete" value={formatNumber(result.totalInboxes)} />
         <StatCard label="Domains not found" value={formatNumber(result.notFound.length)} />
       </div>
+
+      {result.excludedMaster > 0 && (
+        <div className="flex items-center gap-1.5 text-xs text-success">
+          <CheckIcon size={13} />
+          {formatNumber(result.excludedMaster)} &ldquo;Master Inbox&rdquo; mailbox
+          {result.excludedMaster === 1 ? "" : "es"} excluded from deletion.
+        </div>
+      )}
 
       {result.matched.length > 0 ? (
         <div className="pv-card overflow-hidden">
