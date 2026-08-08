@@ -5,6 +5,7 @@ import type { Workspace } from "@/lib/plusvibe-types";
 import {
   fetchWorkspaces,
   fetchAccounts,
+  fetchTags,
   bulkUpdateSignature,
   ApiClientError,
 } from "@/lib/api-client";
@@ -78,7 +79,11 @@ export function AddSignaturesTool() {
   const [groups, setGroups] = useState<PersonGroup[]>([]);
   const [inboxTotal, setInboxTotal] = useState(0);
   const [skippedNoName, setSkippedNoName] = useState(0);
+  const [excludedMaster, setExcludedMaster] = useState(0);
   const [loadedForWs, setLoadedForWs] = useState<string | null>(null);
+  const [toast, setToast] = useState<
+    { kind: "success" | "error"; message: string } | null
+  >(null);
 
   const [applying, setApplying] = useState(false);
   const [applyRows, setApplyRows] = useState<ApplyRow[]>([]);
@@ -99,6 +104,13 @@ export function AddSignaturesTool() {
   useEffect(() => {
     setTitles(pickRandomRoles(TITLE_SLOTS));
   }, []);
+
+  // Auto-dismiss the completion toast.
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 7000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   // --- Workspaces ----------------------------------------------------------
   const loadWorkspaces = useCallback(async () => {
@@ -129,11 +141,26 @@ export function AddSignaturesTool() {
     setApplied(false);
     setApplyRows([]);
     try {
-      const res = await fetchAccounts({ workspace_id: workspaceId });
-      const accounts = res.accounts ?? [];
+      const [accountsRes, tagsRes] = await Promise.all([
+        fetchAccounts({ workspace_id: workspaceId }),
+        fetchTags({ workspace_id: workspaceId }).catch(() => ({ tags: [] })),
+      ]);
+      const accounts = accountsRes.accounts ?? [];
+      // Tag IDs named "Master Inbox" — those inboxes are always excluded.
+      const masterTagIds = new Set(
+        (tagsRes.tags ?? [])
+          .filter((t) => t.name.trim().toLowerCase() === "master inbox")
+          .map((t) => t.id)
+      );
+
       const byPerson = new Map<string, PersonGroup>();
       let skipped = 0;
+      let excluded = 0;
       for (const a of accounts) {
+        if (a.tags?.some((id) => masterTagIds.has(id))) {
+          excluded += 1;
+          continue;
+        }
         const first = (a.first_name ?? "").trim();
         const last = (a.last_name ?? "").trim();
         if (!first) {
@@ -152,6 +179,7 @@ export function AddSignaturesTool() {
       setGroups(Array.from(byPerson.values()));
       setInboxTotal(accounts.length);
       setSkippedNoName(skipped);
+      setExcludedMaster(excluded);
       setLoadedForWs(workspaceId);
     } catch (err) {
       setError(errMessage(err));
@@ -214,6 +242,11 @@ export function AddSignaturesTool() {
     setApplying(true);
     setApplied(false);
     setError(null);
+    setToast(null);
+    requestNotifyPermission();
+
+    let okInboxes = 0;
+    let errCount = 0;
 
     try {
       await mapPool(
@@ -222,6 +255,7 @@ export function AddSignaturesTool() {
           updateRow(setApplyRows, group.key, { status: "running" });
           const built = buildSignature(fields, group.first, group.last);
           if (!built) {
+            errCount += 1;
             updateRow(setApplyRows, group.key, {
               status: "error",
               error: "Could not build signature (missing name).",
@@ -236,12 +270,14 @@ export function AddSignaturesTool() {
                 },
                 signal
               );
+              okInboxes += group.ids.length;
               updateRow(setApplyRows, group.key, {
                 status: "done",
                 variations: built.count,
               });
             } catch (err) {
               if (isAbort(err)) throw err;
+              errCount += 1;
               updateRow(setApplyRows, group.key, {
                 status: "error",
                 error: errMessage(err),
@@ -255,6 +291,14 @@ export function AddSignaturesTool() {
         { concurrency: 3, minSpacingMs: 220, signal }
       );
       setApplied(true);
+      const message =
+        errCount > 0
+          ? `Signatures applied to ${formatNumber(okInboxes)} inboxes · ${formatNumber(
+              errCount
+            )} failed`
+          : `Signatures applied to ${formatNumber(okInboxes)} inboxes 🎉`;
+      setToast({ kind: errCount > 0 ? "error" : "success", message });
+      showNotification("Add Signatures — done", message);
     } catch (err) {
       if (!isAbort(err)) setError(errMessage(err));
     } finally {
@@ -351,6 +395,10 @@ export function AddSignaturesTool() {
               ? `${formatNumber(namedInboxes)} inboxes · ${formatNumber(
                   groups.length
                 )} people${
+                  excludedMaster
+                    ? ` · ${formatNumber(excludedMaster)} Master Inbox excluded`
+                    : ""
+                }${
                   skippedNoName ? ` · ${formatNumber(skippedNoName)} skipped (no name)` : ""
                 }`
               : "Load the workspace inboxes to personalize by name."}
@@ -507,6 +555,8 @@ export function AddSignaturesTool() {
           )}
         </div>
       )}
+
+      {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
     </div>
   );
 }
@@ -514,6 +564,42 @@ export function AddSignaturesTool() {
 // ---------------------------------------------------------------------------
 // Small pieces
 // ---------------------------------------------------------------------------
+
+function Toast({
+  toast,
+  onClose,
+}: {
+  toast: { kind: "success" | "error"; message: string };
+  onClose: () => void;
+}) {
+  const ok = toast.kind === "success";
+  return (
+    <div className="fixed bottom-5 right-5 z-50 animate-fade-in">
+      <div
+        className={`pv-card flex items-center gap-3 px-4 py-3 shadow-card ${
+          ok ? "border-success/40" : "border-danger/40"
+        }`}
+      >
+        <span
+          className={`flex h-7 w-7 items-center justify-center rounded-full ${
+            ok ? "bg-success/15 text-success" : "bg-danger/15 text-danger"
+          }`}
+        >
+          {ok ? <CheckIcon size={16} /> : <AlertIcon size={16} />}
+        </span>
+        <span className="text-sm font-medium">{toast.message}</span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="ml-1 text-muted-foreground hover:text-foreground"
+          aria-label="Dismiss"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function SlotGroup({
   label,
@@ -612,6 +698,34 @@ function summarize(rows: ApplyRow[]) {
     }
   }
   return { inboxesDone, peopleDone, errors, errorRows };
+}
+
+// Best-effort desktop notifications so a long apply can ping you if you've
+// tabbed away. Requested when the apply starts, shown on completion.
+function requestNotifyPermission() {
+  try {
+    if (
+      typeof Notification !== "undefined" &&
+      Notification.permission === "default"
+    ) {
+      void Notification.requestPermission();
+    }
+  } catch {
+    // notifications unsupported / blocked — ignore
+  }
+}
+
+function showNotification(title: string, body: string) {
+  try {
+    if (
+      typeof Notification !== "undefined" &&
+      Notification.permission === "granted"
+    ) {
+      new Notification(title, { body });
+    }
+  } catch {
+    // ignore
+  }
 }
 
 function isAbort(err: unknown): boolean {

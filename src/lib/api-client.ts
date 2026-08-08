@@ -74,6 +74,18 @@ export function fetchAccounts(
   );
 }
 
+export interface TagsResponse {
+  tags: { id: string; name: string }[];
+}
+
+export function fetchTags(
+  params: { workspace_id: string },
+  signal?: AbortSignal
+) {
+  const qs = new URLSearchParams({ workspace_id: params.workspace_id });
+  return request<TagsResponse>(`/api/plusvibe/tags?${qs.toString()}`, { signal });
+}
+
 export interface EmailStatsParams {
   workspace_id: string;
   start_date: string;

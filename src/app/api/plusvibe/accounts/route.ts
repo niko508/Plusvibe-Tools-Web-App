@@ -65,6 +65,9 @@ function normalizeAccounts(data: RawAccountsResponse): EmailAccount[] {
   return raw.map((a) => {
     const payload = (a.payload ?? {}) as Record<string, unknown>;
     const name = (payload.name ?? {}) as Record<string, unknown>;
+    const tags = Array.isArray(payload.tags)
+      ? (payload.tags as unknown[]).map(String)
+      : undefined;
     return {
       id: String(a.id ?? a._id ?? ""),
       email: String(a.email ?? ""),
@@ -73,6 +76,7 @@ function normalizeAccounts(data: RawAccountsResponse): EmailAccount[] {
       provider: a.provider ? String(a.provider) : undefined,
       first_name: name.first_name ? String(name.first_name) : undefined,
       last_name: name.last_name ? String(name.last_name) : undefined,
+      tags,
     };
   });
 }

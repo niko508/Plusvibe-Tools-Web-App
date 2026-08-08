@@ -22,6 +22,7 @@ export interface EmailAccount {
   provider?: string;
   first_name?: string;
   last_name?: string;
+  tags?: string[];
 }
 
 export interface EmailAccountsResponse {
