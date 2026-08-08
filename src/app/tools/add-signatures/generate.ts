@@ -57,22 +57,29 @@ export function generateBlocks(
   fields: SignatureFields,
   nameForms: string[]
 ): string[] {
-  const title = sanitizeValue(fields.title || "");
+  const titles = pool(fields.titles, false);
   const companies = pool(fields.companies, false);
   const phones = pool(fields.phones, true);
   const addresses = pool(fields.addresses, true);
-  if (companies.length === 0 || nameForms.length === 0) return [];
+  if (titles.length === 0 || companies.length === 0 || nameForms.length === 0)
+    return [];
 
   const blocks = new Set<string>();
   for (const layout of LAYOUTS) {
     for (const name of nameForms) {
-      for (const company of companies) {
-        for (const phone of phones) {
-          for (const address of addresses) {
-            const lines = layout({ name, title, company, phone, address }).filter(
-              (l) => l && l.trim()
-            );
-            if (lines.length) blocks.add(lines.join("<br>"));
+      for (const title of titles) {
+        for (const company of companies) {
+          for (const phone of phones) {
+            for (const address of addresses) {
+              const lines = layout({
+                name,
+                title,
+                company,
+                phone,
+                address,
+              }).filter((l) => l && l.trim());
+              if (lines.length) blocks.add(lines.join("<br>"));
+            }
           }
         }
       }

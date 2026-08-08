@@ -29,6 +29,34 @@ import type { ApplyRow, PersonGroup, SignatureFields } from "./types";
 const COMPANY_SLOTS = 3;
 const PHONE_SLOTS = 5;
 const ADDRESS_SLOTS = 3;
+const TITLE_SLOTS = 5;
+
+// Default pool of roles; the 5 title slots start pre-filled with a random 5.
+const DEFAULT_ROLES = [
+  "Account Executive",
+  "Key Account Executive",
+  "Growth Manager",
+  "Business Development",
+  "Head of Growth",
+  "Growth Director",
+  "Growth Lead",
+  "Head of Business Development",
+  "BDR Manager",
+  "BDR",
+  "Business Development Representative",
+  "Partnerships Manager",
+];
+
+function pickRandomRoles(n: number): string[] {
+  const pool = [...DEFAULT_ROLES];
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  const picked = pool.slice(0, n);
+  while (picked.length < n) picked.push("");
+  return picked;
+}
 
 export function AddSignaturesTool() {
   const { hasKey, ready } = useApiKey();
@@ -37,7 +65,7 @@ export function AddSignaturesTool() {
   const [workspacesLoading, setWorkspacesLoading] = useState(false);
   const [workspaceId, setWorkspaceId] = useState("");
 
-  const [title, setTitle] = useState("");
+  const [titles, setTitles] = useState<string[]>(Array(TITLE_SLOTS).fill(""));
   const [companies, setCompanies] = useState<string[]>(
     Array(COMPANY_SLOTS).fill("")
   );
@@ -62,9 +90,15 @@ export function AddSignaturesTool() {
   const abortRef = useRef<AbortController | null>(null);
 
   const fields: SignatureFields = useMemo(
-    () => ({ title, companies, phones, addresses }),
-    [title, companies, phones, addresses]
+    () => ({ titles, companies, phones, addresses }),
+    [titles, companies, phones, addresses]
   );
+
+  // Seed the role slots with a random 5 of the default pool on mount (client
+  // only, so no SSR/hydration mismatch).
+  useEffect(() => {
+    setTitles(pickRandomRoles(TITLE_SLOTS));
+  }, []);
 
   // --- Workspaces ----------------------------------------------------------
   const loadWorkspaces = useCallback(async () => {
@@ -131,9 +165,10 @@ export function AddSignaturesTool() {
     () => groups.reduce((s, g) => s + g.ids.length, 0),
     [groups]
   );
+  const hasTitle = titles.some((t) => t.trim());
   const hasCompany = companies.some((c) => c.trim());
   const canApply =
-    !!title.trim() &&
+    hasTitle &&
     hasCompany &&
     groups.length > 0 &&
     loadedForWs === workspaceId;
@@ -146,12 +181,12 @@ export function AddSignaturesTool() {
   }, [groups]);
 
   const preview = useMemo(() => {
-    if (!title.trim() || !hasCompany) return null;
+    if (!hasTitle || !hasCompany) return null;
     const built = buildSignature(fields, sample.first, sample.last);
     if (!built) return null;
     const blocks = generateBlocks(fields, nameFormsFor(sample.first, sample.last));
     return { count: built.count, signature: built.signature, blocks };
-  }, [fields, sample, title, hasCompany]);
+  }, [fields, sample, hasTitle, hasCompany]);
 
   async function copySignature() {
     if (!preview) return;
@@ -272,16 +307,23 @@ export function AddSignaturesTool() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <Field label="Job title / role" required>
-            <input
-              className="pv-input"
-              placeholder="Co-Owner"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-          </Field>
-        </div>
+        <SlotGroup
+          label="Job titles / roles"
+          hint="At least one required"
+          values={titles}
+          onChange={setTitles}
+          placeholder="Account Executive"
+          headerAction={
+            <button
+              type="button"
+              className="pv-chip"
+              onClick={() => setTitles(pickRandomRoles(TITLE_SLOTS))}
+            >
+              <RefreshIcon size={13} />
+              Shuffle
+            </button>
+          }
+        />
 
         <SlotGroup
           label="Company names"
@@ -473,38 +515,20 @@ export function AddSignaturesTool() {
 // Small pieces
 // ---------------------------------------------------------------------------
 
-function Field({
-  label,
-  required,
-  children,
-}: {
-  label: string;
-  required?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-        {label}
-        {required && <span className="text-danger"> *</span>}
-      </label>
-      {children}
-    </div>
-  );
-}
-
 function SlotGroup({
   label,
   hint,
   values,
   onChange,
   placeholder,
+  headerAction,
 }: {
   label: string;
   hint?: string;
   values: string[];
   onChange: (v: string[]) => void;
   placeholder: string;
+  headerAction?: React.ReactNode;
 }) {
   const filled = values.filter((v) => v.trim()).length;
   return (
@@ -517,6 +541,7 @@ function SlotGroup({
             {hint ? ` · ${hint}` : ""})
           </span>
         </label>
+        {headerAction}
       </div>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {values.map((v, i) => (
