@@ -142,3 +142,16 @@ export function fetchSheetMap(
   const qs = new URLSearchParams({ url: params.url, tab: params.tab });
   return request<SheetMapResponse>(`/api/sheet?${qs.toString()}`, { signal });
 }
+
+// --- Bulk signature update -------------------------------------------------
+
+export function bulkUpdateSignature(
+  params: { workspace_id: string; ids: string[]; signature: string },
+  signal?: AbortSignal
+) {
+  return request<{ status?: string }>("/api/plusvibe/bulk-update", {
+    method: "POST",
+    body: params,
+    signal,
+  });
+}

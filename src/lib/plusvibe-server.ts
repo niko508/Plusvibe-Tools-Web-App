@@ -43,7 +43,7 @@ interface RequestOptions {
 }
 
 interface FullRequestOptions extends RequestOptions {
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "PUT";
   body?: unknown;
 }
 
@@ -141,6 +141,12 @@ export function plusvibePost<T>(
   options: RequestOptions & { body: unknown }
 ): Promise<T> {
   return plusvibeRequest<T>({ ...options, method: "POST" });
+}
+
+export function plusvibePut<T>(
+  options: RequestOptions & { body: unknown }
+): Promise<T> {
+  return plusvibeRequest<T>({ ...options, method: "PUT" });
 }
 
 function extractErrorMessage(body: unknown): string | undefined {

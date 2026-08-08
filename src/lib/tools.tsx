@@ -1,5 +1,11 @@
 import type { ComponentType } from "react";
-import { GaugeIcon, MailIcon, SparklesIcon, TrashIcon } from "@/components/icons";
+import {
+  GaugeIcon,
+  MailIcon,
+  SparklesIcon,
+  TrashIcon,
+  PenIcon,
+} from "@/components/icons";
 
 // Registry of tools shown on the landing page. Adding a new tool = add an entry
 // here and (for active tools) a page under src/app/tools/<slug>/page.tsx.
@@ -24,6 +30,15 @@ export const TOOLS: Tool[] = [
       "Break a workspace's email stats down by sending domain over any date range — sent volume, reply and positive-reply rates, bounce rate and more, side by side.",
     status: "active",
     Icon: GaugeIcon,
+  },
+  {
+    slug: "add-signatures",
+    name: "Add Signatures",
+    tagline: "Push unique spintaxed signatures to every inbox in a workspace",
+    description:
+      "Pick a workspace, provide your company / phone / address variations, and generate hundreds of spintax signature combinations — personalized with each inbox's own name — then apply them in one pass.",
+    status: "active",
+    Icon: PenIcon,
   },
   {
     slug: "remove-inboxes",

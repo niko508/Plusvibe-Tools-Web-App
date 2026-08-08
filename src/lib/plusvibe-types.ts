@@ -20,6 +20,8 @@ export interface EmailAccount {
   status?: string;
   warmup_status?: string;
   provider?: string;
+  first_name?: string;
+  last_name?: string;
 }
 
 export interface EmailAccountsResponse {

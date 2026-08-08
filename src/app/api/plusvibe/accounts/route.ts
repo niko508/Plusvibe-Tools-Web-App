@@ -62,11 +62,17 @@ export async function GET(request: Request) {
 // so normalise both here.
 function normalizeAccounts(data: RawAccountsResponse): EmailAccount[] {
   const raw = data?.accounts ?? [];
-  return raw.map((a) => ({
-    id: String(a.id ?? a._id ?? ""),
-    email: String(a.email ?? ""),
-    status: a.status ? String(a.status) : undefined,
-    warmup_status: a.warmup_status ? String(a.warmup_status) : undefined,
-    provider: a.provider ? String(a.provider) : undefined,
-  }));
+  return raw.map((a) => {
+    const payload = (a.payload ?? {}) as Record<string, unknown>;
+    const name = (payload.name ?? {}) as Record<string, unknown>;
+    return {
+      id: String(a.id ?? a._id ?? ""),
+      email: String(a.email ?? ""),
+      status: a.status ? String(a.status) : undefined,
+      warmup_status: a.warmup_status ? String(a.warmup_status) : undefined,
+      provider: a.provider ? String(a.provider) : undefined,
+      first_name: name.first_name ? String(name.first_name) : undefined,
+      last_name: name.last_name ? String(name.last_name) : undefined,
+    };
+  });
 }
