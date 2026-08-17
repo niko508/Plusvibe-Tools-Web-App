@@ -23,6 +23,7 @@ export interface EmailAccount {
   first_name?: string;
   last_name?: string;
   tags?: string[];
+  warmup_health?: number; // 7-day overall warmup health (0-100)
 }
 
 export interface EmailAccountsResponse {

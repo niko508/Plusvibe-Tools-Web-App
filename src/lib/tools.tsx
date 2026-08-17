@@ -5,6 +5,7 @@ import {
   SparklesIcon,
   TrashIcon,
   PenIcon,
+  FireIcon,
 } from "@/components/icons";
 
 // Registry of tools shown on the landing page. Adding a new tool = add an entry
@@ -30,6 +31,15 @@ export const TOOLS: Tool[] = [
       "Break a workspace's email stats down by sending domain over any date range — sent volume, reply and positive-reply rates, bounce rate and more, side by side.",
     status: "active",
     Icon: GaugeIcon,
+  },
+  {
+    slug: "remove-50",
+    name: "Remove 50 Inboxes from Domain",
+    tagline: "Trim over-provisioned warmup domains down to 50 and standardize warmup",
+    description:
+      "For a workspace, trim every domain that has more than 50 inboxes down to 50 — deleting the worst warmup-health inboxes first — then apply your standard warmup settings and enable warmup on the ones kept.",
+    status: "active",
+    Icon: FireIcon,
   },
   {
     slug: "add-signatures",

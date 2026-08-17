@@ -65,6 +65,9 @@ function normalizeAccounts(data: RawAccountsResponse): EmailAccount[] {
   return raw.map((a) => {
     const payload = (a.payload ?? {}) as Record<string, unknown>;
     const name = (payload.name ?? {}) as Record<string, unknown>;
+    const analytics = (payload.analytics ?? {}) as Record<string, unknown>;
+    const health = (analytics.health_scores ?? {}) as Record<string, unknown>;
+    const overall = health["7d_overall_warmup_health"];
     const tags = Array.isArray(payload.tags)
       ? (payload.tags as unknown[]).map(String)
       : undefined;
@@ -77,6 +80,7 @@ function normalizeAccounts(data: RawAccountsResponse): EmailAccount[] {
       first_name: name.first_name ? String(name.first_name) : undefined,
       last_name: name.last_name ? String(name.last_name) : undefined,
       tags,
+      warmup_health: typeof overall === "number" ? overall : undefined,
     };
   });
 }

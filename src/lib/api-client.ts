@@ -167,3 +167,56 @@ export function bulkUpdateSignature(
     signal,
   });
 }
+
+// --- Delete + warmup settings (Remove 50 tool) -----------------------------
+
+export function deleteAccount(
+  params: { workspace_id: string; email: string },
+  signal?: AbortSignal
+) {
+  return request<{ status?: string }>("/api/plusvibe/account-delete", {
+    method: "POST",
+    body: params,
+    signal,
+  });
+}
+
+// Warmup fields forwarded to PUT /account/bulk-update (whitelisted server-side).
+export interface WarmupSettings {
+  warmup_max_daily_limit?: number;
+  bulk_warmup_is_slow_rampup?: "yes" | "no";
+  warmup_initial_daily_limit?: number;
+  warmup_pace_increment?: number;
+  warmup_randomize?: "yes" | "no";
+  warmup_randomize_num?: number;
+  warmup_reply_rate?: number;
+  warmup_schedule?: {
+    tz: string;
+    from_time: string;
+    to_time: string;
+    days: string[];
+  };
+  warmup_business_type?: string;
+}
+
+export function updateWarmupSettings(
+  params: { workspace_id: string; ids: string[]; settings: WarmupSettings },
+  signal?: AbortSignal
+) {
+  return request<{ status?: string }>("/api/plusvibe/bulk-update", {
+    method: "POST",
+    body: { workspace_id: params.workspace_id, ids: params.ids, ...params.settings },
+    signal,
+  });
+}
+
+export function setWarmupStatus(
+  params: { workspace_id: string; ids: string[]; warmup_status: "ACTIVE" | "INACTIVE" },
+  signal?: AbortSignal
+) {
+  return request<{ status?: string }>("/api/plusvibe/warmup-status", {
+    method: "POST",
+    body: params,
+    signal,
+  });
+}
