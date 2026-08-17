@@ -28,6 +28,7 @@ yarn-error.log*
 next-env.d.ts
 
 # background job records (Remove Inboxes / Remove 50 tools)
+/.jobs-data
 /.jobs
 /.jobs50
 

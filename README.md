@@ -61,13 +61,40 @@ when your domains sit in one or a few workspaces.
 - The deletion phase is unchanged — the sheet only speeds up finding the
   inboxes, not the rate-limited deletes.
 
-### Job storage (`JOBS_DIR`)
+### Job storage (`JOBS_DIR`) — important for redeploys
 
-Job records are written as JSON under `JOBS_DIR` (default `./.jobs`). Out of the
-box, history survives closing the browser. To also survive a **Railway
-redeploy**, mount a [Railway volume](https://docs.railway.app/reference/volumes)
-and set `JOBS_DIR` to a path on it (e.g. `/data/jobs`); otherwise records last
-only for the container's lifetime.
+Both background-job tools (**Remove Inboxes** and **Remove 50 Inboxes from
+Domain**) write their records as JSON under a shared base directory, `JOBS_DIR`
+(default `./.jobs-data`), each in its own subfolder (`bulk-delete/`,
+`remove-50/`).
+
+Jobs run **inside the web process**. That means:
+
+- Closing the browser tab is fine — the job keeps running on the server.
+- A **redeploy or container restart is not** — Railway replaces the container
+  (SIGTERM → new container with a fresh filesystem), which **stops the running
+  job**. Without a persistent volume the records are also wiped, so the job
+  disappears entirely.
+
+**To make jobs durable across redeploys, mount a
+[Railway volume](https://docs.railway.app/reference/volumes):**
+
+1. Service → **Settings → Volumes → New Volume**, mount path e.g. `/data`.
+2. Service → **Variables** → add `JOBS_DIR=/data/jobs`.
+3. Redeploy.
+
+With the volume, a job that gets killed by a deploy is preserved and shown as
+**Interrupted** (with its last-known progress) instead of vanishing. On SIGTERM
+the app also flushes any running job to disk as interrupted before exiting.
+
+**Recovering an interrupted job:** deletions are idempotent — an inbox that was
+already removed is treated as "already gone (skipped)". So to finish an
+interrupted **Remove Inboxes** job, just re-scan the same domain list and start
+again; for **Remove 50**, reload the preview and start again. Only the remaining
+inboxes are acted on.
+
+**Best practice:** avoid deploying while a large job is running — the deploy will
+stop it. Kick off big trims when you're not about to push changes.
 
 ## How Domain Performance Monitoring works
 

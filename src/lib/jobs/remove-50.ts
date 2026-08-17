@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createHash, randomUUID } from "crypto";
-import { promises as fs } from "fs";
+import { promises as fs, mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import {
   plusvibePost,
@@ -10,6 +10,7 @@ import {
   PlusvibeError,
 } from "@/lib/plusvibe-server";
 import { acquireSlot } from "@/lib/jobs/rate-limit";
+import { onShutdownFlush } from "@/lib/jobs/shutdown";
 import type {
   Remove50DomainPlan,
   Remove50DomainRow,
@@ -27,7 +28,10 @@ import { MAX_STORED_ERRORS } from "@/lib/jobs/remove-50-types";
 // disk. Every Plusvibe call passes through the shared global rate limiter
 // (one account = one 5 req/s budget).
 
-const JOBS_DIR = process.env.JOBS_DIR || path.join(process.cwd(), ".jobs50");
+// JOBS_DIR is the shared base directory (point it at a persistent volume in
+// production). Each tool gets its own subdirectory so their records never mix.
+const JOBS_BASE = process.env.JOBS_DIR || path.join(process.cwd(), ".jobs-data");
+const JOBS_DIR = path.join(JOBS_BASE, "remove-50");
 const DELETE_WORKERS = 4;
 const CONFIG_WORKERS = 3;
 const PERSIST_EVERY = 15; // flush to disk every N completed units
@@ -78,6 +82,44 @@ async function persist(id: string) {
     // Persistence is best-effort; a failed write must not kill the run.
   }
 }
+
+// Synchronously persist any running jobs as "interrupted" when the process is
+// being torn down (SIGTERM on a redeploy), so a killed job shows up with its
+// last-known progress instead of vanishing.
+function flushRunningSync() {
+  let any = false;
+  for (const [, rec] of records) {
+    if (rec.status === "running") {
+      any = true;
+      break;
+    }
+  }
+  if (!any) return;
+  try {
+    mkdirSync(JOBS_DIR, { recursive: true });
+  } catch {
+    return;
+  }
+  for (const [id, rec] of records) {
+    if (rec.status !== "running") continue;
+    const m = meta.get(id);
+    if (!m) continue;
+    rec.status = "interrupted";
+    rec.phase = "finished";
+    rec.updatedAt = Date.now();
+    try {
+      writeFileSync(
+        fileFor(id),
+        JSON.stringify({ ...rec, fingerprint: m.fingerprint }),
+        "utf8"
+      );
+    } catch {
+      // best-effort
+    }
+  }
+}
+
+onShutdownFlush(flushRunningSync);
 
 // Loads persisted jobs once per process. Any job left "running" belonged to a
 // previous process (its in-memory runner is gone), so it's marked interrupted.
