@@ -9,6 +9,7 @@ export interface DomainRow {
   domain: string;
   mailboxes: number;
   status: RowStatus;
+  providers: string[]; // sender ESPs among this domain's mailboxes
   header?: EmailStatsHeader;
   chart?: EmailStatsChartPoint[];
   error?: string;

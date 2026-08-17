@@ -42,21 +42,34 @@ export interface DomainGroup {
   domain: string;
   mailboxes: number;
   accountIds: string[];
+  providers: string[]; // unique sender ESPs among this domain's mailboxes
+}
+
+// Buckets a raw provider value into one of the three known sender ESPs.
+export function providerBucket(p?: string): string {
+  if (p === "GOOGLE_WORKSPACE" || p === "MICROSOFT365") return p;
+  return "REGULAR_ACCOUNT";
 }
 
 // Groups accounts by their sending domain, sorted by mailbox count desc.
 export function groupByDomain(accounts: EmailAccount[]): DomainGroup[] {
   const map = new Map<string, DomainGroup>();
+  const providerSets = new Map<string, Set<string>>();
   for (const acc of accounts) {
     const domain = domainFromEmail(acc.email);
     if (!domain) continue;
     let group = map.get(domain);
     if (!group) {
-      group = { domain, mailboxes: 0, accountIds: [] };
+      group = { domain, mailboxes: 0, accountIds: [], providers: [] };
       map.set(domain, group);
+      providerSets.set(domain, new Set());
     }
     group.mailboxes += 1;
     if (acc.id) group.accountIds.push(acc.id);
+    providerSets.get(domain)!.add(providerBucket(acc.provider));
+  }
+  for (const [domain, set] of providerSets) {
+    map.get(domain)!.providers = Array.from(set);
   }
   return Array.from(map.values()).sort(
     (a, b) => b.mailboxes - a.mailboxes || a.domain.localeCompare(b.domain)

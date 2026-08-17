@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Workspace, EmailStatsResponse } from "@/lib/plusvibe-types";
+import type { Workspace, EmailStatsChartPoint } from "@/lib/plusvibe-types";
 import {
   fetchWorkspaces,
   fetchAccounts,
@@ -16,7 +16,6 @@ import {
   formatPercent,
   bounceRateHealth,
   replyRateHealth,
-  uniqueContacted,
 } from "@/lib/format";
 import { mapPool } from "@/lib/concurrency";
 import { ConnectPrompt } from "@/components/connect-prompt";
@@ -32,7 +31,7 @@ import {
 } from "@/components/icons";
 import { Controls } from "./controls";
 import { OverviewChart } from "./overview-chart";
-import { DomainTable } from "./domain-table";
+import { DomainTable, computeTotals } from "./domain-table";
 import { exportDomainsCsv } from "./csv";
 import type { DomainRow, SortKey, SortState } from "./types";
 
@@ -64,9 +63,10 @@ export function DomainPerformanceTool() {
 
   // Results
   const [rows, setRows] = useState<DomainRow[]>([]);
-  const [wsStats, setWsStats] = useState<EmailStatsResponse | null>(null);
-  const [wsLoading, setWsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Client-side filters (instant, no re-fetch): sender ESP + hide warming/idle.
+  const [senderProvider, setSenderProvider] = useState<string | null>(null);
+  const [hideInactive, setHideInactive] = useState(true);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
@@ -135,7 +135,6 @@ export function DomainPerformanceTool() {
       setWorkspaces([]);
       setWorkspaceId(null);
       setRows([]);
-      setWsStats(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, hasKey]);
@@ -151,7 +150,6 @@ export function DomainPerformanceTool() {
       setBusy(true);
       setError(null);
       setSelectedDomain(null);
-      setWsStats(null);
       setRows([]);
       setProgress({ done: 0, total: 0 });
 
@@ -172,20 +170,7 @@ export function DomainPerformanceTool() {
       };
 
       try {
-        // 1) Workspace-level totals (fast, drives the summary + default chart).
-        setWsLoading(true);
-        const wsPromise = fetchEmailStats(statsBase, signal)
-          .then((res) => {
-            if (!signal.aborted) setWsStats(res);
-          })
-          .catch((err) => {
-            if (!signal.aborted && !isAbort(err)) setError(errMessage(err));
-          })
-          .finally(() => {
-            if (!signal.aborted) setWsLoading(false);
-          });
-
-        // 2) Accounts -> unique sending domains.
+        // Accounts -> unique sending domains (with their sender ESPs).
         const accountsRes = await fetchAccounts(
           { workspace_id: params.workspaceId },
           signal
@@ -195,6 +180,7 @@ export function DomainPerformanceTool() {
           groups.map((g) => ({
             domain: g.domain,
             mailboxes: g.mailboxes,
+            providers: g.providers,
             status: "pending" as const,
           }))
         );
@@ -229,8 +215,6 @@ export function DomainPerformanceTool() {
           },
           { concurrency: 4, minSpacingMs: 220, signal }
         );
-
-        await wsPromise;
       } catch (err) {
         if (!isAbort(err)) setError(errMessage(err));
       } finally {
@@ -278,27 +262,53 @@ export function DomainPerformanceTool() {
   }
 
   // --- Derived -------------------------------------------------------------
-  const header = wsStats?.header;
+  // Client-side filters: sender ESP + hide warming/inactive (0 sent). A domain
+  // is "warming/inactive" once loaded with 0 sent in the range.
+  const activeRows = rows.filter((r) => {
+    if (senderProvider && !r.providers.includes(senderProvider)) return false;
+    if (
+      hideInactive &&
+      r.status === "done" &&
+      r.header &&
+      r.header.total_sent_count === 0
+    ) {
+      return false;
+    }
+    return true;
+  });
+  const hiddenInactive = rows.filter(
+    (r) =>
+      (!senderProvider || r.providers.includes(senderProvider)) &&
+      r.status === "done" &&
+      r.header &&
+      r.header.total_sent_count === 0
+  ).length;
+
   const selectedRow = rows.find((r) => r.domain === selectedDomain);
-  const chartData = selectedRow?.chart ?? wsStats?.chart ?? [];
+  const chartData = selectedRow?.chart ?? aggregateChart(activeRows);
   const chartTitle = selectedRow
     ? `${selectedDomain} · ${start} → ${end}`
     : ranMeta
-      ? `All domains · ${start} → ${end}`
+      ? `${senderProvider ? providerLabel(senderProvider) + " domains" : "All domains"} · ${start} → ${end}`
       : "";
-  const hasResults = rows.length > 0 || !!wsStats;
+  const hasResults = rows.length > 0;
+
+  // Aggregate summary from the filtered, loaded domains so the cards, chart,
+  // table and burned% all reflect the same set.
+  const loadedRows = activeRows.filter((r) => r.status === "done" && r.header);
+  const summary = computeTotals(loadedRows);
+  const summaryLoading = busy && loadedRows.length === 0;
 
   // Burned-domain filtering: loaded domains whose reply rate is below the
-  // threshold. Only "done" rows with a header qualify.
+  // threshold.
   const thresholdNum = parseFloat(threshold);
   const thresholdValid = Number.isFinite(thresholdNum);
-  const loadedRows = rows.filter((r) => r.status === "done" && r.header);
   const burnedRows = thresholdValid
     ? loadedRows.filter((r) => r.header!.reply_rate < thresholdNum)
     : [];
   const burnedPct =
     loadedRows.length > 0 ? (burnedRows.length / loadedRows.length) * 100 : 0;
-  const visibleRows = burnedOnly ? burnedRows : rows;
+  const visibleRows = burnedOnly ? burnedRows : activeRows;
 
   async function handleCopyDomains() {
     const text = visibleRows.map((r) => r.domain).join("\n");
@@ -363,46 +373,72 @@ export function DomainPerformanceTool() {
 
       {hasResults && (
         <>
+          {/* Filters */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">Sender ESP:</span>
+              {ESP_OPTIONS.map((o) => (
+                <button
+                  key={o.label}
+                  type="button"
+                  onClick={() => setSenderProvider(o.key)}
+                  className={`pv-chip ${
+                    senderProvider === o.key ? "pv-chip-active" : "hover:text-foreground"
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setHideInactive((v) => !v)}
+              className={`pv-chip ${
+                hideInactive ? "pv-chip-active" : "hover:text-foreground"
+              }`}
+              title="Hide domains with 0 sends in the range (warming up / idle)"
+            >
+              {hideInactive ? "Hiding warming / inactive" : "Show warming / inactive"}
+              {hideInactive && hiddenInactive > 0
+                ? ` · ${formatNumber(hiddenInactive)} hidden`
+                : ""}
+            </button>
+          </div>
+
           {/* Summary cards */}
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
             <StatCard
               label="Emails sent"
-              value={formatNumber(header?.total_sent_count)}
-              sub={header ? `${formatNumber(header.total_completed_count)} sequences completed` : undefined}
-              loading={wsLoading && !header}
+              value={formatNumber(summary.sent)}
+              sub={`${formatNumber(summary.count)} active domain${summary.count === 1 ? "" : "s"}`}
+              loading={summaryLoading}
             />
             <StatCard
               label="True reply rate"
-              value={formatPercent(header?.reply_rate)}
-              sub={header ? `${formatNumber(header.total_reply_count)} replies · excl. OOO` : undefined}
-              health={header ? replyRateHealth(header.reply_rate) : "neutral"}
-              loading={wsLoading && !header}
+              value={formatPercent(summary.replyRate)}
+              sub={`${formatNumber(summary.replies)} replies · excl. OOO`}
+              health={replyRateHealth(summary.replyRate)}
+              loading={summaryLoading}
             />
             <StatCard
               label="Reply rate (with OOO)"
-              value={formatPercent(header?.reply_rate_with_ooo)}
-              sub={
-                header
-                  ? `${formatNumber(
-                      header.total_reply_count + header.total_ooo_reply_count
-                    )} incl. out-of-office`
-                  : undefined
-              }
-              health={header ? replyRateHealth(header.reply_rate_with_ooo) : "neutral"}
-              loading={wsLoading && !header}
+              value={formatPercent(summary.replyRateOoo)}
+              sub={`${formatNumber(summary.replies + summary.ooo)} incl. out-of-office`}
+              health={replyRateHealth(summary.replyRateOoo)}
+              loading={summaryLoading}
             />
             <StatCard
               label="Positive reply rate"
-              value={formatPercent(header?.pos_reply_rate)}
-              sub={header ? `${formatNumber(header.total_pos_reply_count)} positive` : undefined}
-              loading={wsLoading && !header}
+              value={formatPercent(summary.posRate)}
+              sub={`${formatNumber(summary.posReplies)} positive`}
+              loading={summaryLoading}
             />
             <StatCard
               label="Bounce rate"
-              value={formatPercent(header?.bounce_rate)}
-              sub={header ? `${formatNumber(header.total_bounce_count)} bounces` : undefined}
-              health={header ? bounceRateHealth(header.bounce_rate) : "neutral"}
-              loading={wsLoading && !header}
+              value={formatPercent(summary.bounceRate)}
+              sub={`${formatNumber(summary.bounces)} bounces`}
+              health={bounceRateHealth(summary.bounceRate)}
+              loading={summaryLoading}
             />
           </div>
 
@@ -410,7 +446,7 @@ export function DomainPerformanceTool() {
           <OverviewChart
             data={chartData}
             title={chartTitle}
-            loading={wsLoading && chartData.length === 0}
+            loading={busy && chartData.length === 0}
           />
 
           {/* Domain table + burned-domain filter */}
@@ -589,6 +625,43 @@ function updateRow(
 ) {
   setRows((prev) =>
     prev.map((r) => (r.domain === domain ? { ...r, ...patch } : r))
+  );
+}
+
+const ESP_OPTIONS: { key: string | null; label: string }[] = [
+  { key: null, label: "All" },
+  { key: "GOOGLE_WORKSPACE", label: "Google" },
+  { key: "MICROSOFT365", label: "Microsoft" },
+  { key: "REGULAR_ACCOUNT", label: "Other / SMTP" },
+];
+
+function providerLabel(key: string): string {
+  return ESP_OPTIONS.find((o) => o.key === key)?.label ?? key;
+}
+
+// Sums the per-day charts of the given domain rows into a single workspace-like
+// series (so the overview chart reflects the active filters).
+function aggregateChart(rows: DomainRow[]): EmailStatsChartPoint[] {
+  const byDate = new Map<string, EmailStatsChartPoint>();
+  for (const r of rows) {
+    for (const p of r.chart ?? []) {
+      const existing = byDate.get(p.date);
+      if (!existing) {
+        byDate.set(p.date, { ...p });
+      } else {
+        existing.total_sent_count += p.total_sent_count;
+        existing.total_reply_count += p.total_reply_count;
+        existing.total_ooo_reply_count += p.total_ooo_reply_count;
+        existing.total_open_count += p.total_open_count;
+        existing.total_bounce_count += p.total_bounce_count;
+        existing.total_contacted_count += p.total_contacted_count;
+        existing.total_completed_count += p.total_completed_count;
+        existing.total_pos_reply_count += p.total_pos_reply_count;
+      }
+    }
+  }
+  return Array.from(byDate.values()).sort((a, b) =>
+    a.date.localeCompare(b.date)
   );
 }
 
