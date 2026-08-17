@@ -1,20 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Workspace, EmailAccount } from "@/lib/plusvibe-types";
+import type { Workspace } from "@/lib/plusvibe-types";
+import type {
+  Remove50Job,
+  Remove50JobStatus,
+  Remove50DomainPlan,
+} from "@/lib/jobs/remove-50-types";
 import {
   fetchWorkspaces,
   fetchAccounts,
-  deleteAccount,
-  updateWarmupSettings,
-  setWarmupStatus,
+  startRemove50,
+  listRemove50Jobs,
+  abortRemove50,
   ApiClientError,
-  type WarmupSettings,
 } from "@/lib/api-client";
 import { useApiKey } from "@/lib/use-api-key";
-import { formatNumber } from "@/lib/format";
-import { mapPool } from "@/lib/concurrency";
-import { domainFromEmail } from "@/lib/format";
+import { formatNumber, domainFromEmail } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { StatCard } from "@/components/stat-card";
 import { Spinner, EmptyState } from "@/components/ui";
@@ -49,21 +51,6 @@ interface DomainPlan {
   keepInboxes: InboxLite[];
 }
 
-type RunStatus = "pending" | "deleting" | "configuring" | "done" | "error";
-
-interface RunRow {
-  domain: string;
-  status: RunStatus;
-  deleted: number;
-  toDelete: number;
-  configured: boolean;
-  businessTypeSkipped: boolean;
-  error?: string;
-}
-
-const CONCURRENCY = 3;
-const SPACING = 240;
-
 export function Remove50Tool() {
   const { hasKey, ready } = useApiKey();
 
@@ -78,14 +65,12 @@ export function Remove50Tool() {
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const [confirmText, setConfirmText] = useState("");
-  const [running, setRunning] = useState(false);
-  const [runRows, setRunRows] = useState<RunRow[]>([]);
-  const [progress, setProgress] = useState({ label: "", done: 0, total: 0 });
-  const [done, setDone] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  const abortRef = useRef<AbortController | null>(null);
+  const [jobs, setJobs] = useState<Remove50Job[]>([]);
+  const [highlightJobId, setHighlightJobId] = useState<string | null>(null);
 
   // --- Workspaces ----------------------------------------------------------
   const loadWorkspaces = useCallback(async () => {
@@ -95,18 +80,20 @@ export function Remove50Tool() {
       const res = await fetchWorkspaces();
       const list = res.workspaces ?? [];
       setWorkspaces(list);
-      if (list.length && !workspaceId) {
-        const warmup = list.find(
-          (w) => w.name.trim().toLowerCase() === DEFAULT_EXCLUDED_WORKSPACE
-        );
-        setWorkspaceId(warmup?._id ?? list[0]._id);
+      if (list.length) {
+        setWorkspaceId((prev) => {
+          if (prev) return prev;
+          const warmup = list.find(
+            (w) => w.name.trim().toLowerCase() === DEFAULT_EXCLUDED_WORKSPACE
+          );
+          return warmup?._id ?? list[0]._id;
+        });
       }
     } catch (err) {
       setError(errMessage(err));
     } finally {
       setWorkspacesLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -119,14 +106,29 @@ export function Remove50Tool() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  // --- Jobs polling --------------------------------------------------------
+  const refreshJobs = useCallback(async () => {
+    try {
+      const res = await listRemove50Jobs();
+      setJobs(res.jobs ?? []);
+    } catch {
+      // transient; keep last known list
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!(ready && hasKey)) return;
+    void refreshJobs();
+    const interval = setInterval(() => void refreshJobs(), 2500);
+    return () => clearInterval(interval);
+  }, [ready, hasKey, refreshJobs]);
+
   // --- Load + build plans --------------------------------------------------
   async function loadPlans() {
     if (!workspaceId) return;
     setLoading(true);
     setError(null);
     setPlans(null);
-    setRunRows([]);
-    setDone(false);
     setConfirmText("");
     try {
       const res = await fetchAccounts({ workspace_id: workspaceId });
@@ -164,7 +166,6 @@ export function Remove50Tool() {
           keepInboxes: inboxes.slice(toDelete),
         });
       }
-      // Domains needing trimming first, then by size.
       built.sort((a, b) => b.toDelete - a.toDelete || b.total - a.total);
       setPlans(built);
       setLoadedForWs(workspaceId);
@@ -182,133 +183,59 @@ export function Remove50Tool() {
   const confirmArmed =
     confirmText.trim() === String(totalToDelete) ||
     confirmText.trim().toUpperCase() === "DELETE";
+  const hasRunningJob = jobs.some((j) => j.status === "running");
 
-  // --- Run -----------------------------------------------------------------
-  async function handleRun() {
-    if (!plans || totalToDelete === 0) return;
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    const { signal } = controller;
-
-    const rows: RunRow[] = trimmed.map((p) => ({
-      domain: p.domain,
-      status: "pending",
-      deleted: 0,
-      toDelete: p.toDelete,
-      configured: false,
-      businessTypeSkipped: false,
-    }));
-    setRunRows(rows);
-    setRunning(true);
-    setDone(false);
+  // --- Start background job ------------------------------------------------
+  async function handleStart() {
+    if (!plans || totalToDelete === 0 || starting) return;
+    setStarting(true);
     setError(null);
     setToast(null);
-
-    let deletedTotal = 0;
-    let configuredDomains = 0;
-    let errorCount = 0;
-
     try {
-      // Phase 1 — delete the worst inboxes across all trimmed domains.
-      const deleteTasks = trimmed.flatMap((p) =>
-        p.deleteInboxes.map((inbox) => ({ domain: p.domain, inbox }))
-      );
-      setProgress({ label: "Deleting inboxes", done: 0, total: deleteTasks.length });
-      await mapPool(
-        deleteTasks,
-        async ({ domain, inbox }) => {
-          updateRun(setRunRows, domain, { status: "deleting" });
-          try {
-            await deleteAccount(
-              { workspace_id: workspaceId, email: inbox.email },
-              signal
-            );
-            deletedTotal += 1;
-            bumpDeleted(setRunRows, domain);
-          } catch (err) {
-            if (isAbort(err)) throw err;
-            errorCount += 1;
-            updateRun(setRunRows, domain, {
-              status: "error",
-              error: errMessage(err),
-            });
-          } finally {
-            if (!signal.aborted) {
-              setProgress((p) => ({ ...p, done: p.done + 1 }));
-            }
-          }
-        },
-        { concurrency: CONCURRENCY, minSpacingMs: SPACING, signal }
-      );
+      const wsName =
+        workspaces.find((w) => w._id === workspaceId)?.name ?? "";
+      const domains: Remove50DomainPlan[] = trimmed.map((p) => ({
+        domain: p.domain,
+        total: p.total,
+        deleteEmails: p.deleteInboxes.map((i) => i.email),
+        keepIds: p.keepInboxes.map((i) => i.id),
+      }));
 
-      // Phase 2 — apply warmup settings + enable warmup on the kept inboxes.
-      setProgress({
-        label: "Applying warmup settings",
-        done: 0,
-        total: trimmed.length,
+      const { jobId } = await startRemove50({
+        label: `${wsName || "Workspace"} · ${trimmed.length} domain${
+          trimmed.length === 1 ? "" : "s"
+        } → ${target}`,
+        workspaceId,
+        workspaceName: wsName,
+        target,
+        settings: WARMUP_SETTINGS,
+        domains,
       });
-      await mapPool(
-        trimmed,
-        async (p) => {
-          updateRun(setRunRows, p.domain, { status: "configuring" });
-          const keepIds = p.keepInboxes.map((i) => i.id);
-          try {
-            const skipped = await applyWarmup(workspaceId, keepIds, signal);
-            await setWarmupStatus(
-              { workspace_id: workspaceId, ids: keepIds, warmup_status: "ACTIVE" },
-              signal
-            );
-            configuredDomains += 1;
-            updateRun(setRunRows, p.domain, {
-              status: "done",
-              configured: true,
-              businessTypeSkipped: skipped,
-            });
-          } catch (err) {
-            if (isAbort(err)) throw err;
-            errorCount += 1;
-            updateRun(setRunRows, p.domain, {
-              status: "error",
-              error: errMessage(err),
-            });
-          } finally {
-            if (!signal.aborted) {
-              setProgress((p2) => ({ ...p2, done: p2.done + 1 }));
-            }
-          }
-        },
-        { concurrency: CONCURRENCY, minSpacingMs: SPACING, signal }
-      );
 
-      setDone(true);
-      const msg =
-        errorCount > 0
-          ? `Trimmed ${configuredDomains} domains · ${formatNumber(
-              deletedTotal
-            )} inboxes deleted · ${errorCount} error${errorCount === 1 ? "" : "s"}`
-          : `Done — ${formatNumber(deletedTotal)} inboxes deleted, ${configuredDomains} domains reconfigured 🎉`;
-      setToast(msg);
-      showNotification("Remove 50 — done", msg);
-      // Reload plans so the preview reflects the new state.
-      void loadPlans();
+      setHighlightJobId(jobId);
+      setTimeout(() => setHighlightJobId(null), 4000);
+      setConfirmText("");
+      setToast("Job started — it runs in the background, you can close this tab.");
+      await refreshJobs();
     } catch (err) {
-      if (!isAbort(err)) setError(errMessage(err));
+      setError(errMessage(err));
     } finally {
-      if (!controller.signal.aborted) setRunning(false);
+      setStarting(false);
     }
   }
 
-  function abortRun() {
-    abortRef.current?.abort();
-    setRunning(false);
+  async function handleAbortJob(id: string) {
+    try {
+      await abortRemove50(id);
+      await refreshJobs();
+    } catch {
+      // ignore
+    }
   }
 
   // --- Render --------------------------------------------------------------
   if (!ready) return <div className="pv-card h-40 animate-pulse" />;
   if (!hasKey) return <ConnectPrompt onConnected={loadWorkspaces} />;
-
-  const results = summarizeRun(runRows);
 
   return (
     <div className="space-y-5">
@@ -326,8 +253,7 @@ export function Remove50Tool() {
                   setWorkspaceId(e.target.value);
                   setPlans(null);
                   setLoadedForWs(null);
-                  setRunRows([]);
-                  setDone(false);
+                  setConfirmText("");
                 }}
               >
                 {workspacesLoading && <option>Loading…</option>}
@@ -359,7 +285,7 @@ export function Remove50Tool() {
             disabled={loading || !workspaceId}
           >
             {loading ? <Spinner /> : <RefreshIcon size={16} />}
-            {loadedForWs === workspaceId ? "Reload" : "Load & preview"}
+            {loadedForWs === workspaceId ? "Reload preview" : "Load & preview"}
           </button>
         </div>
       </div>
@@ -425,7 +351,7 @@ export function Remove50Tool() {
             </div>
           </div>
 
-          {/* Confirm + run */}
+          {/* Confirm + start */}
           {totalToDelete > 0 ? (
             <div className="pv-card border-danger/40 p-4 sm:p-5">
               <div className="flex items-start gap-2 text-sm text-danger">
@@ -449,21 +375,26 @@ export function Remove50Tool() {
                   onChange={(e) => setConfirmText(e.target.value)}
                   placeholder={String(totalToDelete)}
                 />
-                {running && (
-                  <button type="button" className="pv-btn-ghost" onClick={abortRun}>
-                    Abort
-                  </button>
-                )}
                 <button
                   type="button"
                   className="pv-btn bg-danger text-white shadow-soft hover:brightness-110 disabled:opacity-50"
-                  disabled={!confirmArmed || running}
-                  onClick={handleRun}
+                  disabled={!confirmArmed || starting}
+                  onClick={handleStart}
                 >
-                  {running ? <Spinner /> : <TrashIcon size={16} />}
-                  Delete {formatNumber(totalToDelete)} &amp; reconfigure
+                  {starting ? <Spinner /> : <TrashIcon size={16} />}
+                  Start job — delete {formatNumber(totalToDelete)} &amp; reconfigure
                 </button>
               </div>
+              <p className="mt-3 text-xs text-muted-foreground">
+                Runs in the background on the server — safe to close this tab. Track
+                it in <strong>Jobs</strong> below.
+              </p>
+              {hasRunningJob && (
+                <p className="mt-1 text-xs text-warning">
+                  A job is already running. Starting another will act on the current
+                  inbox counts — reload the preview first to avoid double-deleting.
+                </p>
+              )}
             </div>
           ) : (
             <EmptyState icon={<CheckIcon />} title="Nothing to trim">
@@ -479,53 +410,12 @@ export function Remove50Tool() {
         </EmptyState>
       )}
 
-      {/* Run progress + results */}
-      {(running || done) && runRows.length > 0 && (
-        <div className="pv-card p-4 sm:p-5">
-          <div className="mb-1.5 flex items-center justify-between text-xs text-muted-foreground">
-            <span className="flex items-center gap-2">
-              {running && <Spinner size={12} />}
-              {done ? "Done" : progress.label + "…"}
-            </span>
-            <span className="tabular-nums">
-              {progress.done} / {progress.total}
-            </span>
-          </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full rounded-full bg-accent transition-all duration-300"
-              style={{
-                width: `${
-                  progress.total > 0
-                    ? Math.round((progress.done / progress.total) * 100)
-                    : 0
-                }%`,
-              }}
-            />
-          </div>
-
-          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Metric label="Inboxes deleted" value={results.deleted} />
-            <Metric label="Domains reconfigured" value={results.configured} />
-            <Metric label="Business type skipped" value={results.btSkipped} muted />
-            <Metric label="Errors" value={results.errors} danger={results.errors > 0} />
-          </div>
-
-          {results.errorRows.length > 0 && (
-            <div className="pv-scroll mt-3 max-h-40 overflow-y-auto rounded-xl border border-border text-xs">
-              {results.errorRows.map((r) => (
-                <div
-                  key={r.domain}
-                  className="flex justify-between gap-3 border-b border-border/70 px-3 py-2 last:border-0"
-                >
-                  <span className="font-medium">{r.domain}</span>
-                  <span className="text-danger">{r.error}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      {/* Jobs */}
+      <JobsPanel
+        jobs={jobs}
+        highlightJobId={highlightJobId}
+        onAbort={handleAbortJob}
+      />
 
       {toast && (
         <div className="fixed bottom-5 right-5 z-50 animate-fade-in">
@@ -612,24 +502,291 @@ function PlanRow({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Jobs panel
+// ---------------------------------------------------------------------------
+
+function JobsPanel({
+  jobs,
+  highlightJobId,
+  onAbort,
+}: {
+  jobs: Remove50Job[];
+  highlightJobId: string | null;
+  onAbort: (id: string) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <h2 className="text-sm font-semibold">Jobs</h2>
+      {jobs.length === 0 ? (
+        <EmptyState icon={<FireIcon />} title="No jobs yet">
+          Load a workspace, confirm, and start a trim — it&apos;ll appear here and
+          keep running even if you close the app.
+        </EmptyState>
+      ) : (
+        jobs.map((job) => (
+          <JobCard
+            key={job.id}
+            job={job}
+            highlight={job.id === highlightJobId}
+            onAbort={onAbort}
+          />
+        ))
+      )}
+    </div>
+  );
+}
+
+const STATUS_META: Record<Remove50JobStatus, { label: string; className: string }> = {
+  running: { label: "Running", className: "bg-accent/10 text-accent" },
+  done: { label: "Done", className: "bg-success/10 text-success" },
+  aborted: { label: "Aborted", className: "bg-muted text-muted-foreground" },
+  interrupted: { label: "Interrupted", className: "bg-warning/10 text-warning" },
+  error: { label: "Error", className: "bg-danger/10 text-danger" },
+};
+
+function JobCard({
+  job,
+  highlight,
+  onAbort,
+}: {
+  job: Remove50Job;
+  highlight: boolean;
+  onAbort: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const p = job.progress;
+  const deleteAttempted = p.inboxesDeleted + p.inboxesSkipped + p.inboxesErrored;
+  const totalUnits = p.inboxesToDelete + p.domainsTotal;
+  const doneUnits = deleteAttempted + p.domainsConfigured;
+  const pct =
+    job.status === "done"
+      ? 100
+      : totalUnits > 0
+        ? Math.min(100, Math.round((doneUnits / totalUnits) * 100))
+        : 0;
+  const status = STATUS_META[job.status];
+
+  const phaseLabel =
+    job.status !== "running"
+      ? status.label
+      : job.phase === "deleting"
+        ? "Deleting inboxes"
+        : job.phase === "configuring"
+          ? "Applying warmup settings"
+          : "Finishing";
+
+  return (
+    <div
+      className={`pv-card p-4 sm:p-5 ${highlight ? "ring-2 ring-accent/40" : ""}`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2.5">
+          <span
+            className={`rounded-full px-2.5 py-1 text-xs font-medium ${status.className}`}
+          >
+            {job.status === "running" && <Spinner size={10} />} {status.label}
+          </span>
+          <span className="text-sm font-medium">{job.label}</span>
+        </div>
+        <span className="text-xs text-muted-foreground">
+          {relativeTime(job.createdAt)}
+        </span>
+      </div>
+
+      {/* Progress */}
+      <div className="mt-3">
+        <div className="mb-1.5 flex items-center justify-between text-xs text-muted-foreground">
+          <span className="flex items-center gap-2">
+            {job.status === "running" && <Spinner size={12} />}
+            {phaseLabel}
+          </span>
+          <span className="tabular-nums">{pct}%</span>
+        </div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div
+            className={`h-full rounded-full transition-all duration-300 ${
+              job.status === "error" ? "bg-danger" : "bg-accent"
+            }`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-4 text-xs text-muted-foreground">
+          <span className="tabular-nums">
+            {formatNumber(deleteAttempted)} / {formatNumber(p.inboxesToDelete)}{" "}
+            inboxes deleted
+          </span>
+          <span className="tabular-nums">
+            {formatNumber(p.domainsConfigured)} / {formatNumber(p.domainsTotal)}{" "}
+            domains reconfigured
+          </span>
+        </div>
+      </div>
+
+      {/* Result counts */}
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Metric label="Inboxes deleted" value={p.inboxesDeleted} tone="success" />
+        <Metric label="Domains reconfigured" value={p.domainsConfigured} tone="default" />
+        <Metric
+          label="Business type skipped"
+          value={job.businessTypeSkipped}
+          tone="muted"
+        />
+        <Metric
+          label="Errors"
+          value={job.errors.length}
+          tone={job.errors.length > 0 ? "danger" : "muted"}
+        />
+      </div>
+
+      {p.inboxesSkipped > 0 && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {formatNumber(p.inboxesSkipped)} already removed (skipped).
+        </p>
+      )}
+      {job.businessTypeSkipped > 0 && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Business type “{WARMUP_SETTINGS.warmup_business_type}” was not accepted on{" "}
+          {formatNumber(job.businessTypeSkipped)} domain
+          {job.businessTypeSkipped === 1 ? "" : "s"} — every other warmup setting was
+          still applied.
+        </p>
+      )}
+      {job.status === "interrupted" && (
+        <p className="mt-2 text-xs text-warning">
+          Interrupted by a server restart — reload the preview and start again to
+          finish any remaining domains.
+        </p>
+      )}
+
+      {/* Actions */}
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        {job.status === "running" && (
+          <button
+            type="button"
+            className="pv-btn-ghost"
+            onClick={() => onAbort(job.id)}
+          >
+            Abort
+          </button>
+        )}
+        <button
+          type="button"
+          className="pv-btn-ghost"
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open ? "Hide details" : "Details"}
+        </button>
+      </div>
+
+      {open && (
+        <div className="mt-3 space-y-3">
+          {/* Per-domain rollup */}
+          <div className="pv-scroll max-h-56 overflow-y-auto rounded-xl border border-border">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border text-left text-muted-foreground">
+                  <th className="px-3 py-2 font-medium">Domain</th>
+                  <th className="px-3 py-2 text-right font-medium">Deleted</th>
+                  <th className="px-3 py-2 text-right font-medium">Kept</th>
+                  <th className="px-3 py-2 text-right font-medium">Warmup</th>
+                  <th className="px-3 py-2 text-right font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {job.domains.map((d) => (
+                  <tr key={d.domain} className="border-b border-border/70 last:border-0">
+                    <td className="px-3 py-2 font-medium">{d.domain}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {formatNumber(d.deleted)} / {formatNumber(d.toDelete)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {formatNumber(d.keep)}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {d.warmupEnabled ? (
+                        <span className="text-success">on</span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <DomainStatusBadge status={d.status} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {job.errors.length > 0 && (
+            <div className="pv-scroll max-h-48 overflow-y-auto rounded-xl border border-border">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border text-left text-muted-foreground">
+                    <th className="px-3 py-2 font-medium">Domain</th>
+                    <th className="px-3 py-2 font-medium">Phase</th>
+                    <th className="px-3 py-2 font-medium">Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {job.errors.map((e, i) => (
+                    <tr key={i} className="border-b border-border/70 last:border-0">
+                      <td className="px-3 py-2 font-mono">
+                        {e.email ?? e.domain}
+                      </td>
+                      <td className="px-3 py-2 text-muted-foreground">{e.phase}</td>
+                      <td className="px-3 py-2 text-danger">{e.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {job.errorsTruncated && (
+                <div className="px-3 py-2 text-xs text-muted-foreground">
+                  Error list truncated.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DomainStatusBadge({ status }: { status: string }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    pending: { label: "Pending", cls: "text-muted-foreground" },
+    deleting: { label: "Deleting", cls: "text-accent" },
+    configuring: { label: "Configuring", cls: "text-accent" },
+    done: { label: "Done", cls: "text-success" },
+    partial: { label: "Partial", cls: "text-warning" },
+    error: { label: "Error", cls: "text-danger" },
+  };
+  const m = map[status] ?? map.pending;
+  return <span className={m.cls}>{m.label}</span>;
+}
+
 function Metric({
   label,
   value,
-  danger,
-  muted,
+  tone,
 }: {
   label: string;
   value: number;
-  danger?: boolean;
-  muted?: boolean;
+  tone: "default" | "success" | "danger" | "muted";
 }) {
+  const color =
+    tone === "success"
+      ? "text-success"
+      : tone === "danger"
+        ? "text-danger"
+        : tone === "muted"
+          ? "text-muted-foreground"
+          : "text-foreground";
   return (
     <div>
-      <div
-        className={`text-lg font-semibold tabular-nums ${
-          danger ? "text-danger" : muted ? "text-muted-foreground" : "text-foreground"
-        }`}
-      >
+      <div className={`text-lg font-semibold tabular-nums ${color}`}>
         {formatNumber(value)}
       </div>
       <div className="text-xs text-muted-foreground">{label}</div>
@@ -639,86 +796,15 @@ function Metric({
 
 // ---------------------------------------------------------------------------
 
-// Applies the warmup settings; if the API rejects the business type, retries
-// once without it so the rest still applies. Returns whether it was skipped.
-async function applyWarmup(
-  workspaceId: string,
-  ids: string[],
-  signal: AbortSignal
-): Promise<boolean> {
-  try {
-    await updateWarmupSettings(
-      { workspace_id: workspaceId, ids, settings: WARMUP_SETTINGS },
-      signal
-    );
-    return false;
-  } catch (err) {
-    if (isAbort(err)) throw err;
-    const { warmup_business_type, ...rest } = WARMUP_SETTINGS;
-    void warmup_business_type;
-    await updateWarmupSettings(
-      { workspace_id: workspaceId, ids, settings: rest as WarmupSettings },
-      signal
-    );
-    return true;
-  }
-}
-
-function updateRun(
-  setRows: React.Dispatch<React.SetStateAction<RunRow[]>>,
-  domain: string,
-  patch: Partial<RunRow>
-) {
-  setRows((prev) => prev.map((r) => (r.domain === domain ? { ...r, ...patch } : r)));
-}
-
-function bumpDeleted(
-  setRows: React.Dispatch<React.SetStateAction<RunRow[]>>,
-  domain: string
-) {
-  setRows((prev) =>
-    prev.map((r) => (r.domain === domain ? { ...r, deleted: r.deleted + 1 } : r))
-  );
-}
-
-function summarizeRun(rows: RunRow[]) {
-  let deleted = 0;
-  let configured = 0;
-  let btSkipped = 0;
-  let errors = 0;
-  const errorRows: RunRow[] = [];
-  for (const r of rows) {
-    deleted += r.deleted;
-    if (r.configured) configured += 1;
-    if (r.businessTypeSkipped) btSkipped += 1;
-    if (r.status === "error") {
-      errors += 1;
-      errorRows.push(r);
-    }
-  }
-  return { deleted, configured, btSkipped, errors, errorRows };
-}
-
-function showNotification(title: string, body: string) {
-  try {
-    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-      new Notification(title, { body });
-    } else if (
-      typeof Notification !== "undefined" &&
-      Notification.permission === "default"
-    ) {
-      void Notification.requestPermission();
-    }
-  } catch {
-    // ignore
-  }
-}
-
-function isAbort(err: unknown): boolean {
-  return (
-    (err instanceof DOMException && err.name === "AbortError") ||
-    (err instanceof Error && err.name === "AbortError")
-  );
+function relativeTime(ts: number): string {
+  const diff = Date.now() - ts;
+  const s = Math.round(diff / 1000);
+  if (s < 60) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return new Date(ts).toLocaleDateString();
 }
 
 function errMessage(err: unknown): string {

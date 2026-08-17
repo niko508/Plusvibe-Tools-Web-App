@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "crypto";
 import { promises as fs } from "fs";
 import path from "path";
 import { plusvibePost, PlusvibeError } from "@/lib/plusvibe-server";
+import { acquireSlot } from "@/lib/jobs/rate-limit";
 import type {
   DeleteTask,
   JobDomainRow,
@@ -16,32 +17,13 @@ import { MAX_STORED_ERRORS } from "@/lib/jobs/types";
 // Server-side manager for "Remove Inboxes" background jobs. Jobs run in the
 // Node process (surviving the browser tab closing) and are persisted to disk so
 // results can be viewed again on return. The Plusvibe API key is held in memory
-// only and never written to disk. Deletions across ALL jobs share one global
-// rate limiter, because a Plusvibe account has a single 5 req/s budget.
+// only and never written to disk. Deletions across ALL jobs (and other tools)
+// share one global rate limiter, because a Plusvibe account has a single
+// 5 req/s budget.
 
 const JOBS_DIR = process.env.JOBS_DIR || path.join(process.cwd(), ".jobs");
 const WORKERS_PER_JOB = 4;
-const SLOT_SPACING_MS = 220; // ~4.5 delete starts/sec, globally
 const PERSIST_EVERY = 20; // flush to disk every N completed inboxes
-
-// --- Global rate limiter (shared across all jobs) --------------------------
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-let slotChain: Promise<void> = Promise.resolve();
-let lastSlot = 0;
-
-// Serializes slot acquisition so delete starts are spaced >= SLOT_SPACING_MS
-// apart no matter how many workers/jobs are active.
-function acquireSlot(): Promise<void> {
-  const p = slotChain.then(async () => {
-    const wait = Math.max(0, lastSlot + SLOT_SPACING_MS - Date.now());
-    if (wait > 0) await sleep(wait);
-    lastSlot = Date.now();
-  });
-  slotChain = p.catch(() => {});
-  return p;
-}
 
 // --- In-memory state -------------------------------------------------------
 
