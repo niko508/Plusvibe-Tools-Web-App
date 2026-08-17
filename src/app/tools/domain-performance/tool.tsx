@@ -64,9 +64,9 @@ export function DomainPerformanceTool() {
   // Results
   const [rows, setRows] = useState<DomainRow[]>([]);
   const [busy, setBusy] = useState(false);
-  // Client-side filters (instant, no re-fetch): sender ESP + hide warming/idle.
+  // Client-side sender-ESP filter (instant, no re-fetch). Domains with no
+  // campaign sends in the range are always hidden.
   const [senderProvider, setSenderProvider] = useState<string | null>(null);
-  const [hideInactive, setHideInactive] = useState(true);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
@@ -266,12 +266,8 @@ export function DomainPerformanceTool() {
   // is "warming/inactive" once loaded with 0 sent in the range.
   const activeRows = rows.filter((r) => {
     if (senderProvider && !r.providers.includes(senderProvider)) return false;
-    if (
-      hideInactive &&
-      r.status === "done" &&
-      r.header &&
-      r.header.total_sent_count === 0
-    ) {
+    // Always hide domains that sent no campaign emails in the range.
+    if (r.status === "done" && r.header && r.header.total_sent_count === 0) {
       return false;
     }
     return true;
@@ -390,19 +386,12 @@ export function DomainPerformanceTool() {
                 </button>
               ))}
             </div>
-            <button
-              type="button"
-              onClick={() => setHideInactive((v) => !v)}
-              className={`pv-chip ${
-                hideInactive ? "pv-chip-active" : "hover:text-foreground"
-              }`}
-              title="Hide domains with 0 sends in the range (warming up / idle)"
-            >
-              {hideInactive ? "Hiding warming / inactive" : "Show warming / inactive"}
-              {hideInactive && hiddenInactive > 0
-                ? ` · ${formatNumber(hiddenInactive)} hidden`
-                : ""}
-            </button>
+            {hiddenInactive > 0 && (
+              <span className="text-xs text-muted-foreground">
+                {formatNumber(hiddenInactive)} domain
+                {hiddenInactive === 1 ? "" : "s"} with no sends hidden
+              </span>
+            )}
           </div>
 
           {/* Summary cards */}
