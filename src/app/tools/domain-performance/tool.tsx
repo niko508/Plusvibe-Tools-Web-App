@@ -38,6 +38,9 @@ import type { DomainRow, SortKey, SortState } from "./types";
 const LAST_WS_KEY = "pv_last_workspace";
 const BURNED_THRESHOLD_KEY = "pv_burned_threshold";
 const DEFAULT_PRESET = "30d";
+// A domain with an OOO reply rate above this is still delivering, so it's never
+// counted as burned even if its true reply rate is below the threshold.
+const BURNED_OOO_SAFE = 1.5;
 
 interface RunParams {
   workspaceId: string;
@@ -295,12 +298,17 @@ export function DomainPerformanceTool() {
   const summary = computeTotals(loadedRows);
   const summaryLoading = busy && loadedRows.length === 0;
 
-  // Burned-domain filtering: loaded domains whose reply rate is below the
-  // threshold.
+  // Burned-domain filtering: loaded domains whose true reply rate is below the
+  // threshold. A domain still pulling out-of-office auto-replies (OOO reply
+  // rate above BURNED_OOO_SAFE%) is clearly still delivering, so it's spared.
   const thresholdNum = parseFloat(threshold);
   const thresholdValid = Number.isFinite(thresholdNum);
   const burnedRows = thresholdValid
-    ? loadedRows.filter((r) => r.header!.reply_rate < thresholdNum)
+    ? loadedRows.filter(
+        (r) =>
+          r.header!.reply_rate < thresholdNum &&
+          r.header!.reply_rate_with_ooo <= BURNED_OOO_SAFE
+      )
     : [];
   const burnedPct =
     loadedRows.length > 0 ? (burnedRows.length / loadedRows.length) * 100 : 0;
@@ -446,7 +454,7 @@ export function DomainPerformanceTool() {
                 {loadedRows.length > 0 && thresholdValid && (
                   <span
                     className="pv-chip"
-                    title={`${burnedRows.length} of ${loadedRows.length} domains have a true reply rate below ${threshold}%`}
+                    title={`${burnedRows.length} of ${loadedRows.length} domains have a true reply rate below ${threshold}% and OOO reply rate ≤ ${BURNED_OOO_SAFE}%`}
                   >
                     <FireIcon size={13} className="text-danger" />
                     {burnedPct.toFixed(1)}% burned · {burnedRows.length}/
@@ -536,6 +544,7 @@ export function DomainPerformanceTool() {
                     Showing {burnedRows.length} of {loadedRows.length} loaded
                     domain{loadedRows.length === 1 ? "" : "s"} (
                     {burnedPct.toFixed(1)}%) with true reply rate below {threshold}%
+                    {" "}and OOO reply rate ≤ {BURNED_OOO_SAFE}%
                     {busy ? " so far (still loading…)" : ""}. Copy grabs the
                     domain names, one per line.
                   </>
