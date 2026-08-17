@@ -38,8 +38,9 @@ import type { DomainRow, SortKey, SortState } from "./types";
 const LAST_WS_KEY = "pv_last_workspace";
 const BURNED_THRESHOLD_KEY = "pv_burned_threshold";
 const DEFAULT_PRESET = "30d";
-// A domain with an OOO reply rate above this is still delivering, so it's never
-// counted as burned even if its true reply rate is below the threshold.
+// A domain with an OOO reply rate at or above this is still delivering, so it's
+// never counted as burned even if its true reply rate is below the threshold.
+// Only an OOO reply rate strictly below this can be burned.
 const BURNED_OOO_SAFE = 1.5;
 
 interface RunParams {
@@ -307,7 +308,7 @@ export function DomainPerformanceTool() {
     ? loadedRows.filter(
         (r) =>
           r.header!.reply_rate < thresholdNum &&
-          r.header!.reply_rate_with_ooo <= BURNED_OOO_SAFE
+          r.header!.reply_rate_with_ooo < BURNED_OOO_SAFE
       )
     : [];
   const burnedPct =
@@ -454,7 +455,7 @@ export function DomainPerformanceTool() {
                 {loadedRows.length > 0 && thresholdValid && (
                   <span
                     className="pv-chip"
-                    title={`${burnedRows.length} of ${loadedRows.length} domains have a true reply rate below ${threshold}% and OOO reply rate ≤ ${BURNED_OOO_SAFE}%`}
+                    title={`${burnedRows.length} of ${loadedRows.length} domains have a true reply rate below ${threshold}% and OOO reply rate below ${BURNED_OOO_SAFE}%`}
                   >
                     <FireIcon size={13} className="text-danger" />
                     {burnedPct.toFixed(1)}% burned · {burnedRows.length}/
@@ -544,7 +545,7 @@ export function DomainPerformanceTool() {
                     Showing {burnedRows.length} of {loadedRows.length} loaded
                     domain{loadedRows.length === 1 ? "" : "s"} (
                     {burnedPct.toFixed(1)}%) with true reply rate below {threshold}%
-                    {" "}and OOO reply rate ≤ {BURNED_OOO_SAFE}%
+                    {" "}and OOO reply rate below {BURNED_OOO_SAFE}%
                     {busy ? " so far (still loading…)" : ""}. Copy grabs the
                     domain names, one per line.
                   </>
