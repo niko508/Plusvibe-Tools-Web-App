@@ -607,16 +607,22 @@ export function CopyVariationsTool() {
               Add {formatNumber(parsed.variants.length)} variant
               {parsed.variants.length === 1 ? "" : "s"} to step {step ?? "—"}
             </button>
-            {droppingCount > 0 ? (
+            {error && (
+              <span className="flex items-center gap-1.5 text-xs text-danger">
+                <AlertIcon size={14} className="shrink-0" />
+                {error}
+              </span>
+            )}
+            {!error && droppingCount > 0 ? (
               <span className="text-xs text-warning">
                 {formatNumber(droppingCount)} unticked existing variation
                 {droppingCount === 1 ? "" : "s"} will be removed from the step.
               </span>
-            ) : (
+            ) : !error ? (
               <span className="text-xs text-muted-foreground">
                 Existing variants and the subject line are left untouched.
               </span>
-            )}
+            ) : null}
           </div>
         </div>
       )}

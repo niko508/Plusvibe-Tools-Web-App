@@ -118,6 +118,15 @@ export async function POST(request: Request) {
     // caller says explicitly which letters to keep on the target step, that wins
     // — it's the only reliable signal for a draft.
     const liveBefore = target.variations.length;
+
+    // Read the subject/preheader BEFORE the keep-filter. They belong to the step,
+    // not to whichever variations survive it — unticking everything would
+    // otherwise leave nothing to copy from and fail step 1's subject requirement.
+    const subjectSource =
+      target.variations.find((v) => v.subject) ?? target.variations[0];
+    const subject = subjectSource?.subject ?? "";
+    const preheader = subjectSource?.preheader ?? "";
+
     let droppedByChoice = 0;
     if (Array.isArray(body.keepVariations)) {
       const keep = new Set(
@@ -152,7 +161,9 @@ export async function POST(request: Request) {
       return NextResponse.json({
         added: [],
         skipped,
-        subject: target.variations.find((v) => v.subject)?.subject ?? "",
+        droppedDeleted,
+        droppedByChoice,
+        subject,
         step,
         before: target.variations.length,
         expected: target.variations.length,
@@ -189,10 +200,6 @@ export async function POST(request: Request) {
     }
     const labels = nextVariationLabels(used, fresh.length);
 
-    // Keep the step's existing subject/preheader on the new variants.
-    const source = target.variations.find((v) => v.subject) ?? target.variations[0];
-    const subject = source?.subject ?? "";
-    const preheader = source?.preheader ?? "";
     if (step === 1 && !subject) {
       return NextResponse.json(
         {
