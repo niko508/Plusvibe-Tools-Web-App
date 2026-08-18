@@ -204,13 +204,22 @@ async function runJob(id: string) {
     // --- Collect ---------------------------------------------------------
     rec.phase = "collecting";
     await persist(id);
-    const { leads } = await fetchCampaignLeads(
+    const { leads, wrongStatus } = await fetchCampaignLeads(
       apiKey,
       workspace_id,
       source,
       count
     );
     if (m.aborted) throw new AbortedError();
+
+    // Only reachable if the server ignored ?status=NOT_CONTACTED. They were
+    // filtered out here, so nothing wrong was moved — but it's worth saying.
+    if (wrongStatus > 0) {
+      pushError(
+        rec,
+        `${wrongStatus} lead(s) came back from the source with a status other than NOT_CONTACTED and were skipped — the API's status filter appears not to be applied. Nothing already-contacted was moved.`
+      );
+    }
 
     const payloads: LeadPayload[] = leads
       .map(leadToPayload)

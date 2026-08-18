@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
-import { fetchStatusCounts, totalCount } from "@/lib/plusvibe-leads";
+import {
+  fetchStatusCounts,
+  notContactedCount,
+  totalCount,
+} from "@/lib/plusvibe-leads";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +25,12 @@ export async function GET(request: Request) {
     }
 
     const counts = await fetchStatusCounts(apiKey, workspace_id, campaign_id);
-    return NextResponse.json({ available: totalCount(counts), counts });
+    // `available` is the movable subset, not the campaign total.
+    return NextResponse.json({
+      available: notContactedCount(counts),
+      total: totalCount(counts),
+      counts,
+    });
   } catch (err) {
     return errorResponse(err);
   }

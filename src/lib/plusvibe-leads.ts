@@ -9,11 +9,22 @@ import { plusvibeGet } from "@/lib/plusvibe-server";
 // Delete has no per-email result and is assumed irreversible, so the add must
 // be verified before anything is deleted.
 //
-// Leads are taken in `_id` order regardless of status.
+// Only NOT_CONTACTED leads are ever moved, taken in `_id` order.
 
 const PAGE_LIMIT = 100; // page size is undocumented; 100 matches other endpoints
 const MAX_PAGES = 200;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * The one status this tool will move. `/lead/workspace-leads` documents a
+ * `status` query filter over the enum SKIPPED | COMPLETED | PENDING |
+ * NOT_CONTACTED | CONTACTED | BOUNCED | REPLIED | UNSUBSCRIBED | RESCHEDULED.
+ *
+ * Compare with EXACT equality, never a substring test: "CONTACTED" is a
+ * substring of "NOT_CONTACTED", so `includes("CONTACTED")` would match exactly
+ * the leads that must never be moved.
+ */
+export const NOT_CONTACTED = "NOT_CONTACTED";
 
 export interface RawLead {
   [key: string]: unknown;
@@ -125,15 +136,26 @@ function asLeadArray(data: unknown): RawLead[] {
   return [];
 }
 
-/** Pages through a campaign's leads, stopping once `max` are collected. */
+/**
+ * Pages through a campaign's NOT_CONTACTED leads, stopping once `max` are
+ * collected.
+ *
+ * The status filter is applied twice on purpose. Server-side keeps the paging
+ * cheap, but the spec doesn't say whether an unrecognised value 400s or is
+ * silently ignored — and a silently ignored filter would hand back the whole
+ * campaign and move already-contacted leads. So every lead is re-checked here
+ * before it's accepted. `wrongStatus` reports how many the server sent that
+ * didn't match, which is a direct signal the query filter isn't being honoured.
+ */
 export async function fetchCampaignLeads(
   apiKey: string,
   workspace_id: string,
   campaign_id: string,
   max: number
-): Promise<{ leads: RawLead[]; scanned: number }> {
+): Promise<{ leads: RawLead[]; scanned: number; wrongStatus: number }> {
   const leads: RawLead[] = [];
   let scanned = 0;
+  let wrongStatus = 0;
 
   for (let page = 1; page <= MAX_PAGES && leads.length < max; page++) {
     if (page > 1) await sleep(220); // stay under the 5 req/s budget
@@ -143,6 +165,7 @@ export async function fetchCampaignLeads(
       query: {
         workspace_id,
         campaign_id,
+        status: NOT_CONTACTED,
         page: String(page),
         limit: String(PAGE_LIMIT),
         sort: "_id",
@@ -154,12 +177,16 @@ export async function fetchCampaignLeads(
     for (const lead of batch) {
       if (leads.length >= max) break;
       if (!lead.email) continue;
+      if (String(lead.status ?? "").toUpperCase() !== NOT_CONTACTED) {
+        wrongStatus += 1;
+        continue;
+      }
       leads.push(lead);
     }
     if (batch.length < PAGE_LIMIT) break;
   }
 
-  return { leads, scanned };
+  return { leads, scanned, wrongStatus };
 }
 
 export interface StatusCount {
@@ -194,6 +221,14 @@ export async function fetchStatusCounts(
   } catch {
     return [];
   }
+}
+
+/**
+ * Leads eligible to move — the NOT_CONTACTED row only. Summing every status
+ * would advertise contacted, replied and bounced leads as movable.
+ */
+export function notContactedCount(counts: StatusCount[]): number {
+  return counts.find((c) => c.status === NOT_CONTACTED)?.count ?? 0;
 }
 
 /** Total leads on the campaign, summed across every status. */
