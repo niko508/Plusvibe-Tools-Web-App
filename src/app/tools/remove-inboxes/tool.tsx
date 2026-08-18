@@ -49,7 +49,7 @@ export function RemoveInboxesTool() {
   const parsed = useMemo(() => parseDomains(raw), [raw]);
 
   const [phase, setPhase] = useState<Phase>("idle");
-  const [scanProgress, setScanProgress] = useState({ done: 0, total: 0 });
+  const [scanProgress, setScanProgress] = useState({ done: 0, total: 0, inboxes: 0 });
   const [scanLabel, setScanLabel] = useState("Scanning…");
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [confirmText, setConfirmText] = useState("");
@@ -124,7 +124,7 @@ export function RemoveInboxesTool() {
     setScanResult(null);
     setConfirmText("");
     setSheetWarning(null);
-    setScanProgress({ done: 0, total: 0 });
+    setScanProgress({ done: 0, total: 0, inboxes: 0 });
     setScanLabel("Scanning…");
 
     try {
@@ -173,11 +173,11 @@ export function RemoveInboxesTool() {
             } (via sheet)…`
           : "Scanning workspaces for matching inboxes…"
       );
-      setScanProgress({ done: 0, total: targetWorkspaces.length });
+      setScanProgress({ done: 0, total: targetWorkspaces.length, inboxes: 0 });
       const first = await buildDomainIndex(
         targetWorkspaces,
         { concurrency: 2, spacingMs: 250, signal },
-        (done, total) => setScanProgress({ done, total })
+        setScanProgress
       );
       mergeIndex(combinedIndex, first.index);
       Object.assign(workspaceNames, first.workspaceNames);
@@ -198,11 +198,11 @@ export function RemoveInboxesTool() {
               notFound.length === 1 ? "" : "s"
             }…`
           );
-          setScanProgress({ done: 0, total: remaining.length });
+          setScanProgress({ done: 0, total: remaining.length, inboxes: 0 });
           const second = await buildDomainIndex(
             remaining,
             { concurrency: 2, spacingMs: 250, signal },
-            (done, total) => setScanProgress({ done, total })
+            setScanProgress
           );
           mergeIndex(combinedIndex, second.index);
           Object.assign(workspaceNames, second.workspaceNames);
@@ -362,6 +362,7 @@ export function RemoveInboxesTool() {
             label={scanLabel}
             done={scanProgress.done}
             total={scanProgress.total}
+            inboxes={scanProgress.inboxes}
           />
         )}
       </div>
@@ -909,21 +910,30 @@ function ProgressLine({
   label,
   done,
   total,
+  inboxes,
 }: {
   label: string;
   done: number;
   total: number;
+  inboxes?: number;
 }) {
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
   return (
     <div>
-      <div className="mb-1.5 flex items-center justify-between text-xs text-muted-foreground">
+      <div className="mb-1.5 flex items-center justify-between gap-3 text-xs text-muted-foreground">
         <span className="flex items-center gap-2">
           <Spinner size={12} />
           {label}
         </span>
-        <span className="tabular-nums">
-          {done} / {total}
+        <span className="flex items-center gap-2 tabular-nums">
+          {inboxes != null && inboxes > 0 && (
+            <span className="text-foreground">
+              {formatNumber(inboxes)} inboxes
+            </span>
+          )}
+          <span>
+            {done} / {total} workspaces
+          </span>
         </span>
       </div>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
