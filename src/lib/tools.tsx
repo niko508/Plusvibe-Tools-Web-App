@@ -6,6 +6,7 @@ import {
   TrashIcon,
   PenIcon,
   FireIcon,
+  LayersIcon,
 } from "@/components/icons";
 
 // Registry of tools shown on the landing page. Adding a new tool = add an entry
@@ -31,6 +32,15 @@ export const TOOLS: Tool[] = [
       "Break a workspace's email stats down by sending domain over any date range — sent volume, reply and positive-reply rates, bounce rate and more, side by side.",
     status: "active",
     Icon: GaugeIcon,
+  },
+  {
+    slug: "copy-variations",
+    name: "Create Email Copy Variations",
+    tagline: "Bulk-add copy variants to a campaign step, subject line untouched",
+    description:
+      "Pick a campaign, paste your variants in the usual VARIANT n — name format, and add them all to a sequence step in one pass — keeping the existing subject line and the variants already there.",
+    status: "active",
+    Icon: LayersIcon,
   },
   {
     slug: "remove-50",

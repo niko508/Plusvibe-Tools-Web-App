@@ -9,9 +9,54 @@ point it at a workspace, and run work that would otherwise take dozens of clicks
 | Tool | Status | What it does |
 | --- | --- | --- |
 | **Domain Performance Monitoring** | ✅ Live | Breaks a workspace's email stats down by **sending domain** over any date range — sent volume, reply / positive-reply rates, and bounce rate, side by side, with an over-time chart and CSV export. |
+| **Create Email Copy Variations** | ✅ Live | Pick a campaign, paste a batch of variants in the `VARIANT n — name` format, and add them all to a sequence step in one pass — keeping the existing subject line and the variants already there. |
+| **Remove 50 Inboxes from Domain** | ✅ Live | Trims every domain in a workspace down to 50 inboxes, deleting the **worst warmup-health** ones first, then applies the standard warmup config and enables warmup on the ones kept. Runs as a background job. |
+| **Add Signatures** | ✅ Live | Generates hundreds of spintax signature combinations from your company / phone / address variations, personalizes each with the inbox's own name, and applies them across a workspace. |
 | **Remove Inboxes** | ✅ Live | Paste a list of sending domains, scan every workspace to find their inboxes, preview exactly what will be removed, then delete them in a **server-side background job** you can leave running. |
 | Mailbox Health Audit | 🔜 Planned | Scan every mailbox for warmup health, bounce rates and disconnects. |
 | Bulk Mailbox Actions | 🔜 Planned | Apply daily-limit, warmup and tagging changes across many mailboxes at once. |
+
+## How Create Email Copy Variations works
+
+Sequences aren't a standalone resource in the Plusvibe API — they're an embedded
+field on the campaign, read via `GET /campaign/list-all` and written via
+`PATCH /campaign/update/campaign`.
+
+**The `sequences` array is replace-the-whole-thing.** Sending only the new
+variants would wipe the existing copy. (Plusvibe support, confirming: *"you need
+to use the patch campaign endpoint, and pass the existing variations plus the new
+variation."*) So every write here is a read-modify-write:
+
+1. Re-read the campaign **server-side at apply time** — not from the browser's
+   preview state — so the merge is based on what's actually stored right now.
+2. Append the new variants to the target step, carrying **every** existing step
+   and variation through untouched.
+3. `PATCH` the full array, then **re-read to verify** the variation count landed
+   (the PATCH response doesn't echo the sequences back).
+
+Other safeguards:
+
+- **Subject line is preserved**, not regenerated — new variants inherit the
+  step's existing subject and preheader verbatim.
+- **Stale-preview guard**: the apply sends the variation count the preview was
+  built from; if the step changed in the meantime the write is rejected with a
+  409 instead of merging against stale data.
+- **Variation letters** follow the API's `^([A-Z]|[ABC][A-Z])$` rule (A–Z, AA–CZ,
+  104 max per step). Letters belonging to *disabled* variants — which can be
+  absent from `sequences` but still live on the campaign — are read from
+  `GET /campaign/get/variation-stats` and never reused. If such variants exist,
+  the UI warns that a write may drop them.
+- **Campaign status**: the API has no `DRAFT` status (a never-launched campaign
+  comes back as `INACTIVE`), and `INACTIVE` isn't accepted by the `status=` query
+  filter — so campaigns are fetched unfiltered and bucketed client-side into
+  Active / Draft / Paused / Completed, with a "show all" escape hatch.
+
+### Paste format
+
+Variants are split on `VARIANT n — name` headers; the `═══` rule lines are
+decoration and ignored. Blank-line-separated paragraphs become `<p>` blocks, and
+spintax (`{{Random | … }}`) and Liquid (`{% if … %}`) pass through untouched.
+If no headers are present, the paste is split on the rule lines instead.
 
 ## How Remove Inboxes works
 

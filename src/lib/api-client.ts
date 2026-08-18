@@ -2,6 +2,8 @@
 
 import { getApiKey } from "@/lib/api-key";
 import type {
+  CampaignDetail,
+  CampaignSummary,
   EmailAccountsResponse,
   EmailStatsResponse,
   WorkspacesResponse,
@@ -98,6 +100,59 @@ export function fetchAccountsPage(
     `/api/plusvibe/accounts?${qs.toString()}`,
     { signal }
   );
+}
+
+// --- Campaigns / sequence variations ---------------------------------------
+
+export function fetchCampaigns(
+  params: { workspace_id: string },
+  signal?: AbortSignal
+) {
+  const qs = new URLSearchParams({ workspace_id: params.workspace_id });
+  return request<{ campaigns: CampaignSummary[] }>(
+    `/api/plusvibe/campaigns?${qs.toString()}`,
+    { signal }
+  );
+}
+
+export function fetchCampaign(
+  params: { workspace_id: string; campaign_id: string },
+  signal?: AbortSignal
+) {
+  const qs = new URLSearchParams({
+    workspace_id: params.workspace_id,
+    campaign_id: params.campaign_id,
+  });
+  return request<CampaignDetail>(`/api/plusvibe/campaign?${qs.toString()}`, {
+    signal,
+  });
+}
+
+export interface AddVariationsResult {
+  added: { variation: string; name: string }[];
+  subject: string;
+  step: number;
+  before: number;
+  expected: number;
+  actual: number;
+  verified: boolean;
+}
+
+export function addCampaignVariations(
+  params: {
+    workspace_id: string;
+    campaign_id: string;
+    step: number;
+    variants: { name: string; body: string }[];
+    expectedVariationCount?: number;
+  },
+  signal?: AbortSignal
+) {
+  return request<AddVariationsResult>("/api/plusvibe/campaign-variations", {
+    method: "POST",
+    body: params,
+    signal,
+  });
 }
 
 export interface TagsResponse {

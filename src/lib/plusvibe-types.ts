@@ -69,6 +69,60 @@ export interface EmailStatsResponse {
   chart: EmailStatsChartPoint[];
 }
 
+// --- Campaigns / sequences --------------------------------------------------
+// Sequences are embedded on the campaign object: they're read via
+// GET /campaign/list-all and written via PATCH /campaign/update/campaign, where
+// the `sequences` array REPLACES what's stored. Anything not sent back is lost,
+// so every read-modify-write must carry the full array.
+
+/** A single variation as returned by GET /campaign/list-all. */
+export interface SequenceVariation {
+  variation: string; // "A", "B", … "CZ"
+  subject?: string;
+  preheader?: string;
+  body?: string;
+  name?: string; // absent on read, required on write
+}
+
+export interface SequenceStep {
+  step: number;
+  wait_time?: number;
+  variations: SequenceVariation[];
+}
+
+/** Campaign summary for the picker (sequences stripped to keep it light). */
+export interface CampaignSummary {
+  id: string;
+  name: string;
+  status: string;
+  campaignType?: string;
+  sequenceSteps: number;
+}
+
+/** Per-step view used by the UI, including any variants hidden from `sequences`. */
+export interface CampaignStepInfo {
+  step: number;
+  waitTime: number;
+  /** Variation labels present in the editable `sequences` array. */
+  variations: SequenceVariation[];
+  /**
+   * Labels that variation-stats knows about but `sequences` does not — usually
+   * disabled variants. They can't be preserved through a write, so we never
+   * reuse their letters and the UI warns about them.
+   */
+  hiddenVariations: string[];
+  subject: string;
+}
+
+export interface CampaignDetail {
+  id: string;
+  name: string;
+  status: string;
+  campaignType?: string;
+  steps: CampaignStepInfo[];
+  warnings: string[];
+}
+
 export interface ApiError {
   error: string;
   message?: string;

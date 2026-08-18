@@ -168,3 +168,13 @@ export function ClockIcon({ className, size }: IconProps) {
     </svg>
   );
 }
+
+export function LayersIcon({ className, size }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <path d="m12 2 9 5-9 5-9-5 9-5Z" />
+      <path d="m3 12 9 5 9-5" />
+      <path d="m3 17 9 5 9-5" />
+    </svg>
+  );
+}
