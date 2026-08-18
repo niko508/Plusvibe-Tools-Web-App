@@ -204,7 +204,16 @@ export function removeOpeningLine(
 export interface LeadsPreview {
   available: number;
   counts: { status: string; count: number }[];
-  sample: { topLevelFields: string[]; customVariables: string[] } | null;
+  sample: {
+    /** How many leads were inspected to build this. */
+    sampled: number;
+    topLevelFields: string[];
+    /**
+     * Custom variable names with how many sampled leads carry each (`count`)
+     * and how many have a non-empty value (`filled`).
+     */
+    customVariables: { name: string; count: number; filled: number }[];
+  } | null;
 }
 
 export function fetchLeadsPreview(

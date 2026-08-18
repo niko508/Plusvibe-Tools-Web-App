@@ -387,8 +387,10 @@ export function MoveLeadsTool() {
                 What travels with each lead
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                Taken from a real lead in the source campaign — check your
-                personalization variables are listed before moving anything.
+                From {formatNumber(preview.sample.sampled)} real lead
+                {preview.sample.sampled === 1 ? "" : "s"} in the source campaign
+                — check your personalization variables are listed before moving
+                anything.
               </p>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <div>
@@ -411,14 +413,22 @@ export function MoveLeadsTool() {
                     Custom variables
                   </div>
                   {preview.sample.customVariables.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="space-y-1">
                       {preview.sample.customVariables.map((f) => (
-                        <span
-                          key={f}
-                          className="rounded-md bg-cyan-500/10 px-1.5 py-0.5 font-mono text-[11px] text-cyan-600 dark:text-cyan-400"
+                        <div
+                          key={f.name}
+                          className="flex items-center justify-between gap-3 text-[11px]"
                         >
-                          {f}
-                        </span>
+                          <span className="rounded-md bg-cyan-500/10 px-1.5 py-0.5 font-mono text-cyan-600 dark:text-cyan-400">
+                            {f.name}
+                          </span>
+                          <span className="text-muted-foreground">
+                            on {f.count}/{preview.sample!.sampled}
+                            {f.filled < f.count && (
+                              <> · {f.filled} with a value</>
+                            )}
+                          </span>
+                        </div>
                       ))}
                     </div>
                   ) : (

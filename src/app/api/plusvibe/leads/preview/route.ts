@@ -10,6 +10,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
+const SAMPLE_SIZE = 100; // one page — enough to see which variables are typical
+
 // GET /api/plusvibe/leads/preview?workspace_id=…&campaign_id=…
 // Pre-flight for a move: how many leads the source holds, and exactly which
 // fields would be carried across for a sample lead — so it's visible up front
@@ -30,27 +32,51 @@ export async function GET(request: Request) {
     const counts = await fetchStatusCounts(apiKey, workspace_id, campaign_id);
     const available = totalCount(counts);
 
-    // One page is enough to show what a carried lead looks like.
+    // Sample a page rather than a single lead: a variable present on most
+    // leads but missing from the first one would otherwise look absent.
     const { leads } = await fetchCampaignLeads(
       apiKey,
       workspace_id,
       campaign_id,
-      1
+      SAMPLE_SIZE
     );
-    const sample = leads[0];
-    const payload = sample ? leadToPayload(sample) : null;
+
+    const topLevel = new Set<string>();
+    // Present = the lead carries the field at all; filled = it has a value.
+    // Both matter: a variable on every lead but empty on most is worth seeing.
+    const present = new Map<string, number>();
+    const filled = new Map<string, number>();
+    for (const lead of leads) {
+      const payload = leadToPayload(lead);
+      for (const key of Object.keys(payload)) {
+        if (key !== "custom_variables") topLevel.add(key);
+      }
+      for (const [key, value] of Object.entries(payload.custom_variables ?? {})) {
+        present.set(key, (present.get(key) ?? 0) + 1);
+        if (String(value ?? "").trim() !== "") {
+          filled.set(key, (filled.get(key) ?? 0) + 1);
+        }
+      }
+    }
 
     return NextResponse.json({
       available,
       counts,
-      sample: payload
-        ? {
-            topLevelFields: Object.keys(payload).filter(
-              (k) => k !== "custom_variables"
-            ),
-            customVariables: Object.keys(payload.custom_variables ?? {}),
-          }
-        : null,
+      sample:
+        leads.length > 0
+          ? {
+              sampled: leads.length,
+              topLevelFields: Array.from(topLevel),
+              // Most common first, so the important variables lead.
+              customVariables: Array.from(present.entries())
+                .map(([name, count]) => ({
+                  name,
+                  count,
+                  filled: filled.get(name) ?? 0,
+                }))
+                .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
+            }
+          : null,
     });
   } catch (err) {
     return errorResponse(err);

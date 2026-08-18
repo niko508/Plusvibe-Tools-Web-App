@@ -86,7 +86,10 @@ export function leadToPayload(lead: RawLead): LeadPayload {
   const custom: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(lead)) {
-    if (value === null || value === undefined || value === "") continue;
+    // Empty strings are kept deliberately: a lead whose company_category is ""
+    // should arrive with an empty company_category, not without the field. Only
+    // genuinely absent values are dropped.
+    if (value === null || value === undefined) continue;
     if (METADATA_SKIP.has(key)) continue;
     if (key === "custom_variables") {
       // Already-nested custom variables, if the API ever returns them that way.
