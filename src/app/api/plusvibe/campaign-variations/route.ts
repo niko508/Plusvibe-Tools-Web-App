@@ -98,6 +98,38 @@ export async function POST(request: Request) {
       );
     }
 
+    // --- Skip anything already on the step --------------------------------
+    // Appending is destructive-by-accumulation: re-running the same paste would
+    // silently double the copy. Comparing normalized bodies makes a repeat run a
+    // no-op, and also collapses duplicates inside the batch itself.
+    const existingKeys = new Set(
+      target.variations.map((v) => bodyKey(v.body ?? ""))
+    );
+    const fresh: IncomingVariant[] = [];
+    const skipped: string[] = [];
+    for (const v of incoming) {
+      const key = bodyKey(v.body ?? "");
+      if (!key || existingKeys.has(key)) {
+        skipped.push(v.name || "(unnamed)");
+        continue;
+      }
+      existingKeys.add(key);
+      fresh.push(v);
+    }
+
+    if (fresh.length === 0) {
+      return NextResponse.json({
+        added: [],
+        skipped,
+        subject: target.variations.find((v) => v.subject)?.subject ?? "",
+        step,
+        before: target.variations.length,
+        expected: target.variations.length,
+        actual: target.variations.length,
+        verified: true,
+      });
+    }
+
     // --- Allocate labels ---------------------------------------------------
     // Disabled variants can be missing from `sequences` yet still hold a letter,
     // so fold those in before picking new ones.
@@ -111,7 +143,7 @@ export async function POST(request: Request) {
       ...(known.get(step) ?? []),
     ]);
     const remaining = MAX_VARIATIONS_PER_STEP - used.size;
-    if (incoming.length > remaining) {
+    if (fresh.length > remaining) {
       return NextResponse.json(
         {
           error: `Step ${step} can hold ${MAX_VARIATIONS_PER_STEP} variations and already uses ${used.size}. Only ${Math.max(
@@ -122,7 +154,7 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
-    const labels = nextVariationLabels(used, incoming.length);
+    const labels = nextVariationLabels(used, fresh.length);
 
     // Keep the step's existing subject/preheader on the new variants.
     const source = target.variations.find((v) => v.subject) ?? target.variations[0];
@@ -138,12 +170,12 @@ export async function POST(request: Request) {
       );
     }
 
-    const added: SequenceVariation[] = incoming.map((v, i) => ({
+    const added: SequenceVariation[] = fresh.map((v, i) => ({
       variation: labels[i],
       subject,
       preheader,
-      name: v.name,
-      body: v.body,
+      name: v.name ?? "",
+      body: v.body ?? "",
     }));
 
     // --- Write every step back, target step extended -----------------------
@@ -182,6 +214,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       added: added.map((v) => ({ variation: v.variation, name: v.name })),
+      skipped,
       subject,
       step,
       before: target.variations.length,
@@ -192,4 +225,18 @@ export async function POST(request: Request) {
   } catch (err) {
     return errorResponse(err);
   }
+}
+
+// Normalized body used to detect a variant that's already on the step: strip
+// tags and entities so formatting differences don't defeat the comparison.
+function bodyKey(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Workspace, CampaignSummary, CampaignDetail } from "@/lib/plusvibe-types";
 import {
   fetchWorkspaces,
@@ -71,6 +71,7 @@ export function CopyVariationsTool() {
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<AddVariationsResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const applyLock = useRef(false);
 
   // --- Workspaces ----------------------------------------------------------
   const loadWorkspaces = useCallback(async () => {
@@ -206,6 +207,10 @@ export function CopyVariationsTool() {
   // --- Apply ----------------------------------------------------------------
   async function handleApply() {
     if (!canApply || !activeStep || !detail) return;
+    // Ref guard, not state: two fast clicks can both pass the `applying` check
+    // before React re-renders, and a double-apply would duplicate the copy.
+    if (applyLock.current) return;
+    applyLock.current = true;
     setApplying(true);
     setError(null);
     setResult(null);
@@ -227,6 +232,7 @@ export function CopyVariationsTool() {
     } catch (err) {
       setError(errMessage(err));
     } finally {
+      applyLock.current = false;
       setApplying(false);
     }
   }
@@ -527,17 +533,34 @@ export function CopyVariationsTool() {
             <div className="text-sm">
               {result.verified ? (
                 <>
-                  Added{" "}
-                  <strong>
-                    {formatNumber(result.added.length)} variant
-                    {result.added.length === 1 ? "" : "s"}
-                  </strong>{" "}
-                  to step {result.step} as{" "}
-                  <span className="font-mono">
-                    {result.added.map((a) => a.variation).join(", ")}
-                  </span>
-                  . The step went from {formatNumber(result.before)} to{" "}
-                  {formatNumber(result.actual)} variations.
+                  {result.added.length > 0 ? (
+                    <>
+                      Added{" "}
+                      <strong>
+                        {formatNumber(result.added.length)} variant
+                        {result.added.length === 1 ? "" : "s"}
+                      </strong>{" "}
+                      to step {result.step} as{" "}
+                      <span className="font-mono">
+                        {result.added.map((a) => a.variation).join(", ")}
+                      </span>
+                      . The step went from {formatNumber(result.before)} to{" "}
+                      {formatNumber(result.actual)} variations.
+                    </>
+                  ) : (
+                    <>
+                      Nothing to add — every variant in the paste is already on
+                      step {result.step}. It still has{" "}
+                      {formatNumber(result.actual)} variations.
+                    </>
+                  )}
+                  {result.skipped?.length > 0 && (
+                    <div className="mt-1 text-muted-foreground">
+                      {formatNumber(result.skipped.length)} skipped as duplicate
+                      {result.skipped.length === 1 ? "" : "s"} of copy already on
+                      the step.
+                    </div>
+                  )}
                 </>
               ) : (
                 <>

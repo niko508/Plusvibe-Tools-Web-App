@@ -130,6 +130,8 @@ export function fetchCampaign(
 
 export interface AddVariationsResult {
   added: { variation: string; name: string }[];
+  /** Variants skipped because an identical body is already on the step. */
+  skipped: string[];
   subject: string;
   step: number;
   before: number;
