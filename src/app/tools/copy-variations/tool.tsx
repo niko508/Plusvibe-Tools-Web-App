@@ -73,6 +73,7 @@ export function CopyVariationsTool() {
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<AddVariationsResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const applyLock = useRef(false);
 
   // --- Workspaces ----------------------------------------------------------
@@ -94,6 +95,12 @@ export function CopyVariationsTool() {
   useEffect(() => {
     if (ready && hasKey) void loadWorkspaces();
   }, [ready, hasKey, loadWorkspaces]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   // --- Campaigns for the workspace -----------------------------------------
   useEffect(() => {
@@ -242,6 +249,13 @@ export function CopyVariationsTool() {
         keepVariations: Array.from(keepSet),
       });
       setResult(res);
+      if (res.added.length > 0) {
+        setToast(
+          `${formatNumber(res.added.length)} variant${
+            res.added.length === 1 ? "" : "s"
+          } added to the campaign`
+        );
+      }
       setRaw("");
       // Refresh so the step shows its new variation count.
       await loadDetail(detail.id);
@@ -704,6 +718,25 @@ export function CopyVariationsTool() {
         <EmptyState icon={<LayersIcon />} title="No campaigns">
           This workspace has no campaigns yet.
         </EmptyState>
+      )}
+
+      {toast && (
+        <div className="fixed bottom-5 right-5 z-50 animate-fade-in">
+          <div className="flex items-center gap-3 rounded-xl border border-success/40 bg-success/15 px-4 py-3 shadow-card backdrop-blur">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-success/20 text-success">
+              <CheckIcon size={14} />
+            </span>
+            <span className="text-sm font-medium text-success">{toast}</span>
+            <button
+              type="button"
+              onClick={() => setToast(null)}
+              className="ml-1 text-success/70 transition hover:text-success"
+              aria-label="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
