@@ -12,7 +12,10 @@ import { plusvibeGet } from "@/lib/plusvibe-server";
 // Only NOT_CONTACTED leads are ever moved, taken in `_id` order.
 
 const PAGE_LIMIT = 100; // page size is undocumented; 100 matches other endpoints
-const MAX_PAGES = 200;
+// Absolute backstop so a misbehaving endpoint (e.g. one that ignores `page` and
+// keeps returning full pages) can't spin forever. Not a lead cap — the per-run
+// page budget is derived from the requested count below.
+const HARD_PAGE_CEILING = 5000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -152,12 +155,27 @@ export async function fetchCampaignLeads(
   workspace_id: string,
   campaign_id: string,
   max: number
-): Promise<{ leads: RawLead[]; scanned: number; wrongStatus: number }> {
+): Promise<{
+  leads: RawLead[];
+  scanned: number;
+  wrongStatus: number;
+  hitPageLimit: boolean;
+}> {
   const leads: RawLead[] = [];
   let scanned = 0;
   let wrongStatus = 0;
 
-  for (let page = 1; page <= MAX_PAGES && leads.length < max; page++) {
+  // Enough pages for the request, times three plus slack, so a run still
+  // completes if the server-side status filter is ignored and most of what
+  // comes back has to be discarded client-side.
+  const pageBudget = Math.min(
+    HARD_PAGE_CEILING,
+    Math.ceil(max / PAGE_LIMIT) * 3 + 50
+  );
+  let page = 1;
+  let exhausted = false;
+
+  for (; page <= pageBudget && leads.length < max; page++) {
     if (page > 1) await sleep(220); // stay under the 5 req/s budget
     const data = await plusvibeGet<unknown>({
       apiKey,
@@ -183,10 +201,16 @@ export async function fetchCampaignLeads(
       }
       leads.push(lead);
     }
-    if (batch.length < PAGE_LIMIT) break;
+    if (batch.length < PAGE_LIMIT) {
+      exhausted = true; // reached the end of the campaign, not a limit
+      break;
+    }
   }
 
-  return { leads, scanned, wrongStatus };
+  // Only a real truncation if we stopped short of `max` with leads still to
+  // come — otherwise we simply ran out of matching leads.
+  const hitPageLimit = !exhausted && leads.length < max;
+  return { leads, scanned, wrongStatus, hitPageLimit };
 }
 
 export interface StatusCount {

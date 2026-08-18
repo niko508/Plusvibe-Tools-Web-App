@@ -54,5 +54,4 @@ export interface MoveLeadsStartPayload {
 
 /** Plusvibe's rate budget is shared, so more than a few at once just queues. */
 export const MAX_PAIRS = 3;
-export const MAX_PER_PAIR = 5000;
 export const MAX_STORED_ERRORS = 100;

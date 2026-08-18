@@ -3,7 +3,7 @@ import { resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { createJobs, countRunning } from "@/lib/jobs/move-leads";
 import type { MovePair, MoveLeadsStartPayload } from "@/lib/jobs/move-leads-types";
-import { MAX_PAIRS, MAX_PER_PAIR } from "@/lib/jobs/move-leads-types";
+import { MAX_PAIRS } from "@/lib/jobs/move-leads-types";
 
 export const dynamic = "force-dynamic";
 
@@ -35,12 +35,8 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
-      if (count > MAX_PER_PAIR) {
-        return NextResponse.json(
-          { error: `Too many leads in one pair (max ${MAX_PER_PAIR}).` },
-          { status: 400 }
-        );
-      }
+      // No upper bound: a run is naturally limited by how many NOT_CONTACTED
+      // leads the source actually has, and it runs as a background job.
       if (String(p.sourceCampaignId) === String(p.destinationCampaignId)) {
         return NextResponse.json(
           { error: "Source and destination must be different campaigns." },

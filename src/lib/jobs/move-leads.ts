@@ -204,13 +204,20 @@ async function runJob(id: string) {
     // --- Collect ---------------------------------------------------------
     rec.phase = "collecting";
     await persist(id);
-    const { leads, wrongStatus } = await fetchCampaignLeads(
+    const { leads, wrongStatus, hitPageLimit } = await fetchCampaignLeads(
       apiKey,
       workspace_id,
       source,
       count
     );
     if (m.aborted) throw new AbortedError();
+
+    if (hitPageLimit) {
+      pushError(
+        rec,
+        `Stopped collecting at ${leads.length} of the ${count} requested — the paging budget ran out before the campaign did. The leads collected are still moved; run again for the rest.`
+      );
+    }
 
     // Only reachable if the server ignored ?status=NOT_CONTACTED. They were
     // filtered out here, so nothing wrong was moved — but it's worth saying.
