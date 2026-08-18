@@ -199,6 +199,53 @@ export function removeOpeningLine(
   });
 }
 
+// --- Move leads between campaigns -------------------------------------------
+
+export interface LeadsPreview {
+  available: number;
+  counts: { status: string; count: number }[];
+  sample: { topLevelFields: string[]; customVariables: string[] } | null;
+}
+
+export function fetchLeadsPreview(
+  params: { workspace_id: string; campaign_id: string },
+  signal?: AbortSignal
+) {
+  const qs = new URLSearchParams({
+    workspace_id: params.workspace_id,
+    campaign_id: params.campaign_id,
+  });
+  return request<LeadsPreview>(`/api/plusvibe/leads/preview?${qs.toString()}`, {
+    signal,
+  });
+}
+
+export interface MoveLeadsResult {
+  requested: number;
+  found: number;
+  added: number;
+  alreadyInDestination: number;
+  deletedFromSource: number;
+  errors: string[];
+  complete: boolean;
+}
+
+export function moveLeads(
+  params: {
+    workspace_id: string;
+    source_campaign_id: string;
+    destination_campaign_id: string;
+    count: number;
+  },
+  signal?: AbortSignal
+) {
+  return request<MoveLeadsResult>("/api/plusvibe/leads/move", {
+    method: "POST",
+    body: params,
+    signal,
+  });
+}
+
 export interface TagsResponse {
   tags: { id: string; name: string }[];
 }

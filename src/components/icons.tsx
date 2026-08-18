@@ -169,6 +169,16 @@ export function ClockIcon({ className, size }: IconProps) {
   );
 }
 
+export function MoveIcon({ className, size }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5" />
+      <path d="M3 12h12" />
+      <path d="m11 8 4 4-4 4" />
+    </svg>
+  );
+}
+
 export function ScissorsIcon({ className, size }: IconProps) {
   return (
     <svg {...base(size, className)}>

@@ -8,6 +8,7 @@ import {
   FireIcon,
   LayersIcon,
   ScissorsIcon,
+  MoveIcon,
 } from "@/components/icons";
 
 // Registry of tools shown on the landing page. Adding a new tool = add an entry
@@ -126,6 +127,16 @@ export const TOOLS: Tool[] = [
     status: "active",
     color: "amber",
     Icon: ScissorsIcon,
+  },
+  {
+    slug: "move-leads",
+    name: "Move Leads to Another Campaign",
+    tagline: "Shift a set number of leads from one campaign to another",
+    description:
+      "Pick a source and destination campaign in the same workspace and move a set number of leads across — added to the destination first, then removed from the source once that's confirmed, carrying their fields and custom variables with them.",
+    status: "active",
+    color: "cyan",
+    Icon: MoveIcon,
   },
   {
     slug: "remove-50",
