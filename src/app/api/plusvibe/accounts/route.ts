@@ -16,8 +16,13 @@ const MAX_PAGES = 100; // safety cap: up to 10k accounts
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // GET /api/plusvibe/accounts?workspace_id=...&tags=...
-// Returns every email account in the workspace, paginating through the
-// underlying /account/list endpoint so the caller gets the full set in one go.
+//
+// Two modes:
+//  - Default: returns every account in the workspace, paginating internally so
+//    the caller gets the full set in one request.
+//  - Paged (`paged=1` with `skip`/`limit`): fetches a SINGLE page and returns
+//    `{ accounts, hasMore }`. Lets a client loop and show live progress for
+//    large workspaces instead of staring at one long-hanging request.
 export async function GET(request: Request) {
   try {
     const apiKey = resolveApiKey(request);
@@ -32,6 +37,28 @@ export async function GET(request: Request) {
       );
     }
 
+    // --- Paged mode: one page, caller drives the loop --------------------
+    if (searchParams.get("paged")) {
+      const limit = clampInt(searchParams.get("limit"), PAGE_SIZE, 1, 500);
+      const skip = clampInt(searchParams.get("skip"), 0, 0, 1_000_000);
+      const data = await plusvibeGet<RawAccountsResponse>({
+        apiKey,
+        path: "/account/list",
+        query: {
+          workspace_id,
+          tags,
+          skip: String(skip),
+          limit: String(limit),
+        },
+      });
+      const batch = normalizeAccounts(data);
+      return NextResponse.json({
+        accounts: batch,
+        hasMore: batch.length >= limit,
+      });
+    }
+
+    // --- Default mode: fetch everything ----------------------------------
     const accounts: EmailAccount[] = [];
     for (let page = 0; page < MAX_PAGES; page++) {
       // Space out pages so a single large workspace's pagination alone stays
@@ -56,6 +83,17 @@ export async function GET(request: Request) {
   } catch (err) {
     return errorResponse(err);
   }
+}
+
+function clampInt(
+  raw: string | null,
+  fallback: number,
+  min: number,
+  max: number
+): number {
+  const n = raw == null ? NaN : parseInt(raw, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
 }
 
 // The API is inconsistent about `id` vs `_id` between its schema and examples,

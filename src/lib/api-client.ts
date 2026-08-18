@@ -81,6 +81,25 @@ export function fetchAccounts(
   );
 }
 
+// Fetches a single page of accounts (paged mode), so callers can loop and show
+// progress on large workspaces instead of blocking on one long request.
+export function fetchAccountsPage(
+  params: { workspace_id: string; skip: number; limit: number; tags?: string },
+  signal?: AbortSignal
+) {
+  const qs = new URLSearchParams({
+    workspace_id: params.workspace_id,
+    paged: "1",
+    skip: String(params.skip),
+    limit: String(params.limit),
+  });
+  if (params.tags) qs.set("tags", params.tags);
+  return request<{ accounts: EmailAccountsResponse["accounts"]; hasMore: boolean }>(
+    `/api/plusvibe/accounts?${qs.toString()}`,
+    { signal }
+  );
+}
+
 export interface TagsResponse {
   tags: { id: string; name: string }[];
 }

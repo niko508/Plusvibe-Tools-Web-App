@@ -9,7 +9,7 @@ import type {
 } from "@/lib/jobs/remove-50-types";
 import {
   fetchWorkspaces,
-  fetchAccounts,
+  fetchAccountsPage,
   startRemove50,
   listRemove50Jobs,
   abortRemove50,
@@ -60,9 +60,11 @@ export function Remove50Tool() {
   const [target] = useState(DEFAULT_TARGET);
 
   const [loading, setLoading] = useState(false);
+  const [loadProgress, setLoadProgress] = useState({ inboxes: 0, pages: 0 });
   const [plans, setPlans] = useState<DomainPlan[] | null>(null);
   const [loadedForWs, setLoadedForWs] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const loadAbortRef = useRef<AbortController | null>(null);
 
   const [confirmText, setConfirmText] = useState("");
   const [starting, setStarting] = useState(false);
@@ -124,27 +126,50 @@ export function Remove50Tool() {
   }, [ready, hasKey, refreshJobs]);
 
   // --- Load + build plans --------------------------------------------------
+  const PAGE_SIZE = 100;
   async function loadPlans() {
     if (!workspaceId) return;
+    loadAbortRef.current?.abort();
+    const controller = new AbortController();
+    loadAbortRef.current = controller;
+    const { signal } = controller;
+
     setLoading(true);
+    setLoadProgress({ inboxes: 0, pages: 0 });
     setError(null);
     setPlans(null);
     setConfirmText("");
     try {
-      const res = await fetchAccounts({ workspace_id: workspaceId });
+      // Page through the workspace's inboxes, updating a live counter so a big
+      // "Inbox Warmup" workspace shows progress instead of a silent spinner.
+      const accounts: InboxLite[] = [];
       const byDomain = new Map<string, InboxLite[]>();
-      for (const a of res.accounts ?? []) {
-        const domain = domainFromEmail(a.email);
-        if (!domain || !a.id) continue;
-        const inbox: InboxLite = {
-          id: a.id,
-          email: a.email,
-          health: typeof a.warmup_health === "number" ? a.warmup_health : null,
-          warmupActive: (a.warmup_status ?? "").toUpperCase() === "ACTIVE",
-        };
-        const arr = byDomain.get(domain);
-        if (arr) arr.push(inbox);
-        else byDomain.set(domain, [inbox]);
+      let skip = 0;
+      let page = 0;
+      while (true) {
+        const res = await fetchAccountsPage(
+          { workspace_id: workspaceId, skip, limit: PAGE_SIZE },
+          signal
+        );
+        page += 1;
+        for (const a of res.accounts ?? []) {
+          if (!a.id || !a.email) continue;
+          const domain = domainFromEmail(a.email);
+          if (!domain) continue;
+          const inbox: InboxLite = {
+            id: a.id,
+            email: a.email,
+            health: typeof a.warmup_health === "number" ? a.warmup_health : null,
+            warmupActive: (a.warmup_status ?? "").toUpperCase() === "ACTIVE",
+          };
+          accounts.push(inbox);
+          const arr = byDomain.get(domain);
+          if (arr) arr.push(inbox);
+          else byDomain.set(domain, [inbox]);
+        }
+        setLoadProgress({ inboxes: accounts.length, pages: page });
+        if (!res.hasMore) break;
+        skip += PAGE_SIZE;
       }
 
       const built: DomainPlan[] = [];
@@ -170,10 +195,15 @@ export function Remove50Tool() {
       setPlans(built);
       setLoadedForWs(workspaceId);
     } catch (err) {
-      setError(errMessage(err));
+      if (!isAbort(err)) setError(errMessage(err));
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
+  }
+
+  function cancelLoad() {
+    loadAbortRef.current?.abort();
+    setLoading(false);
   }
 
   // --- Derived -------------------------------------------------------------
@@ -278,16 +308,46 @@ export function Remove50Tool() {
               {target}
             </div>
           </div>
-          <button
-            type="button"
-            className="pv-btn-primary"
-            onClick={loadPlans}
-            disabled={loading || !workspaceId}
-          >
-            {loading ? <Spinner /> : <RefreshIcon size={16} />}
-            {loadedForWs === workspaceId ? "Reload preview" : "Load & preview"}
-          </button>
+          {loading ? (
+            <button
+              type="button"
+              className="pv-btn-ghost"
+              onClick={cancelLoad}
+            >
+              Cancel
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="pv-btn-primary"
+              onClick={loadPlans}
+              disabled={!workspaceId}
+            >
+              <RefreshIcon size={16} />
+              {loadedForWs === workspaceId ? "Reload preview" : "Load & preview"}
+            </button>
+          )}
         </div>
+
+        {loading && (
+          <div className="flex items-center gap-3 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm">
+            <Spinner size={14} />
+            <span className="text-muted-foreground">
+              Loading inboxes…{" "}
+              <strong className="text-foreground tabular-nums">
+                {formatNumber(loadProgress.inboxes)}
+              </strong>{" "}
+              loaded
+              {loadProgress.pages > 0 && (
+                <span className="text-muted-foreground">
+                  {" "}
+                  ({formatNumber(loadProgress.pages)} page
+                  {loadProgress.pages === 1 ? "" : "s"})
+                </span>
+              )}
+            </span>
+          </div>
+        )}
       </div>
 
       {error && (
@@ -805,6 +865,13 @@ function relativeTime(ts: number): string {
   const h = Math.round(m / 60);
   if (h < 24) return `${h}h ago`;
   return new Date(ts).toLocaleDateString();
+}
+
+function isAbort(err: unknown): boolean {
+  return (
+    (err instanceof DOMException && err.name === "AbortError") ||
+    (err instanceof Error && err.name === "AbortError")
+  );
 }
 
 function errMessage(err: unknown): string {
