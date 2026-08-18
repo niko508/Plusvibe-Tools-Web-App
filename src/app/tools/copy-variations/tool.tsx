@@ -27,13 +27,14 @@ import { parseVariants } from "./parse";
 // The API has no DRAFT status: a never-launched campaign comes back as
 // INACTIVE (or blank). Bucket client-side rather than using the `status` query
 // filter, which doesn't accept INACTIVE at all.
-type Bucket = "active" | "draft" | "paused" | "done";
+type Bucket = "active" | "draft" | "paused" | "completed" | "archived";
 
 function statusBucket(status: string): Bucket {
   const s = (status ?? "").toUpperCase();
   if (s === "ACTIVE" || s === "RUNNING") return "active";
   if (s === "PAUSED") return "paused";
-  if (s === "COMPLETED" || s === "ARCHIVED") return "done";
+  if (s === "COMPLETED") return "completed";
+  if (s === "ARCHIVED") return "archived";
   return "draft"; // INACTIVE, DRAFT, ERROR, empty, anything unknown
 }
 
@@ -41,15 +42,12 @@ const BUCKET_LABEL: Record<Bucket, string> = {
   active: "Active",
   draft: "Draft",
   paused: "Paused",
-  done: "Completed",
+  completed: "Completed",
+  archived: "Archived",
 };
 
-const BUCKET_CLASS: Record<Bucket, string> = {
-  active: "bg-success/10 text-success",
-  draft: "bg-warning/10 text-warning",
-  paused: "bg-muted text-muted-foreground",
-  done: "bg-muted text-muted-foreground",
-};
+// Order the hidden-count breakdown reads in.
+const HIDDEN_ORDER: Bucket[] = ["paused", "completed", "archived"];
 
 export function CopyVariationsTool() {
   const { hasKey, ready } = useApiKey();
@@ -124,16 +122,36 @@ export function CopyVariationsTool() {
     };
   }, [workspaceId]);
 
+  // The API is asked for campaign_type=parent, but filter defensively so a
+  // subsequence can never pad the list or the hidden count.
+  const allCampaigns = useMemo(
+    () => (campaigns ?? []).filter((c) => c.campaignType !== "subseq"),
+    [campaigns]
+  );
+
   const visibleCampaigns = useMemo(() => {
-    const all = campaigns ?? [];
-    if (showAll) return all;
-    return all.filter((c) => {
+    if (showAll) return allCampaigns;
+    return allCampaigns.filter((c) => {
       const b = statusBucket(c.status);
       return b === "active" || b === "draft";
     });
-  }, [campaigns, showAll]);
+  }, [allCampaigns, showAll]);
 
-  const hiddenCount = (campaigns?.length ?? 0) - visibleCampaigns.length;
+  const hiddenCount = allCampaigns.length - visibleCampaigns.length;
+
+  // Broken down by status so the total can be reconciled against Plusvibe's own
+  // campaign list — the API returns archived campaigns that the UI hides.
+  const hiddenBreakdown = useMemo(() => {
+    const counts = new Map<Bucket, number>();
+    for (const c of allCampaigns) {
+      const b = statusBucket(c.status);
+      if (b === "active" || b === "draft") continue;
+      counts.set(b, (counts.get(b) ?? 0) + 1);
+    }
+    return HIDDEN_ORDER.filter((b) => counts.has(b)).map(
+      (b) => `${counts.get(b)} ${BUCKET_LABEL[b].toLowerCase()}`
+    );
+  }, [allCampaigns]);
 
   // --- Campaign detail ------------------------------------------------------
   const loadDetail = useCallback(
@@ -265,7 +283,7 @@ export function CopyVariationsTool() {
           </div>
         </div>
 
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+        <label className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <input
             type="checkbox"
             className="h-3.5 w-3.5 accent-accent"
@@ -273,9 +291,12 @@ export function CopyVariationsTool() {
             onChange={(e) => setShowAll(e.target.checked)}
           />
           Show all campaigns
-          {hiddenCount > 0 && !showAll && (
+          {allCampaigns.length > 0 && (
             <span>
-              ({formatNumber(hiddenCount)} paused/completed hidden)
+              · {formatNumber(allCampaigns.length)} in this workspace
+              {hiddenCount > 0 &&
+                !showAll &&
+                ` (${hiddenBreakdown.join(", ")} hidden)`}
             </span>
           )}
         </label>
