@@ -163,6 +163,42 @@ export function addCampaignVariations(
   });
 }
 
+// --- Remove personalized opening line ---------------------------------------
+
+export interface OpeningLinePlanRow {
+  step: number;
+  variation: string;
+  subjectChanged: boolean;
+  bodyChanged: boolean;
+  removed: number;
+}
+
+export interface OpeningLinePlan {
+  campaignName: string;
+  rows: OpeningLinePlanRow[];
+  totals: {
+    variations: number;
+    subjectsChanged: number;
+    bodiesChanged: number;
+    openingLinesRemoved: number;
+  };
+  subjectSample?: { before: string; after: string };
+  applied: boolean;
+  leftover?: number;
+  verified?: boolean;
+}
+
+export function removeOpeningLine(
+  params: { workspace_id: string; campaign_id: string; dryRun?: boolean },
+  signal?: AbortSignal
+) {
+  return request<OpeningLinePlan>("/api/plusvibe/remove-opening-line", {
+    method: "POST",
+    body: params,
+    signal,
+  });
+}
+
 export interface TagsResponse {
   tags: { id: string; name: string }[];
 }

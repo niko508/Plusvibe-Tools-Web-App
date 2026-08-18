@@ -7,6 +7,7 @@ import {
   PenIcon,
   FireIcon,
   LayersIcon,
+  ScissorsIcon,
 } from "@/components/icons";
 
 // Registry of tools shown on the landing page. Adding a new tool = add an entry
@@ -41,6 +42,15 @@ export const TOOLS: Tool[] = [
       "Pick a campaign, paste your variants in the usual VARIANT n — name format, and add them all to a sequence step in one pass — keeping the existing subject line and the variants already there.",
     status: "active",
     Icon: LayersIcon,
+  },
+  {
+    slug: "remove-opening-line",
+    name: "Remove Personalized Opening Line",
+    tagline: "Strip the opening-line personalization from a whole campaign",
+    description:
+      "Unwrap the {{fallback| {{subject_line}} …}} subject on every variation and drop {{opening_line}} from every body — the rest of the copy, and the variations themselves, stay exactly as they are.",
+    status: "active",
+    Icon: ScissorsIcon,
   },
   {
     slug: "remove-50",
