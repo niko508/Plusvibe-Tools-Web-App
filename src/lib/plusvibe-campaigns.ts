@@ -43,6 +43,29 @@ function truncateList(items: string[], max = 12): string {
   return `${items.slice(0, max).join(", ")} … +${items.length - max} more`;
 }
 
+// Fields the documented sequences schema defines; everything else is captured
+// as `extra` so undocumented markers stay visible.
+const KNOWN_VARIATION_KEYS = new Set([
+  "variation",
+  "subject",
+  "preheader",
+  "body",
+  "name",
+]);
+
+// Plain-text snippet of an HTML body, for the variation picker.
+export function bodyPreview(html: string, max = 140): string {
+  const text = html
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
 // The API returns a bare array; tolerate an envelope just in case.
 function asArray(data: unknown): unknown[] {
   if (Array.isArray(data)) return data;
@@ -68,6 +91,14 @@ export function normalizeSequences(raw: unknown): SequenceStep[] {
           body: str(va.body),
         };
         if (va.name != null) out.name = str(va.name);
+        // Preserve anything outside the documented schema — the flag marking a
+        // deleted variation may well be here, and dropping it would hide it.
+        const extra: Record<string, unknown> = {};
+        for (const [k, val] of Object.entries(va)) {
+          if (KNOWN_VARIATION_KEYS.has(k)) continue;
+          extra[k] = val;
+        }
+        if (Object.keys(extra).length > 0) out.extra = extra;
         return out;
       });
       return {
@@ -231,7 +262,13 @@ export function toCampaignDetail(
     return {
       step: s.step,
       waitTime: s.wait_time ?? 0,
-      variations: live,
+      variations: live.map((v) => ({
+        variation: v.variation,
+        subject: v.subject ?? "",
+        preview: bodyPreview(v.body ?? ""),
+        chars: (v.body ?? "").length,
+        extra: v.extra,
+      })),
       deletedVariations: deleted.map((v) => v.variation),
       hiddenVariations: hidden,
       subject,

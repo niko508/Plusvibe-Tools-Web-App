@@ -67,6 +67,8 @@ export function CopyVariationsTool() {
 
   const [raw, setRaw] = useState("");
   const [expanded, setExpanded] = useState<number | null>(null);
+  // Existing variation letters to preserve on the selected step.
+  const [keepSet, setKeep] = useState<Set<string>>(new Set());
 
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<AddVariationsResult | null>(null);
@@ -187,12 +189,25 @@ export function CopyVariationsTool() {
   const parsed = useMemo(() => parseVariants(raw), [raw]);
 
   const activeStep = detail?.steps.find((s) => s.step === step) ?? null;
+
+  // Default to keeping everything whenever the campaign or step changes.
+  useEffect(() => {
+    const s = detail?.steps.find((x) => x.step === step);
+    setKeep(new Set(s ? s.variations.map((v) => v.variation) : []));
+  }, [detail, step]);
+
+  // Letters freed by unticking an existing variation become available again.
   const usedLabels = activeStep
     ? [
-        ...activeStep.variations.map((v) => v.variation),
+        ...activeStep.variations
+          .filter((v) => keepSet.has(v.variation))
+          .map((v) => v.variation),
         ...activeStep.hiddenVariations,
       ]
     : [];
+  const droppingCount = activeStep
+    ? activeStep.variations.length - keepSet.size
+    : 0;
   const predictedLabels = nextVariationLabels(usedLabels, parsed.variants.length);
   const roomLeft = MAX_VARIATIONS_PER_STEP - usedLabels.length;
   const overCapacity = parsed.variants.length > roomLeft;
@@ -224,6 +239,7 @@ export function CopyVariationsTool() {
           body: v.html,
         })),
         expectedVariationCount: activeStep.variations.length,
+        keepVariations: Array.from(keepSet),
       });
       setResult(res);
       setRaw("");
@@ -387,13 +403,92 @@ export function CopyVariationsTool() {
                     </div>
                   )}
                   <div className="mt-2 text-xs text-muted-foreground">
-                    Existing variations:{" "}
-                    <span className="font-mono">
-                      {activeStep.variations.map((v) => v.variation).join(", ") ||
-                        "none"}
-                    </span>{" "}
+                    Existing variations: {formatNumber(activeStep.variations.length)}{" "}
                     · room for {formatNumber(Math.max(0, roomLeft))} more
                   </div>
+
+                  {/* Keep-list. The API returns variations that were deleted in
+                      Plusvibe and gives no reliable way to spot them on a
+                      never-sent campaign, so the choice has to be explicit. */}
+                  {activeStep.variations.length > 0 && (
+                    <div className="mt-3 overflow-hidden rounded-xl border border-border">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/40 px-3 py-2">
+                        <span className="text-xs font-medium">
+                          Existing variations to keep — {formatNumber(keepSet.size)}{" "}
+                          of {formatNumber(activeStep.variations.length)}
+                        </span>
+                        <span className="flex gap-2">
+                          <button
+                            type="button"
+                            className="text-xs text-accent hover:underline"
+                            onClick={() =>
+                              setKeep(
+                                new Set(
+                                  activeStep.variations.map((v) => v.variation)
+                                )
+                              )
+                            }
+                          >
+                            Select all
+                          </button>
+                          <button
+                            type="button"
+                            className="text-xs text-accent hover:underline"
+                            onClick={() => setKeep(new Set())}
+                          >
+                            None
+                          </button>
+                        </span>
+                      </div>
+                      {activeStep.variations.length > 1 && (
+                        <p className="border-b border-border bg-warning/10 px-3 py-2 text-xs text-warning">
+                          Plusvibe showing fewer variations than this list? The
+                          API also returns ones you deleted. Untick those and
+                          they&apos;ll be cleared when you apply.
+                        </p>
+                      )}
+                      <div className="pv-scroll max-h-64 overflow-y-auto">
+                        {activeStep.variations.map((v) => (
+                          <label
+                            key={v.variation}
+                            className="flex cursor-pointer items-start gap-2 border-b border-border/70 px-3 py-2 text-xs last:border-0 hover:bg-muted/40"
+                          >
+                            <input
+                              type="checkbox"
+                              className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-accent"
+                              checked={keepSet.has(v.variation)}
+                              onChange={(e) => {
+                                const next = new Set(keepSet);
+                                if (e.target.checked) next.add(v.variation);
+                                else next.delete(v.variation);
+                                setKeep(next);
+                              }}
+                            />
+                            <span className="w-8 shrink-0 font-mono text-muted-foreground">
+                              {v.variation}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate">
+                                {v.preview || (
+                                  <span className="italic text-muted-foreground">
+                                    empty
+                                  </span>
+                                )}
+                              </span>
+                              {v.extra && (
+                                <span className="mt-0.5 block break-all font-mono text-[10px] text-muted-foreground">
+                                  {JSON.stringify(v.extra)}
+                                </span>
+                              )}
+                            </span>
+                            <span className="shrink-0 text-muted-foreground">
+                              {formatNumber(v.chars)}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -512,9 +607,16 @@ export function CopyVariationsTool() {
               Add {formatNumber(parsed.variants.length)} variant
               {parsed.variants.length === 1 ? "" : "s"} to step {step ?? "—"}
             </button>
-            <span className="text-xs text-muted-foreground">
-              Existing variants and the subject line are left untouched.
-            </span>
+            {droppingCount > 0 ? (
+              <span className="text-xs text-warning">
+                {formatNumber(droppingCount)} unticked existing variation
+                {droppingCount === 1 ? "" : "s"} will be removed from the step.
+              </span>
+            ) : (
+              <span className="text-xs text-muted-foreground">
+                Existing variants and the subject line are left untouched.
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -561,6 +663,13 @@ export function CopyVariationsTool() {
                       {formatNumber(result.skipped.length)} skipped as duplicate
                       {result.skipped.length === 1 ? "" : "s"} of copy already on
                       the step.
+                    </div>
+                  )}
+                  {result.droppedByChoice > 0 && (
+                    <div className="mt-1 text-muted-foreground">
+                      Removed {formatNumber(result.droppedByChoice)} existing
+                      variation
+                      {result.droppedByChoice === 1 ? "" : "s"} you unticked.
                     </div>
                   )}
                   {result.droppedDeleted > 0 && (

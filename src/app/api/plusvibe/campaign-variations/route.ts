@@ -38,6 +38,7 @@ export async function POST(request: Request) {
       step?: number;
       variants?: IncomingVariant[];
       expectedVariationCount?: number;
+      keepVariations?: string[];
     };
 
     const workspace_id = body.workspace_id ? String(body.workspace_id) : "";
@@ -99,6 +100,7 @@ export async function POST(request: Request) {
     }
 
     // Guard against acting on a stale preview (someone edited the step since).
+    // Compared before the keep-filter, since that's the count the client saw.
     if (
       typeof body.expectedVariationCount === "number" &&
       body.expectedVariationCount !== target.variations.length
@@ -109,6 +111,22 @@ export async function POST(request: Request) {
         },
         { status: 409 }
       );
+    }
+
+    // variation-stats only knows about variations that have sent something, so
+    // on a never-launched campaign it can't identify stale ones at all. When the
+    // caller says explicitly which letters to keep on the target step, that wins
+    // — it's the only reliable signal for a draft.
+    const liveBefore = target.variations.length;
+    let droppedByChoice = 0;
+    if (Array.isArray(body.keepVariations)) {
+      const keep = new Set(
+        body.keepVariations.map((l) => String(l).toUpperCase())
+      );
+      target.variations = target.variations.filter((v) =>
+        keep.has(v.variation.toUpperCase())
+      );
+      droppedByChoice = liveBefore - target.variations.length;
     }
 
     // --- Skip anything already on the step --------------------------------
@@ -231,9 +249,10 @@ export async function POST(request: Request) {
       added: added.map((v) => ({ variation: v.variation, name: v.name })),
       skipped,
       droppedDeleted,
+      droppedByChoice,
       subject,
       step,
-      before: target.variations.length,
+      before: liveBefore,
       expected,
       actual,
       verified: actual === expected,

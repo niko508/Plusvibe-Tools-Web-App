@@ -134,6 +134,8 @@ export interface AddVariationsResult {
   skipped: string[];
   /** Stale deleted variations cleared out of the sequence by this write. */
   droppedDeleted: number;
+  /** Existing variations the caller chose not to keep. */
+  droppedByChoice: number;
   subject: string;
   step: number;
   before: number;
@@ -149,6 +151,8 @@ export function addCampaignVariations(
     step: number;
     variants: { name: string; body: string }[];
     expectedVariationCount?: number;
+    /** Existing variation letters to preserve; omit to keep them all. */
+    keepVariations?: string[];
   },
   signal?: AbortSignal
 ) {

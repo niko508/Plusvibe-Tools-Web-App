@@ -82,6 +82,22 @@ export interface SequenceVariation {
   preheader?: string;
   body?: string;
   name?: string; // absent on read, required on write
+  /**
+   * Any field the API returns that isn't in the documented schema. Kept because
+   * the docs are incomplete and a marker distinguishing deleted variations may
+   * live here — discarding unknown fields would hide it.
+   */
+  extra?: Record<string, unknown>;
+}
+
+/** A step's existing variation, trimmed for display in the picker. */
+export interface ExistingVariation {
+  variation: string;
+  subject: string;
+  preview: string; // plain-text snippet of the body
+  chars: number;
+  /** Undocumented fields returned alongside this variation, for diagnosis. */
+  extra?: Record<string, unknown>;
 }
 
 export interface SequenceStep {
@@ -104,7 +120,7 @@ export interface CampaignStepInfo {
   step: number;
   waitTime: number;
   /** Live variations — `sequences` minus anything Plusvibe has deleted. */
-  variations: SequenceVariation[];
+  variations: ExistingVariation[];
   /**
    * Labels still returned by `sequences` but marked deleted in variation-stats.
    * Duplicating a campaign or removing steps leaves these behind; writing them
