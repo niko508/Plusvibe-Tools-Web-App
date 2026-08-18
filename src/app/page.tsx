@@ -1,13 +1,14 @@
 import Link from "next/link";
 import { Header } from "@/components/header";
-import { TOOLS } from "@/lib/tools";
+import { TOOLS, TOOL_COLORS } from "@/lib/tools";
 import { ArrowRightIcon, ClockIcon } from "@/components/icons";
 
 export default function HomePage() {
   return (
     <div className="min-h-screen">
       <Header />
-      <main className="mx-auto max-w-6xl px-4 pb-24 sm:px-6">
+      {/* Wider than the tool pages so four cards sit comfortably in a row. */}
+      <main className="mx-auto max-w-7xl px-4 pb-24 sm:px-6">
         {/* Hero */}
         <section className="py-14 sm:py-20">
           <div className="max-w-2xl">
@@ -31,24 +32,23 @@ export default function HomePage() {
           <h2 className="mb-4 text-sm font-medium uppercase tracking-wide text-muted-foreground">
             Tools
           </h2>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {TOOLS.map((tool) => {
               const isActive = tool.status === "active";
               const Icon = tool.Icon;
+              const c = TOOL_COLORS[tool.color];
               const card = (
                 <div
                   className={`pv-card group relative flex h-full flex-col p-5 transition ${
                     isActive
-                      ? "hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-card"
+                      ? `hover:-translate-y-0.5 hover:shadow-card ${c.border}`
                       : "opacity-70"
                   }`}
                 >
                   <div className="mb-4 flex items-center justify-between">
                     <span
                       className={`flex h-11 w-11 items-center justify-center rounded-xl ${
-                        isActive
-                          ? "bg-accent/10 text-accent"
-                          : "bg-muted text-muted-foreground"
+                        isActive ? c.tile : "bg-muted text-muted-foreground"
                       }`}
                     >
                       <Icon size={22} />
@@ -66,7 +66,9 @@ export default function HomePage() {
                   </p>
                   <div className="mt-4 flex-1" />
                   {isActive && (
-                    <span className="inline-flex items-center gap-1.5 text-sm font-medium text-accent">
+                    <span
+                      className={`inline-flex items-center gap-1.5 text-sm font-medium ${c.link}`}
+                    >
                       Open tool
                       <ArrowRightIcon
                         size={16}
