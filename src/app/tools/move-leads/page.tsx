@@ -18,9 +18,10 @@ export default function MoveLeadsPage() {
             Move Leads to Another Campaign
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground sm:text-base">
-            Pick a source and a destination campaign in the same workspace, say
-            how many leads to move, and they&apos;re added to the destination
-            first and only then removed from the source.
+            Pick up to three source → destination pairs in the same workspace,
+            say how many not-contacted leads to move from each, and run them in
+            the background — leads are added to the destination first and only
+            then removed from the source.
           </p>
         </div>
         <MoveLeadsTool />

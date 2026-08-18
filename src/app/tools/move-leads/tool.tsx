@@ -2,19 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Workspace, CampaignSummary } from "@/lib/plusvibe-types";
+import type { MoveLeadsJob, MoveJobStatus } from "@/lib/jobs/move-leads-types";
+import { MAX_PAIRS } from "@/lib/jobs/move-leads-types";
 import {
   fetchWorkspaces,
   fetchCampaigns,
   fetchLeadsPreview,
-  moveLeads,
+  startMoveLeads,
+  listMoveLeadsJobs,
+  abortMoveLeads,
   ApiClientError,
-  type LeadsPreview,
-  type MoveLeadsResult,
 } from "@/lib/api-client";
 import { useApiKey } from "@/lib/use-api-key";
 import { formatNumber } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
-import { StatCard } from "@/components/stat-card";
 import { Spinner, EmptyState } from "@/components/ui";
 import {
   MoveIcon,
@@ -22,6 +23,7 @@ import {
   RefreshIcon,
   ChevronDownIcon,
   CheckIcon,
+  TrashIcon,
 } from "@/components/icons";
 
 type Bucket = "active" | "draft" | "paused" | "completed" | "archived";
@@ -43,6 +45,21 @@ const BUCKET_LABEL: Record<Bucket, string> = {
   archived: "Archived",
 };
 
+interface PairRow {
+  key: number;
+  source: string;
+  destination: string;
+  count: string;
+}
+
+let nextKey = 1;
+const emptyRow = (): PairRow => ({
+  key: nextKey++,
+  source: "",
+  destination: "",
+  count: "",
+});
+
 export function MoveLeadsTool() {
   const { hasKey, ready } = useApiKey();
 
@@ -55,18 +72,18 @@ export function MoveLeadsTool() {
   const [refreshing, setRefreshing] = useState(false);
   const [showAll, setShowAll] = useState(false);
 
-  const [sourceId, setSourceId] = useState("");
-  const [destId, setDestId] = useState("");
-  const [count, setCount] = useState("100");
+  const [rows, setRows] = useState<PairRow[]>([emptyRow()]);
+  // campaign id -> not-contacted leads available (undefined = still loading)
+  const [available, setAvailable] = useState<Record<string, number | undefined>>(
+    {}
+  );
 
-  const [preview, setPreview] = useState<LeadsPreview | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-
-  const [moving, setMoving] = useState(false);
-  const [result, setResult] = useState<MoveLeadsResult | null>(null);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const moveLock = useRef(false);
+  const [jobs, setJobs] = useState<MoveLeadsJob[]>([]);
+  const [highlight, setHighlight] = useState<string[]>([]);
+  const startLock = useRef(false);
 
   // --- Workspaces ----------------------------------------------------------
   const loadWorkspaces = useCallback(async () => {
@@ -94,6 +111,23 @@ export function MoveLeadsTool() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  // --- Jobs polling --------------------------------------------------------
+  const refreshJobs = useCallback(async () => {
+    try {
+      const res = await listMoveLeadsJobs();
+      setJobs(res.jobs ?? []);
+    } catch {
+      // transient — keep the last known list
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!(ready && hasKey)) return;
+    void refreshJobs();
+    const t = setInterval(() => void refreshJobs(), 2500);
+    return () => clearInterval(t);
+  }, [ready, hasKey, refreshJobs]);
+
   // --- Campaigns -----------------------------------------------------------
   useEffect(() => {
     if (!workspaceId) return;
@@ -101,10 +135,8 @@ export function MoveLeadsTool() {
     const controller = new AbortController();
     setCampaignsLoading(true);
     setCampaigns(null);
-    setSourceId("");
-    setDestId("");
-    setPreview(null);
-    setResult(null);
+    setRows([emptyRow()]);
+    setAvailable({});
     setError(null);
     fetchCampaigns({ workspace_id: workspaceId }, controller.signal)
       .then((res) => {
@@ -135,33 +167,21 @@ export function MoveLeadsTool() {
     });
   }, [allCampaigns, showAll]);
 
-  // --- Source preview ------------------------------------------------------
-  const loadPreview = useCallback(
-    async (id: string) => {
-      if (!workspaceId || !id) return;
-      setPreviewLoading(true);
-      setPreview(null);
-      setResult(null);
-      setError(null);
-      try {
-        const p = await fetchLeadsPreview({
-          workspace_id: workspaceId,
-          campaign_id: id,
-        });
-        setPreview(p);
-      } catch (err) {
-        setError(errMessage(err));
-      } finally {
-        setPreviewLoading(false);
-      }
-    },
-    [workspaceId]
-  );
-
+  // Look up the not-contacted count whenever a source is picked.
   useEffect(() => {
-    if (sourceId) void loadPreview(sourceId);
-    else setPreview(null);
-  }, [sourceId, loadPreview]);
+    if (!workspaceId) return;
+    const wanted = rows.map((r) => r.source).filter(Boolean);
+    for (const id of wanted) {
+      if (id in available) continue;
+      setAvailable((prev) => ({ ...prev, [id]: undefined }));
+      fetchLeadsPreview({ workspace_id: workspaceId, campaign_id: id })
+        .then((p) => setAvailable((prev) => ({ ...prev, [id]: p.available })))
+        .catch(() =>
+          setAvailable((prev) => ({ ...prev, [id]: undefined }))
+        );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, workspaceId]);
 
   async function handleRefresh() {
     if (!workspaceId || refreshing) return;
@@ -169,15 +189,9 @@ export function MoveLeadsTool() {
     setError(null);
     try {
       const res = await fetchCampaigns({ workspace_id: workspaceId });
-      const list = res.campaigns ?? [];
-      setCampaigns(list);
-      if (sourceId && list.some((c) => c.id === sourceId)) {
-        await loadPreview(sourceId);
-      } else if (sourceId) {
-        setSourceId("");
-        setPreview(null);
-      }
-      if (destId && !list.some((c) => c.id === destId)) setDestId("");
+      setCampaigns(res.campaigns ?? []);
+      setAvailable({});
+      await refreshJobs();
     } catch (err) {
       setError(errMessage(err));
     } finally {
@@ -185,48 +199,73 @@ export function MoveLeadsTool() {
     }
   }
 
-  // --- Move ----------------------------------------------------------------
-  const n = Math.floor(Number(count));
-  const validCount = Number.isFinite(n) && n >= 1;
-  const sameCampaign = !!sourceId && sourceId === destId;
-  const available = preview?.available ?? 0;
-  const willMove = preview ? Math.min(n || 0, available) : n || 0;
-  const canMove =
-    !!sourceId && !!destId && !sameCampaign && validCount && !moving;
+  function updateRow(key: number, patch: Partial<PairRow>) {
+    setRows((prev) =>
+      prev.map((r) => (r.key === key ? { ...r, ...patch } : r))
+    );
+  }
 
-  async function handleMove() {
-    if (!canMove) return;
-    if (moveLock.current) return;
-    moveLock.current = true;
-    setMoving(true);
+  // --- Validation ----------------------------------------------------------
+  const runningCount = jobs.filter((j) => j.status === "running").length;
+  const filledRows = rows.filter(
+    (r) => r.source && r.destination && Number(r.count) >= 1
+  );
+  const duplicateSource =
+    new Set(filledRows.map((r) => r.source)).size !== filledRows.length;
+  const sameEnds = filledRows.some((r) => r.source === r.destination);
+  const overCapacity = runningCount + filledRows.length > MAX_PAIRS;
+
+  const canStart =
+    filledRows.length > 0 &&
+    !duplicateSource &&
+    !sameEnds &&
+    !overCapacity &&
+    !starting;
+
+  async function handleStart() {
+    if (!canStart) return;
+    if (startLock.current) return;
+    startLock.current = true;
+    setStarting(true);
     setError(null);
-    setResult(null);
     try {
-      const res = await moveLeads({
-        workspace_id: workspaceId,
-        source_campaign_id: sourceId,
-        destination_campaign_id: destId,
-        count: n,
+      const wsName = workspaces.find((w) => w._id === workspaceId)?.name ?? "";
+      const nameOf = (id: string) =>
+        allCampaigns.find((c) => c.id === id)?.name ?? "";
+      const res = await startMoveLeads({
+        workspaceId,
+        workspaceName: wsName,
+        pairs: filledRows.map((r) => ({
+          sourceCampaignId: r.source,
+          sourceName: nameOf(r.source),
+          destinationCampaignId: r.destination,
+          destinationName: nameOf(r.destination),
+          count: Number(r.count),
+        })),
       });
-      setResult(res);
-      if (res.complete && res.deletedFromSource > 0) {
-        setToast(
-          `${formatNumber(res.deletedFromSource)} lead${
-            res.deletedFromSource === 1 ? "" : "s"
-          } moved to the destination campaign`
-        );
-      }
-      await loadPreview(sourceId);
+      setHighlight(res.jobIds ?? []);
+      setTimeout(() => setHighlight([]), 4000);
+      setRows([emptyRow()]);
+      setToast(
+        `${res.jobIds.length} move job${res.jobIds.length === 1 ? "" : "s"} started — safe to close the tab`
+      );
+      await refreshJobs();
     } catch (err) {
       setError(errMessage(err));
     } finally {
-      moveLock.current = false;
-      setMoving(false);
+      startLock.current = false;
+      setStarting(false);
     }
   }
 
-  const nameOf = (id: string) =>
-    allCampaigns.find((c) => c.id === id)?.name ?? "";
+  async function handleAbort(id: string) {
+    try {
+      await abortMoveLeads(id);
+      await refreshJobs();
+    } catch {
+      // ignore
+    }
+  }
 
   // --- Render --------------------------------------------------------------
   if (!ready) return <div className="pv-card h-40 animate-pulse" />;
@@ -253,75 +292,8 @@ export function MoveLeadsTool() {
           </Select>
         </div>
 
-        {/* Source → destination */}
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
-          <div className="min-w-[200px] flex-1">
-            <div className="mb-1.5 flex items-center justify-between gap-2">
-              <label className="block text-sm font-medium">Source campaign</label>
-              {campaignsLoading && <Spinner size={12} />}
-            </div>
-            <Select
-              value={sourceId}
-              disabled={campaignsLoading || visibleCampaigns.length === 0}
-              onChange={setSourceId}
-            >
-              <option value="">
-                {campaignsLoading ? "Loading…" : "Select a campaign…"}
-              </option>
-              {visibleCampaigns.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} — {BUCKET_LABEL[statusBucket(c.status)]}
-                </option>
-              ))}
-            </Select>
-          </div>
-
-          <div className="hidden pb-2.5 text-muted-foreground sm:block">
-            <MoveIcon size={18} />
-          </div>
-
-          <div className="min-w-[200px] flex-1">
-            <label className="mb-1.5 block text-sm font-medium">
-              Destination campaign
-            </label>
-            <Select
-              value={destId}
-              disabled={campaignsLoading || visibleCampaigns.length === 0}
-              onChange={setDestId}
-            >
-              <option value="">
-                {campaignsLoading ? "Loading…" : "Select a campaign…"}
-              </option>
-              {visibleCampaigns.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} — {BUCKET_LABEL[statusBucket(c.status)]}
-                </option>
-              ))}
-            </Select>
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-sm font-medium">
-              Leads to move
-            </label>
-            <input
-              type="number"
-              min={1}
-              className="pv-input w-32 tabular-nums"
-              value={count}
-              onChange={(e) => setCount(e.target.value)}
-            />
-          </div>
-        </div>
-
-        {sameCampaign && (
-          <p className="text-xs text-danger">
-            Source and destination must be different campaigns.
-          </p>
-        )}
-
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <label className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <input
               type="checkbox"
               className="h-3.5 w-3.5 accent-accent"
@@ -352,184 +324,179 @@ export function MoveLeadsTool() {
         </div>
       )}
 
-      {previewLoading && (
-        <div className="pv-card flex items-center gap-3 p-4 text-sm text-muted-foreground">
-          <Spinner size={14} />
-          Counting leads in the source campaign…
+      {/* Pairs */}
+      <div className="pv-card space-y-4 p-4 sm:p-5">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold">
+            Moves to run{" "}
+            <span className="font-normal text-muted-foreground">
+              · up to {MAX_PAIRS} at once
+            </span>
+          </h2>
+          {campaignsLoading && <Spinner size={12} />}
         </div>
-      )}
 
-      {/* Preview */}
-      {preview && !previewLoading && (
-        <>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-            <StatCard
-              label="Leads in source"
-              value={formatNumber(preview.available)}
-            />
-            <StatCard label="Will move" value={formatNumber(willMove)} />
-            <StatCard
-              label="Left in source"
-              value={formatNumber(Math.max(0, preview.available - willMove))}
-            />
-          </div>
-
-          {preview.available === 0 && (
-            <EmptyState title="No leads to move">
-              The source campaign has no leads.
-            </EmptyState>
-          )}
-
-          {/* What travels with each lead */}
-          {preview.sample && (
-            <div className="pv-card p-4 sm:p-5">
-              <div className="text-sm font-medium">
-                What travels with each lead
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">
-                From {formatNumber(preview.sample.sampled)} real lead
-                {preview.sample.sampled === 1 ? "" : "s"} in the source campaign
-                — check your personalization variables are listed before moving
-                anything.
-              </p>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <div className="space-y-3">
+          {rows.map((row, i) => {
+            const avail = row.source ? available[row.source] : undefined;
+            const asked = Number(row.count);
+            const tooMany =
+              avail !== undefined && Number.isFinite(asked) && asked > avail;
+            return (
+              <div
+                key={row.key}
+                className="grid gap-2 rounded-xl border border-border p-3 sm:grid-cols-[1fr_1fr_120px_auto] sm:items-end"
+              >
                 <div>
-                  <div className="mb-1 text-xs font-medium text-muted-foreground">
-                    Standard fields
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {preview.sample.topLevelFields.map((f) => (
-                      <span
-                        key={f}
-                        className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px]"
-                      >
-                        {f}
-                      </span>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                    Source campaign
+                  </label>
+                  <Select
+                    value={row.source}
+                    disabled={campaignsLoading}
+                    onChange={(v) => updateRow(row.key, { source: v })}
+                  >
+                    <option value="">Select…</option>
+                    {visibleCampaigns.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} — {BUCKET_LABEL[statusBucket(c.status)]}
+                      </option>
                     ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-1 text-xs font-medium text-muted-foreground">
-                    Custom variables
-                  </div>
-                  {preview.sample.customVariables.length > 0 ? (
-                    <div className="space-y-1">
-                      {preview.sample.customVariables.map((f) => (
-                        <div
-                          key={f.name}
-                          className="flex items-center justify-between gap-3 text-[11px]"
-                        >
-                          <span className="rounded-md bg-cyan-500/10 px-1.5 py-0.5 font-mono text-cyan-600 dark:text-cyan-400">
-                            {f.name}
-                          </span>
-                          <span className="text-muted-foreground">
-                            on {f.count}/{preview.sample!.sampled}
-                            {f.filled < f.count && (
-                              <> · {f.filled} with a value</>
-                            )}
-                          </span>
-                        </div>
+                  </Select>
+                  <div className="mt-1 h-4 text-[11px] text-muted-foreground">
+                    {row.source &&
+                      (avail === undefined ? (
+                        <span>checking available leads…</span>
+                      ) : (
+                        <span>
+                          {formatNumber(avail)} not-contacted available
+                        </span>
                       ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-warning">
-                      None found on this lead. If your copy relies on
-                      personalization like{" "}
-                      <span className="font-mono">{"{{opening_line}}"}</span>,
-                      check a moved lead in the destination before moving more.
-                    </p>
-                  )}
+                  </div>
                 </div>
-              </div>
-            </div>
-          )}
 
-          {/* Run */}
-          {preview.available > 0 && (
-            <div className="pv-card border-warning/40 p-4 sm:p-5">
-              <div className="flex items-start gap-2 text-sm">
-                <AlertIcon size={18} className="mt-0.5 shrink-0 text-warning" />
-                <span>
-                  Leads are added to{" "}
-                  <strong>{nameOf(destId) || "the destination"}</strong> first
-                  and only removed from{" "}
-                  <strong>{nameOf(sourceId) || "the source"}</strong> once that
-                  is confirmed. Removal from the source can&apos;t be undone, and
-                  a lead&apos;s progress in the source campaign doesn&apos;t
-                  carry over.
-                </span>
-              </div>
-              <div className="mt-4 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  className="pv-btn-primary"
-                  disabled={!canMove}
-                  onClick={handleMove}
-                >
-                  {moving ? <Spinner /> : <MoveIcon size={16} />}
-                  Move {formatNumber(willMove)} lead
-                  {willMove === 1 ? "" : "s"}
-                </button>
-                {n > available && available > 0 && (
-                  <span className="text-xs text-muted-foreground">
-                    Only {formatNumber(available)} available — that&apos;s all
-                    that will move.
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-        </>
-      )}
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                    Destination campaign
+                  </label>
+                  <Select
+                    value={row.destination}
+                    disabled={campaignsLoading}
+                    onChange={(v) => updateRow(row.key, { destination: v })}
+                  >
+                    <option value="">Select…</option>
+                    {visibleCampaigns.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} — {BUCKET_LABEL[statusBucket(c.status)]}
+                      </option>
+                    ))}
+                  </Select>
+                  <div className="mt-1 h-4 text-[11px] text-danger">
+                    {row.source && row.source === row.destination
+                      ? "Must differ from the source"
+                      : ""}
+                  </div>
+                </div>
 
-      {/* Result */}
-      {result && (
-        <div
-          className={`pv-card p-4 sm:p-5 ${
-            result.complete ? "border-success/40" : "border-danger/40"
-          }`}
-        >
-          <div className="flex items-start gap-2">
-            {result.complete ? (
-              <CheckIcon size={18} className="mt-0.5 shrink-0 text-success" />
-            ) : (
-              <AlertIcon size={18} className="mt-0.5 shrink-0 text-danger" />
-            )}
-            <div className="text-sm">
-              Moved{" "}
-              <strong>
-                {formatNumber(result.deletedFromSource)} lead
-                {result.deletedFromSource === 1 ? "" : "s"}
-              </strong>
-              {result.alreadyInDestination > 0 && (
-                <>
-                  {" "}
-                  ({formatNumber(result.alreadyInDestination)} were already in
-                  the destination)
-                </>
-              )}
-              .
-              {!result.complete && (
-                <div className="mt-1 text-danger">
-                  The run stopped early — see below.
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                    Leads
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    className="pv-input w-full tabular-nums"
+                    placeholder="0"
+                    value={row.count}
+                    onChange={(e) => updateRow(row.key, { count: e.target.value })}
+                  />
+                  <div className="mt-1 h-4 text-[11px] text-warning">
+                    {tooMany ? `only ${formatNumber(avail)} available` : ""}
+                  </div>
                 </div>
-              )}
-            </div>
-          </div>
-          {result.errors.length > 0 && (
-            <div className="mt-3 space-y-2">
-              {result.errors.map((e, i) => (
-                <div
-                  key={i}
-                  className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
-                >
-                  {e}
+
+                <div className="pb-5">
+                  <button
+                    type="button"
+                    className="pv-btn-ghost"
+                    onClick={() =>
+                      setRows((prev) =>
+                        prev.length === 1
+                          ? [emptyRow()]
+                          : prev.filter((r) => r.key !== row.key)
+                      )
+                    }
+                    title={rows.length === 1 ? "Clear this row" : "Remove this pair"}
+                    aria-label="Remove pair"
+                  >
+                    <TrashIcon size={14} />
+                  </button>
                 </div>
-              ))}
-            </div>
+                {i === 0 && null}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            className="pv-btn-ghost text-xs"
+            disabled={rows.length >= MAX_PAIRS}
+            onClick={() => setRows((prev) => [...prev, emptyRow()])}
+          >
+            + Add another pair
+          </button>
+          {duplicateSource && (
+            <span className="text-xs text-danger">
+              Each source campaign can only be used once.
+            </span>
+          )}
+          {overCapacity && (
+            <span className="text-xs text-warning">
+              {runningCount} job{runningCount === 1 ? "" : "s"} already running —
+              at most {MAX_PAIRS} run at once.
+            </span>
           )}
         </div>
-      )}
+
+        <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
+          <button
+            type="button"
+            className="pv-btn-primary"
+            disabled={!canStart}
+            onClick={handleStart}
+          >
+            {starting ? <Spinner /> : <MoveIcon size={16} />}
+            Start {filledRows.length > 0 ? filledRows.length : ""} move
+            {filledRows.length === 1 ? "" : "s"}
+          </button>
+          <span className="text-xs text-muted-foreground">
+            Runs on the server — safe to close the tab. Leads are added to the
+            destination before being removed from the source.
+          </span>
+        </div>
+      </div>
+
+      {/* Jobs */}
+      <div className="space-y-3">
+        <h2 className="text-sm font-semibold">Jobs</h2>
+        {jobs.length === 0 ? (
+          <EmptyState icon={<MoveIcon />} title="No jobs yet">
+            Pick a source and destination, set how many leads to move, and start
+            — progress appears here and keeps running if you close the app.
+          </EmptyState>
+        ) : (
+          jobs.map((job) => (
+            <JobCard
+              key={job.id}
+              job={job}
+              highlight={highlight.includes(job.id)}
+              onAbort={handleAbort}
+            />
+          ))
+        )}
+      </div>
 
       {toast && (
         <div className="fixed bottom-5 right-5 z-50 animate-fade-in">
@@ -554,6 +521,145 @@ export function MoveLeadsTool() {
 }
 
 // ---------------------------------------------------------------------------
+
+const STATUS_META: Record<MoveJobStatus, { label: string; className: string }> = {
+  running: { label: "Running", className: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400" },
+  done: { label: "Done", className: "bg-success/10 text-success" },
+  aborted: { label: "Aborted", className: "bg-muted text-muted-foreground" },
+  interrupted: { label: "Interrupted", className: "bg-warning/10 text-warning" },
+  error: { label: "Error", className: "bg-danger/10 text-danger" },
+};
+
+function JobCard({
+  job,
+  highlight,
+  onAbort,
+}: {
+  job: MoveLeadsJob;
+  highlight: boolean;
+  onAbort: (id: string) => void;
+}) {
+  const p = job.progress;
+  const total = p.found || p.requested;
+  const pct =
+    job.status === "done"
+      ? 100
+      : total > 0
+        ? Math.min(100, Math.round((p.processed / total) * 100))
+        : 0;
+  const status = STATUS_META[job.status];
+  const phaseLabel =
+    job.status !== "running"
+      ? status.label
+      : job.phase === "collecting"
+        ? "Collecting not-contacted leads"
+        : "Moving leads";
+
+  return (
+    <div
+      className={`pv-card p-4 sm:p-5 ${highlight ? "ring-2 ring-cyan-500/40" : ""}`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2.5">
+          <span
+            className={`rounded-full px-2.5 py-1 text-xs font-medium ${status.className}`}
+          >
+            {job.status === "running" && <Spinner size={10} />} {status.label}
+          </span>
+          <span className="text-sm font-medium">{job.label}</span>
+        </div>
+        <span className="text-xs text-muted-foreground">
+          {relativeTime(job.createdAt)}
+        </span>
+      </div>
+
+      <div className="mt-3">
+        <div className="mb-1.5 flex items-center justify-between text-xs text-muted-foreground">
+          <span className="flex items-center gap-2">
+            {job.status === "running" && <Spinner size={12} />}
+            {phaseLabel}
+          </span>
+          <span className="tabular-nums">
+            {formatNumber(p.processed)} / {formatNumber(total)} · {pct}%
+          </span>
+        </div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div
+            className={`h-full rounded-full transition-all duration-300 ${
+              job.status === "error" ? "bg-danger" : "bg-cyan-500"
+            }`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Metric label="Found" value={p.found} />
+        <Metric label="Added to destination" value={p.added} tone="success" />
+        <Metric label="Removed from source" value={p.deletedFromSource} tone="success" />
+        <Metric
+          label="Already in destination"
+          value={p.alreadyInDestination}
+          tone="muted"
+        />
+      </div>
+
+      {job.errors.length > 0 && (
+        <div className="pv-scroll mt-3 max-h-32 overflow-y-auto rounded-xl border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">
+          {job.errors.map((e, i) => (
+            <div key={i} className="border-b border-danger/20 py-1 last:border-0">
+              {e}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {job.status === "interrupted" && (
+        <p className="mt-2 text-xs text-warning">
+          Interrupted by a server restart. Leads already moved are in the
+          destination — start another job for the remainder.
+        </p>
+      )}
+
+      {job.status === "running" && (
+        <div className="mt-4">
+          <button
+            type="button"
+            className="pv-btn-ghost"
+            onClick={() => onAbort(job.id)}
+          >
+            Abort
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: number;
+  tone?: "default" | "success" | "muted";
+}) {
+  const color =
+    tone === "success"
+      ? "text-success"
+      : tone === "muted"
+        ? "text-muted-foreground"
+        : "text-foreground";
+  return (
+    <div>
+      <div className={`text-lg font-semibold tabular-nums ${color}`}>
+        {formatNumber(value)}
+      </div>
+      <div className="text-xs text-muted-foreground">{label}</div>
+    </div>
+  );
+}
 
 function Select({
   value,
@@ -582,6 +688,16 @@ function Select({
       />
     </div>
   );
+}
+
+function relativeTime(ts: number): string {
+  const s = Math.round((Date.now() - ts) / 1000);
+  if (s < 60) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return new Date(ts).toLocaleDateString();
 }
 
 function isAbort(err: unknown): boolean {

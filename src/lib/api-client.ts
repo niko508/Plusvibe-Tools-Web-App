@@ -14,6 +14,10 @@ import type {
   Remove50StartPayload,
   WarmupSettings,
 } from "@/lib/jobs/remove-50-types";
+import type {
+  MoveLeadsJob,
+  MoveLeadsStartPayload,
+} from "@/lib/jobs/move-leads-types";
 
 export type { WarmupSettings } from "@/lib/jobs/remove-50-types";
 
@@ -204,16 +208,6 @@ export function removeOpeningLine(
 export interface LeadsPreview {
   available: number;
   counts: { status: string; count: number }[];
-  sample: {
-    /** How many leads were inspected to build this. */
-    sampled: number;
-    topLevelFields: string[];
-    /**
-     * Custom variable names with how many sampled leads carry each (`count`)
-     * and how many have a non-empty value (`filled`).
-     */
-    customVariables: { name: string; count: number; filled: number }[];
-  } | null;
 }
 
 export function fetchLeadsPreview(
@@ -229,28 +223,36 @@ export function fetchLeadsPreview(
   });
 }
 
-export interface MoveLeadsResult {
-  requested: number;
-  found: number;
-  added: number;
-  alreadyInDestination: number;
-  deletedFromSource: number;
-  errors: string[];
-  complete: boolean;
-}
+// --- Move-leads background jobs ---------------------------------------------
 
-export function moveLeads(
-  params: {
-    workspace_id: string;
-    source_campaign_id: string;
-    destination_campaign_id: string;
-    count: number;
-  },
+export function startMoveLeads(
+  payload: MoveLeadsStartPayload,
   signal?: AbortSignal
 ) {
-  return request<MoveLeadsResult>("/api/plusvibe/leads/move", {
+  return request<{ jobIds: string[] }>("/api/jobs/move-leads/start", {
     method: "POST",
-    body: params,
+    body: payload,
+    signal,
+  });
+}
+
+export function listMoveLeadsJobs(signal?: AbortSignal) {
+  return request<{ jobs: MoveLeadsJob[] }>("/api/jobs/move-leads/list", {
+    signal,
+  });
+}
+
+export function getMoveLeadsJob(jobId: string, signal?: AbortSignal) {
+  return request<MoveLeadsJob>(
+    `/api/jobs/move-leads/status?jobId=${encodeURIComponent(jobId)}`,
+    { signal }
+  );
+}
+
+export function abortMoveLeads(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/move-leads/abort", {
+    method: "POST",
+    body: { jobId },
     signal,
   });
 }
