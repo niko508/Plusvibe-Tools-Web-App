@@ -58,6 +58,7 @@ export function CopyVariationsTool() {
 
   const [campaigns, setCampaigns] = useState<CampaignSummary[] | null>(null);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [campaignId, setCampaignId] = useState("");
 
@@ -192,6 +193,31 @@ export function CopyVariationsTool() {
     if (campaignId) void loadDetail(campaignId);
   }, [campaignId, loadDetail]);
 
+  // Re-reads the campaign list and the selected campaign without losing the
+  // current selection, so several runs can be done back to back.
+  async function handleRefresh() {
+    if (!workspaceId || refreshing) return;
+    setRefreshing(true);
+    setError(null);
+    try {
+      const res = await fetchCampaigns({ workspace_id: workspaceId });
+      const list = res.campaigns ?? [];
+      setCampaigns(list);
+      // Only reload the detail if the campaign still exists in the workspace.
+      if (campaignId && list.some((c) => c.id === campaignId)) {
+        await loadDetail(campaignId);
+      } else if (campaignId) {
+        setCampaignId("");
+        setDetail(null);
+        setStep(null);
+      }
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   // --- Parse ----------------------------------------------------------------
   const parsed = useMemo(() => parseVariants(raw), [raw]);
 
@@ -319,23 +345,35 @@ export function CopyVariationsTool() {
           </div>
         </div>
 
-        <label className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            className="h-3.5 w-3.5 accent-accent"
-            checked={showAll}
-            onChange={(e) => setShowAll(e.target.checked)}
-          />
-          Show all campaigns
-          {allCampaigns.length > 0 && (
-            <span>
-              · {formatNumber(allCampaigns.length)} in this workspace
-              {hiddenCount > 0 &&
-                !showAll &&
-                ` (${hiddenBreakdown.join(", ")} hidden)`}
-            </span>
-          )}
-        </label>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <label className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 accent-accent"
+              checked={showAll}
+              onChange={(e) => setShowAll(e.target.checked)}
+            />
+            Show all campaigns
+            {allCampaigns.length > 0 && (
+              <span>
+                · {formatNumber(allCampaigns.length)} in this workspace
+                {hiddenCount > 0 &&
+                  !showAll &&
+                  ` (${hiddenBreakdown.join(", ")} hidden)`}
+              </span>
+            )}
+          </label>
+          <button
+            type="button"
+            className="pv-btn-ghost text-xs"
+            onClick={handleRefresh}
+            disabled={!workspaceId || refreshing || campaignsLoading}
+            title="Re-read the campaign list and the selected campaign from Plusvibe"
+          >
+            {refreshing ? <Spinner size={14} /> : <RefreshIcon size={14} />}
+            Refresh
+          </button>
+        </div>
       </div>
 
       {error && (
