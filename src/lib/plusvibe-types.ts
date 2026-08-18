@@ -103,8 +103,14 @@ export interface CampaignSummary {
 export interface CampaignStepInfo {
   step: number;
   waitTime: number;
-  /** Variation labels present in the editable `sequences` array. */
+  /** Live variations — `sequences` minus anything Plusvibe has deleted. */
   variations: SequenceVariation[];
+  /**
+   * Labels still returned by `sequences` but marked deleted in variation-stats.
+   * Duplicating a campaign or removing steps leaves these behind; writing them
+   * back would resurrect them as live copy, so they're dropped.
+   */
+  deletedVariations: string[];
   /**
    * Labels that variation-stats knows about but `sequences` does not — usually
    * disabled variants. They can't be preserved through a write, so we never

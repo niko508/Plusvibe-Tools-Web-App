@@ -4,9 +4,10 @@ import { errorResponse } from "@/lib/api-response";
 import {
   MAX_VARIATIONS_PER_STEP,
   fetchCampaignRaw,
-  fetchKnownVariationLabels,
+  fetchVariationFlags,
   nextVariationLabels,
   normalizeSequences,
+  splitDeleted,
   toWriteStep,
 } from "@/lib/plusvibe-campaigns";
 import type { SequenceVariation } from "@/lib/plusvibe-types";
@@ -70,13 +71,25 @@ export async function POST(request: Request) {
     if (!raw) {
       return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
     }
-    const sequences = normalizeSequences(raw.sequences);
-    if (sequences.length === 0) {
+    const rawSequences = normalizeSequences(raw.sequences);
+    if (rawSequences.length === 0) {
       return NextResponse.json(
         { error: "This campaign has no sequence steps to add variants to." },
         { status: 400 }
       );
     }
+
+    // `sequences` keeps returning variations that were deleted in Plusvibe, and
+    // carries no flag to identify them. Writing them back resurrects them as
+    // live copy, so drop them from EVERY step before doing anything else.
+    const flags = await fetchVariationFlags(apiKey, workspace_id, campaign_id);
+    let droppedDeleted = 0;
+    const sequences = rawSequences.map((s) => {
+      const { live, deleted } = splitDeleted(s.step, s.variations, flags);
+      droppedDeleted += deleted.length;
+      return { ...s, variations: live };
+    });
+
     const target = sequences.find((s) => s.step === step);
     if (!target) {
       return NextResponse.json(
@@ -131,16 +144,18 @@ export async function POST(request: Request) {
     }
 
     // --- Allocate labels ---------------------------------------------------
-    // Disabled variants can be missing from `sequences` yet still hold a letter,
-    // so fold those in before picking new ones.
-    const known = await fetchKnownVariationLabels(
-      apiKey,
-      workspace_id,
-      campaign_id
-    );
+    // Reserve letters held by live variations and by disabled ones (which can be
+    // missing from `sequences` yet still occupy a letter). Letters belonging to
+    // DELETED variations are free again, so new variants can reuse them.
+    const stepFlags = flags.get(step);
+    const disabledLabels = stepFlags
+      ? Array.from(stepFlags.entries())
+          .filter(([, f]) => !f.isDel)
+          .map(([label]) => label)
+      : [];
     const used = new Set<string>([
       ...target.variations.map((v) => v.variation),
-      ...(known.get(step) ?? []),
+      ...disabledLabels,
     ]);
     const remaining = MAX_VARIATIONS_PER_STEP - used.size;
     if (fresh.length > remaining) {
@@ -215,6 +230,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       added: added.map((v) => ({ variation: v.variation, name: v.name })),
       skipped,
+      droppedDeleted,
       subject,
       step,
       before: target.variations.length,

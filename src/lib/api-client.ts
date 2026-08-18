@@ -132,6 +132,8 @@ export interface AddVariationsResult {
   added: { variation: string; name: string }[];
   /** Variants skipped because an identical body is already on the step. */
   skipped: string[];
+  /** Stale deleted variations cleared out of the sequence by this write. */
+  droppedDeleted: number;
   subject: string;
   step: number;
   before: number;

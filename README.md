@@ -34,6 +34,17 @@ variation."*) So every write here is a read-modify-write:
 3. `PATCH` the full array, then **re-read to verify** the variation count landed
    (the PATCH response doesn't echo the sequences back).
 
+**`sequences` also returns variations that were deleted in the Plusvibe UI.**
+Duplicating a campaign or removing steps leaves them behind, and the sequences
+payload carries no flag to tell them apart — Plusvibe's own UI hides them, so a
+step showing 1 variation can come back from the API with 37. Writing those back
+would **resurrect them as live copy**. So before any read or write, the tool
+cross-references `GET /campaign/get/variation-stats`, which does expose
+`is_del`, and drops anything explicitly marked deleted from every step. (Only
+explicitly-flagged variations are dropped — a variation merely absent from stats
+is kept, since absence isn't proof of deletion.) A write therefore also cleans
+the stale entries out of the sequence.
+
 Other safeguards:
 
 - **Subject line is preserved**, not regenerated — new variants inherit the

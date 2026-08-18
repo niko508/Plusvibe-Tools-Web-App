@@ -357,6 +357,8 @@ export function CopyVariationsTool() {
                       <div className="text-xs text-muted-foreground">
                         {formatNumber(s.variations.length)} variation
                         {s.variations.length === 1 ? "" : "s"}
+                        {s.deletedVariations.length > 0 &&
+                          ` · ${s.deletedVariations.length} stale`}
                         {s.hiddenVariations.length > 0 &&
                           ` · ${s.hiddenVariations.length} hidden`}
                       </div>
@@ -559,6 +561,14 @@ export function CopyVariationsTool() {
                       {formatNumber(result.skipped.length)} skipped as duplicate
                       {result.skipped.length === 1 ? "" : "s"} of copy already on
                       the step.
+                    </div>
+                  )}
+                  {result.droppedDeleted > 0 && (
+                    <div className="mt-1 text-muted-foreground">
+                      Also cleared {formatNumber(result.droppedDeleted)} stale
+                      variation
+                      {result.droppedDeleted === 1 ? "" : "s"} that Plusvibe had
+                      deleted but the API was still returning.
                     </div>
                   )}
                 </>

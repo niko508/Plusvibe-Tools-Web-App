@@ -37,6 +37,12 @@ function num(v: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+// Keeps warning text readable when dozens of stale labels come back.
+function truncateList(items: string[], max = 12): string {
+  if (items.length <= max) return items.join(", ");
+  return `${items.slice(0, max).join(", ")} … +${items.length - max} more`;
+}
+
 // The API returns a bare array; tolerate an envelope just in case.
 function asArray(data: unknown): unknown[] {
   if (Array.isArray(data)) return data;
@@ -126,18 +132,32 @@ export async function fetchCampaignRaw(
   return match ?? null;
 }
 
+export interface VariationFlags {
+  isDel: boolean;
+  isActive: boolean;
+}
+
+/** step -> variation label -> flags */
+export type FlagMap = Map<number, Map<string, VariationFlags>>;
+
 /**
- * Variation labels per step according to variation-stats. Disabled variants can
- * be missing from `sequences` while still living in the campaign, so their
- * letters must never be reused. Best-effort: a failure here just yields an
- * empty map rather than blocking the read.
+ * Per-variation flags from variation-stats.
+ *
+ * This matters more than it looks: `sequences` keeps returning variations that
+ * were DELETED in the Plusvibe UI (duplicating a campaign or removing steps
+ * leaves them behind), and the sequences payload carries no is_del field to
+ * tell them apart. Writing those back would resurrect them as live copy, so
+ * they have to be identified here and dropped before any write.
+ *
+ * Best-effort: if stats are unavailable we return an empty map and keep
+ * everything, since we can't prove anything is deleted.
  */
-export async function fetchKnownVariationLabels(
+export async function fetchVariationFlags(
   apiKey: string,
   workspace_id: string,
   campaign_id: string
-): Promise<Map<number, string[]>> {
-  const byStep = new Map<number, string[]>();
+): Promise<FlagMap> {
+  const byStep: FlagMap = new Map();
   try {
     const data = await plusvibeGet<unknown>({
       apiKey,
@@ -148,13 +168,15 @@ export async function fetchKnownVariationLabels(
       const step = s as Record<string, unknown>;
       const stepNo = num(step.step);
       if (!stepNo) continue;
-      const labels: string[] = [];
+      const labels = new Map<string, VariationFlags>();
       for (const v of asArray(step.variations)) {
         const va = v as Record<string, unknown>;
-        // A deleted variation is gone for good — its letter is free to reuse.
-        if (va.is_del === true) continue;
         const label = str(va.variation);
-        if (label) labels.push(label);
+        if (!label) continue;
+        labels.set(label, {
+          isDel: va.is_del === true,
+          isActive: va.is_active !== false,
+        });
       }
       byStep.set(stepNo, labels);
     }
@@ -164,32 +186,70 @@ export async function fetchKnownVariationLabels(
   return byStep;
 }
 
+/**
+ * Splits a step's variations into the ones that are really there and the ones
+ * Plusvibe has deleted. Only variations stats EXPLICITLY marks is_del are
+ * treated as deleted — a variation simply missing from stats (e.g. never sent)
+ * is kept, since absence is not proof of deletion.
+ */
+export function splitDeleted(
+  step: number,
+  variations: SequenceVariation[],
+  flags: FlagMap
+): { live: SequenceVariation[]; deleted: SequenceVariation[] } {
+  const forStep = flags.get(step);
+  if (!forStep) return { live: variations, deleted: [] };
+  const live: SequenceVariation[] = [];
+  const deleted: SequenceVariation[] = [];
+  for (const v of variations) {
+    if (forStep.get(v.variation)?.isDel === true) deleted.push(v);
+    else live.push(v);
+  }
+  return { live, deleted };
+}
+
 /** Builds the UI-facing campaign view, flagging variants we can't preserve. */
 export function toCampaignDetail(
   raw: RawCampaign,
-  known: Map<number, string[]>
+  flags: FlagMap
 ): CampaignDetail {
   const sequences = normalizeSequences(raw.sequences);
   const warnings: string[] = [];
 
   const steps: CampaignStepInfo[] = sequences.map((s) => {
+    const { live, deleted } = splitDeleted(s.step, s.variations, flags);
+    const forStep = flags.get(s.step);
     const present = new Set(s.variations.map((v) => v.variation));
-    const hidden = (known.get(s.step) ?? []).filter((l) => l && !present.has(l));
-    const subject = s.variations.find((v) => v.subject)?.subject ?? "";
+    // Labels stats knows about that aren't in `sequences` at all, excluding
+    // deleted ones (those are simply gone).
+    const hidden = forStep
+      ? Array.from(forStep.entries())
+          .filter(([label, f]) => !f.isDel && !present.has(label))
+          .map(([label]) => label)
+      : [];
+    const subject = live.find((v) => v.subject)?.subject ?? "";
     return {
       step: s.step,
       waitTime: s.wait_time ?? 0,
-      variations: s.variations,
+      variations: live,
+      deletedVariations: deleted.map((v) => v.variation),
       hiddenVariations: hidden,
       subject,
     };
   });
 
   for (const s of steps) {
+    if (s.deletedVariations.length > 0) {
+      warnings.push(
+        `Step ${s.step}: the API still returns ${s.deletedVariations.length} variation(s) that were deleted in Plusvibe (${truncateList(
+          s.deletedVariations
+        )}). They're excluded here and won't be written back, so they stay deleted.`
+      );
+    }
     if (s.hiddenVariations.length > 0) {
       warnings.push(
-        `Step ${s.step}: ${s.hiddenVariations.length} variation(s) (${s.hiddenVariations.join(
-          ", "
+        `Step ${s.step}: ${s.hiddenVariations.length} variation(s) (${truncateList(
+          s.hiddenVariations
         )}) exist on the campaign but aren't editable through the API — most likely disabled. Their letters won't be reused, but saving this step may drop them. Re-enable or remove them in Plusvibe first if you need them kept.`
       );
     }

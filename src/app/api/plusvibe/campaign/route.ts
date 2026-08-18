@@ -3,7 +3,7 @@ import { resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import {
   fetchCampaignRaw,
-  fetchKnownVariationLabels,
+  fetchVariationFlags,
   toCampaignDetail,
 } from "@/lib/plusvibe-campaigns";
 
@@ -29,12 +29,8 @@ export async function GET(request: Request) {
     if (!raw) {
       return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
     }
-    const known = await fetchKnownVariationLabels(
-      apiKey,
-      workspace_id,
-      campaign_id
-    );
-    return NextResponse.json(toCampaignDetail(raw, known));
+    const flags = await fetchVariationFlags(apiKey, workspace_id, campaign_id);
+    return NextResponse.json(toCampaignDetail(raw, flags));
   } catch (err) {
     return errorResponse(err);
   }
