@@ -164,8 +164,14 @@ function trimBlank(lines: string[]): string[] {
   return lines.slice(start, end);
 }
 
-// Converts a plain-text body into the HTML the campaign editor stores: one <p>
-// per blank-line-separated block, single newlines inside a block become <br>.
+// Converts a plain-text body into the HTML the campaign editor stores.
+//
+// Plusvibe's editor uses one <div> per paragraph with a spacer <div> between
+// them for the blank line — matching the shape in the API docs:
+//   <div>Hello {{first_name}},</div><div>&nbsp;</div><div>I noticed…</div>
+// Emitting <p> instead loses the spacing, because the editor gives paragraphs
+// no margin and everything renders tight against the next line.
+//
 // Spintax ({{Random | … }}) and Liquid ({% if … %}) contain no HTML-special
 // characters, so escaping the text is safe and leaves them intact.
 export function bodyToHtml(body: string): string {
@@ -177,12 +183,12 @@ export function bodyToHtml(body: string): string {
   return blocks
     .map(
       (block) =>
-        `<p>${block
+        `<div>${block
           .split("\n")
           .map((line) => escapeHtml(line.trim()))
-          .join("<br />")}</p>`
+          .join("<br />")}</div>`
     )
-    .join("");
+    .join("<div>&nbsp;</div>");
 }
 
 function escapeHtml(s: string): string {
