@@ -7,6 +7,7 @@ import {
   DEFAULT_SHEET_TAB,
   DEFAULT_SHEET_URL,
   MAX_DELAY_HOURS,
+  MAX_DELAY_MINUTES,
 } from "@/lib/jobs/azure-warmup-types";
 
 export const dynamic = "force-dynamic";
@@ -27,14 +28,14 @@ export async function POST(request: Request) {
       );
     }
 
-    const delayHours = Number(body.delayHours ?? 0);
-    if (!Number.isFinite(delayHours) || delayHours < 0) {
+    const delayMinutes = Math.round(Number(body.delayMinutes ?? 0));
+    if (!Number.isFinite(delayMinutes) || delayMinutes < 0) {
       return NextResponse.json(
-        { error: "Delay must be 0 or more hours." },
+        { error: "Delay must be 0 or more minutes." },
         { status: 400 }
       );
     }
-    if (delayHours > MAX_DELAY_HOURS) {
+    if (delayMinutes > MAX_DELAY_MINUTES) {
       return NextResponse.json(
         { error: `Delay can be at most ${MAX_DELAY_HOURS} hours.` },
         { status: 400 }
@@ -69,7 +70,7 @@ export async function POST(request: Request) {
     const payload: AzureStartPayload = {
       workspaceId,
       workspaceName: String(body.workspaceName ?? ""),
-      delayHours,
+      delayMinutes,
       sheetUrl: String(body.sheetUrl || DEFAULT_SHEET_URL),
       sheetTab: String(body.sheetTab || DEFAULT_SHEET_TAB),
       rows,

@@ -10,6 +10,7 @@ import {
   DEFAULT_SHEET_TAB,
   DEFAULT_SHEET_URL,
   MAX_DELAY_HOURS,
+  MAX_DELAY_MINUTES,
 } from "@/lib/jobs/azure-warmup-types";
 import {
   fetchWorkspaces,
@@ -45,7 +46,8 @@ export function AzureWarmupTool() {
 
   const [fileName, setFileName] = useState("");
   const [raw, setRaw] = useState("");
-  const [delayHours, setDelayHours] = useState("0");
+  const [delayH, setDelayH] = useState("0");
+  const [delayM, setDelayM] = useState("0");
   const [sheetUrl, setSheetUrl] = useState(DEFAULT_SHEET_URL);
   const [sheetTab, setSheetTab] = useState(DEFAULT_SHEET_TAB);
   const [erroredRaw, setErroredRaw] = useState("");
@@ -136,9 +138,16 @@ export function AzureWarmupTool() {
     }
   }
 
-  const delayNum = Number(delayHours);
+  const hNum = delayH.trim() === "" ? 0 : Number(delayH);
+  const mNum = delayM.trim() === "" ? 0 : Number(delayM);
+  const delayMinutes =
+    Number.isFinite(hNum) && Number.isFinite(mNum)
+      ? Math.round(hNum) * 60 + Math.round(mNum)
+      : NaN;
   const delayValid =
-    Number.isFinite(delayNum) && delayNum >= 0 && delayNum <= MAX_DELAY_HOURS;
+    Number.isFinite(delayMinutes) &&
+    delayMinutes >= 0 &&
+    delayMinutes <= MAX_DELAY_MINUTES;
   const canStart =
     !!workspaceId && parsed.rows.length > 0 && delayValid && !starting;
 
@@ -152,7 +161,7 @@ export function AzureWarmupTool() {
       await startAzureWarmup({
         workspaceId,
         workspaceName: wsName,
-        delayHours: delayNum,
+        delayMinutes,
         sheetUrl,
         sheetTab,
         rows: parsed.rows,
@@ -161,9 +170,11 @@ export function AzureWarmupTool() {
       setRaw("");
       setFileName("");
       setErroredRaw("");
+      setDelayH("0");
+      setDelayM("0");
       setToast(
-        delayNum > 0
-          ? `Job scheduled — starts in ${delayNum} hour${delayNum === 1 ? "" : "s"}`
+        delayMinutes > 0
+          ? `Job scheduled — starts in ${formatDuration(delayMinutes)}`
           : "Job started — safe to close the tab"
       );
       await refreshJobs();
@@ -195,7 +206,7 @@ export function AzureWarmupTool() {
 
       {/* Setup */}
       <div className="pv-card space-y-4 p-4 sm:p-5">
-        <div className="grid gap-4 sm:grid-cols-[1fr_160px]">
+        <div className="grid gap-4 sm:grid-cols-[1fr_220px]">
           <div>
             <label className="mb-1.5 block text-sm font-medium">Workspace</label>
             <div className="relative">
@@ -229,13 +240,30 @@ export function AzureWarmupTool() {
                 min={0}
                 max={MAX_DELAY_HOURS}
                 className="pv-input w-full tabular-nums"
-                value={delayHours}
-                onChange={(e) => setDelayHours(e.target.value)}
+                value={delayH}
+                onChange={(e) => setDelayH(e.target.value)}
+                aria-label="Delay hours"
               />
               <span className="text-sm text-muted-foreground">h</span>
+              <input
+                type="number"
+                min={0}
+                max={59}
+                className="pv-input w-full tabular-nums"
+                value={delayM}
+                onChange={(e) => setDelayM(e.target.value)}
+                aria-label="Delay minutes"
+              />
+              <span className="text-sm text-muted-foreground">m</span>
             </div>
-            <div className="mt-1 text-[11px] text-muted-foreground">
-              {delayNum === 0 ? "starts right away" : `waits ${delayNum}h first`}
+            <div
+              className={`mt-1 text-[11px] ${delayValid ? "text-muted-foreground" : "text-danger"}`}
+            >
+              {!delayValid
+                ? `Between 0 and ${MAX_DELAY_HOURS}h`
+                : delayMinutes === 0
+                  ? "starts right away"
+                  : `waits ${formatDuration(delayMinutes)} first`}
             </div>
           </div>
         </div>
@@ -386,7 +414,9 @@ export function AzureWarmupTool() {
             onClick={handleStart}
           >
             {starting ? <Spinner /> : <FireIcon size={16} />}
-            {delayNum > 0 ? `Schedule in ${delayNum}h` : "Start warmup"}
+            {delayValid && delayMinutes > 0
+              ? `Schedule in ${formatDuration(delayMinutes)}`
+              : "Start warmup"}
           </button>
           <span className="text-xs text-muted-foreground">
             Updates the Domains sheet, then checks Plusvibe hourly for up to 7
@@ -808,14 +838,21 @@ function Metric({
   );
 }
 
+/** "2h 14m", "6d 3h", "47m" — enough precision to plan around. */
+function formatDuration(totalMinutes: number): string {
+  const mins = Math.max(0, Math.round(totalMinutes));
+  const d = Math.floor(mins / 1440);
+  const h = Math.floor((mins % 1440) / 60);
+  const m = mins % 60;
+  if (d > 0) return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  return `${m}m`;
+}
+
 function timeUntil(ts: number): string {
   const diff = ts - Date.now();
   if (diff <= 0) return "now";
-  const m = Math.round(diff / 60000);
-  if (m < 60) return `in ${m}m`;
-  const h = Math.round(m / 60);
-  if (h < 48) return `in ${h}h`;
-  return `in ${Math.round(h / 24)}d`;
+  return `in ${formatDuration(diff / 60000)}`;
 }
 
 function relativeTime(ts: number): string {

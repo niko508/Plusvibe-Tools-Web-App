@@ -213,7 +213,7 @@ export async function createJob(
   await loadOnce();
   const id = randomUUID();
   const now = Date.now();
-  const startsAt = now + Math.max(0, payload.delayHours) * 60 * 60 * 1000;
+  const startsAt = now + Math.max(0, payload.delayMinutes) * 60 * 1000;
 
   // Inboxes known to have errored elsewhere are dropped before anything else,
   // so they never count toward the totals and are never waited on.
@@ -246,8 +246,8 @@ export async function createJob(
   const rec: StoredJob = {
     id,
     label: `${domains.length} domains · ${rows.length} inboxes`,
-    status: payload.delayHours > 0 ? "waiting" : "running",
-    phase: payload.delayHours > 0 ? "waiting" : "sheet",
+    status: payload.delayMinutes > 0 ? "waiting" : "running",
+    phase: payload.delayMinutes > 0 ? "waiting" : "sheet",
     createdAt: now,
     updatedAt: now,
     startsAt,
