@@ -8,6 +8,7 @@ import {
   startBulkDelete,
   listBulkDeleteJobs,
   abortBulkDelete,
+  deleteBulkDeleteJob,
   fetchSheetMap,
   ApiClientError,
 } from "@/lib/api-client";
@@ -17,7 +18,7 @@ import { formatNumber } from "@/lib/format";
 import { copyToClipboard } from "@/lib/clipboard";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { StatCard } from "@/components/stat-card";
-import { Spinner, EmptyState } from "@/components/ui";
+import { Spinner, EmptyState, RemoveJobButton } from "@/components/ui";
 import {
   TrashIcon,
   AlertIcon,
@@ -284,6 +285,15 @@ export function RemoveInboxesTool() {
     }
   }
 
+  async function handleRemoveJob(id: string) {
+    try {
+      await deleteBulkDeleteJob(id);
+      await refreshJobs();
+    } catch (err) {
+      setError(errMessage(err));
+    }
+  }
+
   // --- Render --------------------------------------------------------------
   if (!ready) return <div className="pv-card h-40 animate-pulse" />;
   if (!hasKey) return <ConnectPrompt onConnected={loadWorkspaces} />;
@@ -395,6 +405,7 @@ export function RemoveInboxesTool() {
         jobs={jobs}
         highlightJobId={highlightJobId}
         onAbort={handleAbortJob}
+        onRemove={handleRemoveJob}
       />
     </div>
   );
@@ -667,10 +678,12 @@ function JobsPanel({
   jobs,
   highlightJobId,
   onAbort,
+  onRemove,
 }: {
   jobs: JobRecord[];
   highlightJobId: string | null;
   onAbort: (id: string) => void;
+  onRemove: (id: string) => void | Promise<void>;
 }) {
   return (
     <div className="space-y-3">
@@ -687,6 +700,7 @@ function JobsPanel({
             job={job}
             highlight={job.id === highlightJobId}
             onAbort={onAbort}
+            onRemove={onRemove}
           />
         ))
       )}
@@ -706,10 +720,12 @@ function JobCard({
   job,
   highlight,
   onAbort,
+  onRemove,
 }: {
   job: JobRecord;
   highlight: boolean;
   onAbort: (id: string) => void;
+  onRemove: (id: string) => void | Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const p = job.progress;
@@ -828,6 +844,9 @@ function JobCard({
             <DownloadIcon size={16} />
             Errors
           </button>
+        )}
+        {job.status !== "running" && (
+          <RemoveJobButton onRemove={() => onRemove(job.id)} />
         )}
       </div>
 

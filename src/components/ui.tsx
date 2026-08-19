@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { Health } from "@/lib/format";
 
 export function Spinner({ size = 16 }: { size?: number }) {
@@ -38,6 +39,52 @@ export function healthText(health: Health) {
 
 export function Skeleton({ className = "" }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-muted ${className}`} />;
+}
+
+/**
+ * "Remove" action for a finished job card. The first click arms it and the
+ * second confirms, so a stray click can't wipe a run's results; the armed
+ * state disarms itself after a few seconds.
+ */
+export function RemoveJobButton({
+  onRemove,
+  disabled,
+}: {
+  onRemove: () => void | Promise<void>;
+  disabled?: boolean;
+}) {
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 5000);
+    return () => clearTimeout(t);
+  }, [armed]);
+
+  return (
+    <button
+      type="button"
+      className={`pv-btn-ghost ${armed ? "text-danger" : ""}`}
+      disabled={disabled || busy}
+      onClick={async () => {
+        if (!armed) {
+          setArmed(true);
+          return;
+        }
+        setBusy(true);
+        try {
+          await onRemove();
+        } finally {
+          setBusy(false);
+          setArmed(false);
+        }
+      }}
+    >
+      {busy ? <Spinner size={14} /> : null}
+      {armed ? "Confirm remove" : "Remove"}
+    </button>
+  );
 }
 
 export function EmptyState({

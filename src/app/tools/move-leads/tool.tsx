@@ -11,12 +11,13 @@ import {
   startMoveLeads,
   listMoveLeadsJobs,
   abortMoveLeads,
+  deleteMoveLeadsJob,
   ApiClientError,
 } from "@/lib/api-client";
 import { useApiKey } from "@/lib/use-api-key";
 import { formatNumber } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
-import { Spinner, EmptyState } from "@/components/ui";
+import { Spinner, EmptyState, RemoveJobButton } from "@/components/ui";
 import {
   MoveIcon,
   AlertIcon,
@@ -267,6 +268,15 @@ export function MoveLeadsTool() {
     }
   }
 
+  async function handleRemoveJob(id: string) {
+    try {
+      await deleteMoveLeadsJob(id);
+      await refreshJobs();
+    } catch {
+      // ignore
+    }
+  }
+
   // --- Render --------------------------------------------------------------
   if (!ready) return <div className="pv-card h-40 animate-pulse" />;
   if (!hasKey) return <ConnectPrompt onConnected={loadWorkspaces} />;
@@ -493,6 +503,7 @@ export function MoveLeadsTool() {
               job={job}
               highlight={highlight.includes(job.id)}
               onAbort={handleAbort}
+              onRemove={handleRemoveJob}
             />
           ))
         )}
@@ -534,10 +545,12 @@ function JobCard({
   job,
   highlight,
   onAbort,
+  onRemove,
 }: {
   job: MoveLeadsJob;
   highlight: boolean;
   onAbort: (id: string) => void;
+  onRemove: (id: string) => void | Promise<void>;
 }) {
   const p = job.progress;
   const total = p.found || p.requested;
@@ -621,8 +634,8 @@ function JobCard({
         </p>
       )}
 
-      {job.status === "running" && (
-        <div className="mt-4">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        {job.status === "running" ? (
           <button
             type="button"
             className="pv-btn-ghost"
@@ -630,8 +643,10 @@ function JobCard({
           >
             Stop task
           </button>
-        </div>
-      )}
+        ) : (
+          <RemoveJobButton onRemove={() => onRemove(job.id)} />
+        )}
+      </div>
     </div>
   );
 }

@@ -310,6 +310,38 @@ export function resumeAzureWarmup(jobId: string, signal?: AbortSignal) {
   });
 }
 
+export function deleteBulkDeleteJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/bulk-delete/delete", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
+export function deleteRemove50Job(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/remove-50/delete", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
+export function deleteMoveLeadsJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/move-leads/delete", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
+export function deleteAzureWarmupJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/azure-warmup/delete", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
 export interface TagsResponse {
   tags: { id: string; name: string }[];
 }

@@ -19,13 +19,14 @@ import {
   listAzureWarmupJobs,
   abortAzureWarmup,
   resumeAzureWarmup,
+  deleteAzureWarmupJob,
   ApiClientError,
 } from "@/lib/api-client";
 import { useApiKey } from "@/lib/use-api-key";
 import { formatNumber } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { StatCard } from "@/components/stat-card";
-import { Spinner, EmptyState } from "@/components/ui";
+import { Spinner, EmptyState, RemoveJobButton } from "@/components/ui";
 import {
   FireIcon,
   AlertIcon,
@@ -467,6 +468,14 @@ export function AzureWarmupTool() {
                   setError(errMessage(err));
                 }
               }}
+              onRemove={async (id) => {
+                try {
+                  await deleteAzureWarmupJob(id);
+                  await refreshJobs();
+                } catch (err) {
+                  setError(errMessage(err));
+                }
+              }}
             />
           ))
         )}
@@ -510,11 +519,13 @@ function JobCard({
   onAbort,
   onResume,
   onIgnore,
+  onRemove,
 }: {
   job: AzureWarmupJob;
   onAbort: (id: string) => void;
   onResume: (id: string) => void;
   onIgnore: (id: string, emails: string[]) => void;
+  onRemove: (id: string) => void | Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const [skipOpen, setSkipOpen] = useState(false);
@@ -677,6 +688,9 @@ function JobCard({
           >
             Skip errored
           </button>
+        )}
+        {job.status !== "running" && job.status !== "waiting" && (
+          <RemoveJobButton onRemove={() => onRemove(job.id)} />
         )}
       </div>
 

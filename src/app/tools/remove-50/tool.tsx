@@ -13,13 +13,14 @@ import {
   startRemove50,
   listRemove50Jobs,
   abortRemove50,
+  deleteRemove50Job,
   ApiClientError,
 } from "@/lib/api-client";
 import { useApiKey } from "@/lib/use-api-key";
 import { formatNumber, domainFromEmail } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { StatCard } from "@/components/stat-card";
-import { Spinner, EmptyState } from "@/components/ui";
+import { Spinner, EmptyState, RemoveJobButton } from "@/components/ui";
 import {
   FireIcon,
   AlertIcon,
@@ -263,6 +264,15 @@ export function Remove50Tool() {
     }
   }
 
+  async function handleRemoveJob(id: string) {
+    try {
+      await deleteRemove50Job(id);
+      await refreshJobs();
+    } catch {
+      // ignore
+    }
+  }
+
   // --- Render --------------------------------------------------------------
   if (!ready) return <div className="pv-card h-40 animate-pulse" />;
   if (!hasKey) return <ConnectPrompt onConnected={loadWorkspaces} />;
@@ -475,6 +485,7 @@ export function Remove50Tool() {
         jobs={jobs}
         highlightJobId={highlightJobId}
         onAbort={handleAbortJob}
+        onRemove={handleRemoveJob}
       />
 
       {toast && (
@@ -570,10 +581,12 @@ function JobsPanel({
   jobs,
   highlightJobId,
   onAbort,
+  onRemove,
 }: {
   jobs: Remove50Job[];
   highlightJobId: string | null;
   onAbort: (id: string) => void;
+  onRemove: (id: string) => void | Promise<void>;
 }) {
   return (
     <div className="space-y-3">
@@ -590,6 +603,7 @@ function JobsPanel({
             job={job}
             highlight={job.id === highlightJobId}
             onAbort={onAbort}
+            onRemove={onRemove}
           />
         ))
       )}
@@ -609,10 +623,12 @@ function JobCard({
   job,
   highlight,
   onAbort,
+  onRemove,
 }: {
   job: Remove50Job;
   highlight: boolean;
   onAbort: (id: string) => void;
+  onRemove: (id: string) => void | Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const p = job.progress;
@@ -737,6 +753,9 @@ function JobCard({
         >
           {open ? "Hide details" : "Details"}
         </button>
+        {job.status !== "running" && (
+          <RemoveJobButton onRemove={() => onRemove(job.id)} />
+        )}
       </div>
 
       {open && (

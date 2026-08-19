@@ -389,6 +389,30 @@ export async function countRunning(apiKey: string): Promise<number> {
   return jobs.filter((j) => j.status === "running").length;
 }
 
+/**
+ * Permanently removes a job and its persisted record.
+ *
+ * A live runner is aborted first: it holds a reference to the same meta object,
+ * so flipping `aborted` stops it, and once the record is out of `records` any
+ * later persist() from its finally block is a no-op rather than recreating the
+ * file we just deleted.
+ */
+export async function deleteJob(apiKey: string, id: string): Promise<boolean> {
+  await loadOnce();
+  const rec = records.get(id);
+  const m = meta.get(id);
+  if (!rec || !m || m.fingerprint !== fingerprintKey(apiKey)) return false;
+  m.aborted = true;
+  records.delete(id);
+  meta.delete(id);
+  try {
+    await fs.unlink(fileFor(id));
+  } catch {
+    // already gone from disk — nothing to do
+  }
+  return true;
+}
+
 export async function abortJob(apiKey: string, id: string): Promise<boolean> {
   await loadOnce();
   const rec = records.get(id);
