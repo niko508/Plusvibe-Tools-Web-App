@@ -18,6 +18,10 @@ import type {
   MoveLeadsJob,
   MoveLeadsStartPayload,
 } from "@/lib/jobs/move-leads-types";
+import type {
+  AzureWarmupJob,
+  AzureStartPayload,
+} from "@/lib/jobs/azure-warmup-types";
 
 export type { WarmupSettings } from "@/lib/jobs/remove-50-types";
 
@@ -251,6 +255,44 @@ export function getMoveLeadsJob(jobId: string, signal?: AbortSignal) {
 
 export function abortMoveLeads(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/move-leads/abort", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
+// --- Azure Start Warmup background jobs -------------------------------------
+
+export interface AzureJobsResponse {
+  jobs: AzureWarmupJob[];
+  sheetWriting: { configured: boolean; serviceAccount: string | null };
+}
+
+export function startAzureWarmup(
+  payload: AzureStartPayload,
+  signal?: AbortSignal
+) {
+  return request<{ jobId: string }>("/api/jobs/azure-warmup/start", {
+    method: "POST",
+    body: payload,
+    signal,
+  });
+}
+
+export function listAzureWarmupJobs(signal?: AbortSignal) {
+  return request<AzureJobsResponse>("/api/jobs/azure-warmup/list", { signal });
+}
+
+export function abortAzureWarmup(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/azure-warmup/abort", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
+export function resumeAzureWarmup(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/azure-warmup/resume", {
     method: "POST",
     body: { jobId },
     signal,

@@ -10,6 +10,7 @@ point it at a workspace, and run work that would otherwise take dozens of clicks
 | --- | --- | --- |
 | **Domain Performance Monitoring** | ✅ Live | Breaks a workspace's email stats down by **sending domain** over any date range — sent volume, reply / positive-reply rates, and bounce rate, side by side, with an over-time chart and CSV export. |
 | **Create Email Copy Variations** | ✅ Live | Pick a campaign, paste a batch of variants in the `VARIANT n — name` format, and add them all to a sequence step in one pass — keeping the existing subject line and the variants already there. |
+| **Azure Start Warmup** | ✅ Live | Upload the Azure mailbox export and the run does the rest: writes each domain's tenant email + a "Warming Up" status into the Domains sheet, then polls Plusvibe **hourly for up to 7 days**, applying the standard warmup config and switching warmup on for each inbox as it appears. Survives closing the tab; inboxes that never show up are listed for troubleshooting. |
 | **Move Leads to Another Campaign** | ✅ Live | Moves a set number of **not-contacted** leads between campaigns in a workspace, carrying their fields and custom variables across. Up to three source → destination pairs run at once as **background jobs** with per-pair progress. |
 | **Remove Personalized Opening Line** | ✅ Live | Strips the opening-line personalization from a whole campaign: unwraps the `{{fallback\| {{subject_line}} \| …}}` subject on every variation and removes `{{opening_line}}` from every body, leaving the variations and the rest of the copy untouched. Previews every change before applying. |
 | **Remove 50 Inboxes from Domain** | ✅ Live | Trims every domain in a workspace down to 50 inboxes, deleting the **worst warmup-health** ones first, then applies the standard warmup config and enables warmup on the ones kept. Runs as a background job. |
@@ -17,6 +18,51 @@ point it at a workspace, and run work that would otherwise take dozens of clicks
 | **Remove Inboxes** | ✅ Live | Paste a list of sending domains, scan every workspace to find their inboxes, preview exactly what will be removed, then delete them in a **server-side background job** you can leave running. |
 | Mailbox Health Audit | 🔜 Planned | Scan every mailbox for warmup health, bounce rates and disconnects. |
 | Bulk Mailbox Actions | 🔜 Planned | Apply daily-limit, warmup and tagging changes across many mailboxes at once. |
+
+## How Azure Start Warmup works
+
+A run has three phases and can span days, so it lives entirely server-side:
+
+1. **Wait** — an optional delay (0–72h) before anything happens.
+2. **Sheet** — matches every domain in the upload against the `Domain` column of
+   the Domains tab, then writes the `Tenant Email Address` and sets `Status` to
+   `Warming Up`. Columns are located by header name, not position. Domains with
+   no row in the tab are reported rather than silently skipped. A sheet failure
+   is **not fatal** — the Plusvibe half still runs.
+3. **Poll** — every hour, lists the workspace's inboxes and, for every uploaded
+   address that has appeared since the last check, applies the warmup config
+   (daily limit 18, ramp-up on from 2 with +3/day, 10% randomization, 46% reply
+   rate, `America/New_York`) and PATCHes warmup to `ACTIVE`. It stops when every
+   uploaded inbox is warming, or after **7 days** — whichever comes first.
+
+Anything that fails on one pass stays pending and is retried on the next, so a
+transient API error doesn't lose inboxes. Inboxes that never appeared are listed
+in the run and downloadable as CSV for troubleshooting.
+
+Because a run outlives any deploy, the whole state (including the uploaded rows
+and which inboxes are already warming) is persisted. A run interrupted by a
+redeploy shows a **Resume** button, which restarts it from where it stopped and
+skips what's already done. Mailbox passwords in the CSV are never read.
+
+### Google Sheets write access (`GOOGLE_SERVICE_ACCOUNT_JSON`)
+
+Reading sheets elsewhere in the app uses the public CSV export and needs no
+credentials, but **writing** does. Set it up once:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create (or pick)
+   a project → **APIs & Services** → enable the **Google Sheets API**.
+2. **Credentials → Create credentials → Service account**. Give it a name; no
+   roles are needed.
+3. Open the service account → **Keys → Add key → Create new key → JSON**.
+4. Share the Domains spreadsheet with the service account's email
+   (`…@….iam.gserviceaccount.com`) as an **Editor**.
+5. In Railway, add a variable `GOOGLE_SERVICE_ACCOUNT_JSON` containing the whole
+   downloaded JSON file, and redeploy.
+
+The tool reports whether writing is configured before you start a run, and a
+`403` from Google is surfaced with the exact service-account address to share
+with. Without it, the run still does the Plusvibe warmup half and says the sheet
+step was skipped.
 
 ## How Create Email Copy Variations works
 

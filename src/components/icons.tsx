@@ -169,6 +169,14 @@ export function ClockIcon({ className, size }: IconProps) {
   );
 }
 
+export function ZapIcon({ className, size }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <path d="M13 2 4.09 12.97a1 1 0 0 0 .77 1.63h6.14l-1 7.4 8.91-10.97a1 1 0 0 0-.77-1.63h-6.14L13 2Z" />
+    </svg>
+  );
+}
+
 export function MoveIcon({ className, size }: IconProps) {
   return (
     <svg {...base(size, className)}>

@@ -7,6 +7,7 @@ import {
   PenIcon,
   FireIcon,
   LayersIcon,
+  ZapIcon,
   ScissorsIcon,
   MoveIcon,
 } from "@/components/icons";
@@ -28,7 +29,8 @@ export type ToolColor =
   | "emerald"
   | "rose"
   | "teal"
-  | "indigo";
+  | "indigo"
+  | "blue";
 
 export interface ToolColorClasses {
   /** Icon tile background + glyph. */
@@ -85,6 +87,11 @@ export const TOOL_COLORS: Record<ToolColor, ToolColorClasses> = {
     border: "hover:border-indigo-500/40",
     link: "text-indigo-600 dark:text-indigo-400",
   },
+  blue: {
+    tile: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+    border: "hover:border-blue-500/40",
+    link: "text-blue-600 dark:text-blue-400",
+  },
 };
 
 export interface Tool {
@@ -107,6 +114,16 @@ export const TOOLS: Tool[] = [
     status: "active",
     color: "sky",
     Icon: GaugeIcon,
+  },
+  {
+    slug: "azure-warmup",
+    name: "Azure Start Warmup",
+    tagline: "Upload the mailbox export and start warmup as inboxes land",
+    description:
+      "Writes each domain's tenant email and a Warming Up status into the Domains sheet, then polls Plusvibe hourly for up to 7 days, applying the standard warmup config and switching warmup on for every inbox as it appears.",
+    status: "active",
+    color: "blue",
+    Icon: ZapIcon,
   },
   {
     slug: "copy-variations",
