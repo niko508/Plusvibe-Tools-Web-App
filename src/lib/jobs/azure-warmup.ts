@@ -25,6 +25,8 @@ import {
   COL_DOMAIN,
   COL_STATUS,
   COL_TENANT_EMAIL,
+  COL_WARMUP_DAYS,
+  COL_WARMUP_STARTED,
   MAX_CONSECUTIVE_FAILURES,
   MAX_RUN_MS,
   MAX_STORED_ERRORS,
@@ -173,6 +175,8 @@ async function loadOnce() {
         }
         parsed.rows = parsed.rows ?? [];
         parsed.done = parsed.done ?? [];
+        parsed.ignored = parsed.ignored ?? [];
+        parsed.checking = false;
         records.set(parsed.id, parsed);
         meta.set(parsed.id, { fingerprint, aborted: false, running: false });
       } catch {
@@ -211,8 +215,18 @@ export async function createJob(
   const now = Date.now();
   const startsAt = now + Math.max(0, payload.delayHours) * 60 * 60 * 1000;
 
+  // Inboxes known to have errored elsewhere are dropped before anything else,
+  // so they never count toward the totals and are never waited on.
+  const ignoreSet = new Set(
+    (payload.ignoreEmails ?? []).map((e) => e.trim().toLowerCase()).filter(Boolean)
+  );
+  const ignored = payload.rows
+    .map((r) => r.email)
+    .filter((e) => ignoreSet.has(e));
+  const rows = payload.rows.filter((r) => !ignoreSet.has(r.email));
+
   const byDomain = new Map<string, AzureDomainRow>();
-  for (const row of payload.rows) {
+  for (const row of rows) {
     const existing = byDomain.get(row.domain);
     if (existing) existing.total += 1;
     else
@@ -231,7 +245,7 @@ export async function createJob(
 
   const rec: StoredJob = {
     id,
-    label: `${domains.length} domains · ${payload.rows.length} inboxes`,
+    label: `${domains.length} domains · ${rows.length} inboxes`,
     status: payload.delayHours > 0 ? "waiting" : "running",
     phase: payload.delayHours > 0 ? "waiting" : "sheet",
     createdAt: now,
@@ -242,19 +256,21 @@ export async function createJob(
     sheetTab: payload.sheetTab,
     totals: {
       domains: domains.length,
-      inboxes: payload.rows.length,
+      inboxes: rows.length,
       found: 0,
       warmed: 0,
     },
     domains,
     sheet: { attempted: false, rowsUpdated: 0, notFound: [] },
-    missing: payload.rows.map((r) => r.email),
+    missing: rows.map((r) => r.email),
+    ignored,
+    checking: false,
     checks: 0,
     nextCheckAt: startsAt,
     errors: [],
     workspaceId: payload.workspaceId,
     sheetUrl: payload.sheetUrl,
-    rows: payload.rows,
+    rows,
     done: [],
   };
 
@@ -335,8 +351,13 @@ async function runJob(id: string) {
       // likely, and the next hourly pass would have recovered. Failures are
       // recorded and retried instead.
       rec.checks += 1;
+      rec.checking = true;
+      rec.updatedAt = Date.now();
+      await persist(id);
       try {
         await runCheck(rec, apiKey, doneSet);
+        // Stamp "Warmup Started" for any domain that just began warming.
+        await writeWarmupStarted(rec);
         consecutiveFailures = 0;
         hadSuccess = true;
       } catch (err) {
@@ -361,6 +382,8 @@ async function runJob(id: string) {
           rec.status = "error";
           break;
         }
+      } finally {
+        rec.checking = false;
       }
       rec.lastCheckAt = Date.now();
       rec.updatedAt = Date.now();
@@ -474,6 +497,82 @@ async function updateDomainsSheet(rec: StoredJob) {
     );
   }
   void cells;
+}
+
+/**
+ * Stamps "Warmup Started" and the "Warmup Days" formula for any domain that has
+ * begun warming since the last pass.
+ *
+ * The stamp goes in the first time a domain gets at least one inbox actually
+ * warming — not when its Status was set to "Warming Up", and not when the last
+ * of its 50 inboxes lands, since some may never arrive. Written once per
+ * domain, so the date never churns.
+ *
+ * USER_ENTERED, not RAW: the date has to land as a real date for the formula to
+ * subtract it, and the formula has to evaluate rather than sit there as text.
+ */
+async function writeWarmupStarted(rec: StoredJob) {
+  const pending = rec.domains.filter((d) => d.warmed > 0 && !d.warmupStartedOn);
+  if (pending.length === 0) return;
+
+  const sheetId = extractSheetId(rec.sheetUrl);
+  if (!sheetId) return;
+
+  let grid: string[][];
+  try {
+    grid = await readTab(sheetId, rec.sheetTab);
+  } catch (err) {
+    pushError(rec, `Could not read the sheet to stamp Warmup Started: ${msg(err)}`);
+    return;
+  }
+  if (grid.length === 0) return;
+
+  const header = grid[0].map((h) => h.trim().toLowerCase());
+  const iDomain = header.indexOf(COL_DOMAIN.toLowerCase());
+  const iStarted = header.indexOf(COL_WARMUP_STARTED.toLowerCase());
+  const iDays = header.indexOf(COL_WARMUP_DAYS.toLowerCase());
+  if (iDomain === -1 || iStarted === -1 || iDays === -1) {
+    pushError(
+      rec,
+      `The "${rec.sheetTab}" tab has no ${COL_WARMUP_STARTED} / ${COL_WARMUP_DAYS} column, so warmup dates weren't recorded.`
+    );
+    // Mark them handled so this doesn't repeat every hour for 7 days.
+    for (const d of pending) d.warmupStartedOn = "";
+    return;
+  }
+
+  const rowByDomain = new Map<string, number>();
+  for (let r = 1; r < grid.length; r++) {
+    const dom = (grid[r][iDomain] ?? "").trim().toLowerCase();
+    if (dom && !rowByDomain.has(dom)) rowByDomain.set(dom, r + 1);
+  }
+
+  // ISO parses as a date in every sheet locale, unlike DD/MM vs MM/DD.
+  const today = new Date();
+  const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const tab = quoteTab(rec.sheetTab);
+  const startedCol = columnLetter(iStarted);
+
+  const updates: CellUpdate[] = [];
+  const stamped: AzureDomainRow[] = [];
+  for (const d of pending) {
+    const rowNo = rowByDomain.get(d.domain);
+    if (!rowNo) continue;
+    updates.push({ range: `${tab}!${startedCol}${rowNo}`, value: iso });
+    updates.push({
+      range: `${tab}!${columnLetter(iDays)}${rowNo}`,
+      value: `=IF(${startedCol}${rowNo}="", "", TODAY()-${startedCol}${rowNo})`,
+    });
+    stamped.push(d);
+  }
+  if (updates.length === 0) return;
+
+  try {
+    await batchUpdateCells(sheetId, updates, "USER_ENTERED");
+    for (const d of stamped) d.warmupStartedOn = iso;
+  } catch (err) {
+    pushError(rec, `Could not write Warmup Started: ${msg(err)}`);
+  }
 }
 
 // --- Polling phase ---------------------------------------------------------
@@ -617,6 +716,55 @@ export async function listJobs(apiKey: string): Promise<AzureWarmupJob[]> {
   }
   out.sort((a, b) => b.createdAt - a.createdAt);
   return out;
+}
+
+/**
+ * Excludes more inboxes from a run that's already going — errors surface from
+ * the provisioning side over days, and without this the run would keep waiting
+ * on addresses that are never coming.
+ */
+export async function addIgnored(
+  apiKey: string,
+  id: string,
+  emails: string[]
+): Promise<number> {
+  await loadOnce();
+  const rec = records.get(id);
+  const m = meta.get(id);
+  if (!rec || !m || m.fingerprint !== fingerprintKey(apiKey)) return -1;
+
+  const add = new Set(
+    emails.map((e) => e.trim().toLowerCase()).filter(Boolean)
+  );
+  if (add.size === 0) return 0;
+
+  const before = rec.rows.length;
+  const removed: string[] = [];
+  rec.rows = rec.rows.filter((r) => {
+    if (add.has(r.email)) {
+      removed.push(r.email);
+      return false;
+    }
+    return true;
+  });
+  if (removed.length === 0) return 0;
+
+  rec.ignored = Array.from(new Set([...rec.ignored, ...removed]));
+  rec.missing = rec.missing.filter((e) => !add.has(e));
+  rec.totals.inboxes = rec.rows.length;
+
+  // Domain totals shrink too, so "warmed 50/50" stays truthful.
+  const perDomain = new Map<string, number>();
+  for (const r of rec.rows) {
+    perDomain.set(r.domain, (perDomain.get(r.domain) ?? 0) + 1);
+  }
+  for (const d of rec.domains) d.total = perDomain.get(d.domain) ?? 0;
+
+  rec.label = `${rec.domains.length} domains · ${rec.rows.length} inboxes`;
+  rec.updatedAt = Date.now();
+  await persist(id);
+  void before;
+  return removed.length;
 }
 
 export async function abortJob(apiKey: string, id: string): Promise<boolean> {

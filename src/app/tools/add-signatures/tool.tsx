@@ -485,7 +485,7 @@ export function AddSignaturesTool() {
             <div className="flex items-center gap-2">
               {applying && (
                 <button type="button" className="pv-btn-ghost" onClick={abortApply}>
-                  Abort
+                  Stop task
                 </button>
               )}
               <button

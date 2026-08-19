@@ -22,6 +22,8 @@ export interface AzureDomainRow {
   warmed: number;
   sheetUpdated: boolean;
   sheetNote?: string;
+  /** ISO date written to "Warmup Started" once this domain began warming. */
+  warmupStartedOn?: string;
 }
 
 export interface AzureSheetResult {
@@ -58,6 +60,10 @@ export interface AzureWarmupJob {
   sheet: AzureSheetResult;
   /** Uploaded inboxes still not present in Plusvibe. */
   missing: string[];
+  /** Inboxes excluded because they errored elsewhere — never waited on. */
+  ignored: string[];
+  /** True only while a check is actually in flight, vs idling between checks. */
+  checking: boolean;
   checks: number;
   lastCheckAt?: number;
   nextCheckAt?: number;
@@ -78,6 +84,8 @@ export interface AzureStartPayload {
   sheetUrl: string;
   sheetTab: string;
   rows: AzureUploadRow[];
+  /** Emails to skip entirely (known-bad from the provisioning side). */
+  ignoreEmails?: string[];
 }
 
 export const DEFAULT_SHEET_URL =
@@ -88,6 +96,8 @@ export const DEFAULT_SHEET_TAB = "📋 Domains";
 export const COL_DOMAIN = "Domain";
 export const COL_TENANT_EMAIL = "Tenant Email Address";
 export const COL_STATUS = "Status";
+export const COL_WARMUP_STARTED = "Warmup Started";
+export const COL_WARMUP_DAYS = "Warmup Days";
 export const STATUS_WARMING_UP = "Warming Up";
 
 export const CHECK_INTERVAL_MS = 60 * 60 * 1000; // hourly

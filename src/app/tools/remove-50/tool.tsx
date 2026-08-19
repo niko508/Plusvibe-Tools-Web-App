@@ -727,7 +727,7 @@ function JobCard({
             className="pv-btn-ghost"
             onClick={() => onAbort(job.id)}
           >
-            Abort
+            Stop task
           </button>
         )}
         <button

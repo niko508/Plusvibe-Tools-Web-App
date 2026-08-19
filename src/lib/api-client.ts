@@ -291,6 +291,17 @@ export function abortAzureWarmup(jobId: string, signal?: AbortSignal) {
   });
 }
 
+export function ignoreAzureWarmupInboxes(
+  params: { jobId: string; emails: string[] },
+  signal?: AbortSignal
+) {
+  return request<{ removed: number }>("/api/jobs/azure-warmup/ignore", {
+    method: "POST",
+    body: params,
+    signal,
+  });
+}
+
 export function resumeAzureWarmup(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/azure-warmup/resume", {
     method: "POST",

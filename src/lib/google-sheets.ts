@@ -200,10 +200,19 @@ export interface CellUpdate {
   value: string;
 }
 
-/** Writes individual cells in one batch call. */
+/**
+ * Writes individual cells in one batch call.
+ *
+ * `RAW` stores text exactly as given — right for emails and status labels, and
+ * it can't accidentally turn a value into a formula. `USER_ENTERED` makes
+ * Sheets parse the value the way typing it would, which is required for dates
+ * to become real dates and for formulas to evaluate rather than sit there as
+ * text.
+ */
 export async function batchUpdateCells(
   spreadsheetId: string,
-  updates: CellUpdate[]
+  updates: CellUpdate[],
+  valueInputOption: "RAW" | "USER_ENTERED" = "RAW"
 ): Promise<number> {
   if (updates.length === 0) return 0;
   const res = await sheetsFetch<{ totalUpdatedCells?: number }>(
@@ -211,7 +220,7 @@ export async function batchUpdateCells(
     {
       method: "POST",
       body: {
-        valueInputOption: "RAW",
+        valueInputOption,
         data: updates.map((u) => ({
           range: u.range,
           majorDimension: "ROWS",

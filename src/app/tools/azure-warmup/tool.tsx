@@ -14,6 +14,7 @@ import {
 import {
   fetchWorkspaces,
   startAzureWarmup,
+  ignoreAzureWarmupInboxes,
   listAzureWarmupJobs,
   abortAzureWarmup,
   resumeAzureWarmup,
@@ -47,6 +48,7 @@ export function AzureWarmupTool() {
   const [delayHours, setDelayHours] = useState("0");
   const [sheetUrl, setSheetUrl] = useState(DEFAULT_SHEET_URL);
   const [sheetTab, setSheetTab] = useState(DEFAULT_SHEET_TAB);
+  const [erroredRaw, setErroredRaw] = useState("");
 
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +61,25 @@ export function AzureWarmupTool() {
   const startLock = useRef(false);
 
   const parsed: ParsedUpload = useMemo(() => parseUpload(raw), [raw]);
+
+  // Emails the provisioning side reported as errored — split on any whitespace,
+  // comma or semicolon so a paste from anywhere works.
+  const erroredEmails = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          erroredRaw
+            .split(/[\s,;]+/)
+            .map((e) => e.trim().toLowerCase())
+            .filter((e) => e.includes("@"))
+        )
+      ),
+    [erroredRaw]
+  );
+  const erroredInUpload = useMemo(() => {
+    const inUpload = new Set(parsed.rows.map((r) => r.email));
+    return erroredEmails.filter((e) => inUpload.has(e));
+  }, [erroredEmails, parsed.rows]);
 
   // --- Workspaces ----------------------------------------------------------
   const loadWorkspaces = useCallback(async () => {
@@ -135,9 +156,11 @@ export function AzureWarmupTool() {
         sheetUrl,
         sheetTab,
         rows: parsed.rows,
+        ignoreEmails: erroredEmails,
       });
       setRaw("");
       setFileName("");
+      setErroredRaw("");
       setToast(
         delayNum > 0
           ? `Job scheduled — starts in ${delayNum} hour${delayNum === 1 ? "" : "s"}`
@@ -264,7 +287,34 @@ export function AzureWarmupTool() {
           </div>
         </details>
 
-        {parsed.warnings.map((w, i) => (
+        <details className="rounded-xl border border-border px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+            Errored inboxes to skip
+            {erroredEmails.length > 0 && (
+              <span className="ml-1 text-warning">
+                · {erroredEmails.length} pasted
+                {parsed.rows.length > 0 &&
+                  `, ${erroredInUpload.length} in this upload`}
+              </span>
+            )}
+          </summary>
+          <div className="mt-2">
+            <textarea
+              className="pv-input min-h-[90px] w-full resize-y font-mono text-xs"
+              placeholder={"someone@domain.co\nanother@domain.co"}
+              value={erroredRaw}
+              onChange={(e) => setErroredRaw(e.target.value)}
+              spellCheck={false}
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Addresses that failed on the provisioning side. They&apos;re
+              dropped from the run entirely, so it never waits on inboxes that
+              are never coming. Separate by newline, comma or space.
+            </p>
+          </div>
+        </details>
+
+        {raw.trim() !== "" && parsed.warnings.map((w, i) => (
           <div
             key={i}
             className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
@@ -371,6 +421,22 @@ export function AzureWarmupTool() {
                   setError(errMessage(err));
                 }
               }}
+              onIgnore={async (id, emails) => {
+                try {
+                  const res = await ignoreAzureWarmupInboxes({
+                    jobId: id,
+                    emails,
+                  });
+                  setToast(
+                    res.removed > 0
+                      ? `${res.removed} inbox${res.removed === 1 ? "" : "es"} skipped`
+                      : "None of those were in this run"
+                  );
+                  await refreshJobs();
+                } catch (err) {
+                  setError(errMessage(err));
+                }
+              }}
             />
           ))
         )}
@@ -413,12 +479,16 @@ function JobCard({
   job,
   onAbort,
   onResume,
+  onIgnore,
 }: {
   job: AzureWarmupJob;
   onAbort: (id: string) => void;
   onResume: (id: string) => void;
+  onIgnore: (id: string, emails: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [skipOpen, setSkipOpen] = useState(false);
+  const [skipRaw, setSkipRaw] = useState("");
   const t = job.totals;
   const pct = t.inboxes > 0 ? Math.round((t.warmed / t.inboxes) * 100) : 0;
   const status = STATUS_META[job.status];
@@ -430,8 +500,10 @@ function JobCard({
         : job.phase === "sheet"
           ? "Updating the Domains sheet"
           : job.phase === "polling"
-            ? `Checking Plusvibe · check ${job.checks + 1}`
-            : "Finishing";
+          ? job.checking
+            ? `Checking Plusvibe now · check ${job.checks}`
+            : `Idle between checks · ${job.checks} check${job.checks === 1 ? "" : "s"} done`
+          : "Finishing";
 
   return (
     <div className="pv-card p-4 sm:p-5">
@@ -455,7 +527,8 @@ function JobCard({
       <div className="mt-3">
         <div className="mb-1.5 flex items-center justify-between text-xs text-muted-foreground">
           <span className="flex items-center gap-2">
-            {job.status === "running" && <Spinner size={12} />}
+            {job.status === "running" && job.checking && <Spinner size={12} />}
+            {job.status === "running" && !job.checking && <ClockIcon size={12} />}
             {job.status === "waiting" && <ClockIcon size={12} />}
             {phaseLabel}
           </span>
@@ -471,10 +544,16 @@ function JobCard({
             style={{ width: `${pct}%` }}
           />
         </div>
-        {job.status === "running" && job.nextCheckAt && job.phase === "polling" && (
+        {job.status === "running" && job.phase === "polling" && (
           <div className="mt-1 text-[11px] text-muted-foreground">
-            next check {timeUntil(job.nextCheckAt)} · stops{" "}
+            {job.checking
+              ? "checking right now…"
+              : job.nextCheckAt
+                ? `next check ${timeUntil(job.nextCheckAt)}`
+                : "next check shortly"}
+            {" · stops "}
             {timeUntil(job.deadlineAt)}
+            {job.lastCheckAt ? ` · last ${relativeTime(job.lastCheckAt)}` : ""}
           </div>
         )}
       </div>
@@ -489,6 +568,13 @@ function JobCard({
           tone={job.missing.length > 0 ? "warning" : "muted"}
         />
       </div>
+      {job.ignored.length > 0 && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {formatNumber(job.ignored.length)} inbox
+          {job.ignored.length === 1 ? "" : "es"} skipped as errored — not counted
+          or waited on.
+        </p>
+      )}
 
       {/* Sheet result */}
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
@@ -524,7 +610,7 @@ function JobCard({
             className="pv-btn-ghost"
             onClick={() => onAbort(job.id)}
           >
-            Abort
+            Stop task
           </button>
         )}
         {(job.status === "interrupted" || job.status === "error") && (
@@ -553,7 +639,57 @@ function JobCard({
             Missing inboxes
           </button>
         )}
+        {(job.status === "running" || job.status === "waiting") && (
+          <button
+            type="button"
+            className="pv-btn-ghost"
+            onClick={() => setSkipOpen((v) => !v)}
+          >
+            Skip errored
+          </button>
+        )}
       </div>
+
+      {skipOpen && (
+        <div className="mt-3 rounded-xl border border-border p-3">
+          <div className="mb-1 text-xs font-medium">
+            Drop errored inboxes from this run
+          </div>
+          <textarea
+            className="pv-input min-h-[80px] w-full resize-y font-mono text-xs"
+            placeholder={"someone@domain.co\nanother@domain.co"}
+            value={skipRaw}
+            onChange={(e) => setSkipRaw(e.target.value)}
+            spellCheck={false}
+          />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="pv-btn-ghost"
+              disabled={!skipRaw.trim()}
+              onClick={() => {
+                const emails = Array.from(
+                  new Set(
+                    skipRaw
+                      .split(/[\s,;]+/)
+                      .map((e) => e.trim().toLowerCase())
+                      .filter((e) => e.includes("@"))
+                  )
+                );
+                if (emails.length === 0) return;
+                onIgnore(job.id, emails);
+                setSkipRaw("");
+                setSkipOpen(false);
+              }}
+            >
+              Skip these
+            </button>
+            <span className="text-[11px] text-muted-foreground">
+              Removes them from the run so it stops waiting on them.
+            </span>
+          </div>
+        </div>
+      )}
 
       {job.status === "interrupted" && (
         <p className="mt-2 text-xs text-warning">

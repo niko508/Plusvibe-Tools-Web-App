@@ -73,6 +73,9 @@ export async function POST(request: Request) {
       sheetUrl: String(body.sheetUrl || DEFAULT_SHEET_URL),
       sheetTab: String(body.sheetTab || DEFAULT_SHEET_TAB),
       rows,
+      ignoreEmails: Array.isArray(body.ignoreEmails)
+        ? body.ignoreEmails.map(String)
+        : [],
     };
     const jobId = await createJob(apiKey, payload);
     return NextResponse.json({ jobId });
