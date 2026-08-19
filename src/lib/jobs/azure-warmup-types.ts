@@ -93,4 +93,6 @@ export const STATUS_WARMING_UP = "Warming Up";
 export const CHECK_INTERVAL_MS = 60 * 60 * 1000; // hourly
 export const MAX_RUN_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 export const MAX_DELAY_HOURS = 72;
+/** Consecutive failed hourly checks before a run is treated as permanently broken. */
+export const MAX_CONSECUTIVE_FAILURES = 24; // a full day of hourly checks
 export const MAX_STORED_ERRORS = 100;

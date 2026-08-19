@@ -25,6 +25,7 @@ import {
   COL_DOMAIN,
   COL_STATUS,
   COL_TENANT_EMAIL,
+  MAX_CONSECUTIVE_FAILURES,
   MAX_RUN_MS,
   MAX_STORED_ERRORS,
   STATUS_WARMING_UP,
@@ -324,11 +325,43 @@ async function runJob(id: string) {
     rec.phase = "polling";
     const doneSet = new Set(rec.done);
 
+    let consecutiveFailures = 0;
+    let hadSuccess = false;
+
     while (true) {
       if (m.aborted) throw new Aborted();
 
-      await runCheck(rec, apiKey, doneSet);
+      // A check must never kill the run: over 7 days a transient 429 or blip is
+      // likely, and the next hourly pass would have recovered. Failures are
+      // recorded and retried instead.
       rec.checks += 1;
+      try {
+        await runCheck(rec, apiKey, doneSet);
+        consecutiveFailures = 0;
+        hadSuccess = true;
+      } catch (err) {
+        if (err instanceof Aborted || m.aborted) throw err;
+        consecutiveFailures += 1;
+        pushError(
+          rec,
+          `Check ${rec.checks} failed: ${msg(err)}${hadSuccess ? " — retrying next hour." : ""}`
+        );
+        // Failing on the very first check usually means a bad key or workspace,
+        // and someone is probably watching — surface that immediately rather
+        // than silently retrying for a week.
+        if (!hadSuccess) {
+          rec.status = "error";
+          break;
+        }
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          pushError(
+            rec,
+            `Stopped after ${consecutiveFailures} consecutive failed checks — this looks permanent rather than transient.`
+          );
+          rec.status = "error";
+          break;
+        }
+      }
       rec.lastCheckAt = Date.now();
       rec.updatedAt = Date.now();
       await persist(id);
@@ -357,7 +390,7 @@ async function runJob(id: string) {
       }
     }
 
-    rec.status = "done";
+    if (rec.status === "running") rec.status = "done";
   } catch (err) {
     if (err instanceof Aborted || m.aborted) rec.status = "aborted";
     else {
