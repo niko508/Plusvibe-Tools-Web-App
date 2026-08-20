@@ -61,8 +61,10 @@ const WARMUP_SETTINGS = {
   warmup_randomize: "yes",
   warmup_randomize_num: 10,
   warmup_reply_rate: 0.46, // the API uses 0-1, so 46% is 0.46
+  // The window is all-day/all-week, so the timezone only sets what Plusvibe
+  // shows on the inbox rather than restricting when warmup sends.
   warmup_schedule: {
-    tz: "America/New_York",
+    tz: "Asia/Singapore",
     from_time: "00:00",
     to_time: "23:59",
     days: [
