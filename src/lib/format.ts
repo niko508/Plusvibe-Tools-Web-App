@@ -43,6 +43,7 @@ export interface DomainGroup {
   mailboxes: number;
   accountIds: string[];
   providers: string[]; // unique sender ESPs among this domain's mailboxes
+  providerCounts: Record<string, number>; // mailboxes per sender ESP
 }
 
 // Buckets a raw provider value into one of the three known sender ESPs.
@@ -54,22 +55,30 @@ export function providerBucket(p?: string): string {
 // Groups accounts by their sending domain, sorted by mailbox count desc.
 export function groupByDomain(accounts: EmailAccount[]): DomainGroup[] {
   const map = new Map<string, DomainGroup>();
-  const providerSets = new Map<string, Set<string>>();
   for (const acc of accounts) {
     const domain = domainFromEmail(acc.email);
     if (!domain) continue;
     let group = map.get(domain);
     if (!group) {
-      group = { domain, mailboxes: 0, accountIds: [], providers: [] };
+      group = {
+        domain,
+        mailboxes: 0,
+        accountIds: [],
+        providers: [],
+        providerCounts: {},
+      };
       map.set(domain, group);
-      providerSets.set(domain, new Set());
     }
     group.mailboxes += 1;
     if (acc.id) group.accountIds.push(acc.id);
-    providerSets.get(domain)!.add(providerBucket(acc.provider));
+    const bucket = providerBucket(acc.provider);
+    group.providerCounts[bucket] = (group.providerCounts[bucket] ?? 0) + 1;
   }
-  for (const [domain, set] of providerSets) {
-    map.get(domain)!.providers = Array.from(set);
+  // Order each domain's providers by mailbox count so the dominant ESP leads.
+  for (const group of map.values()) {
+    group.providers = Object.keys(group.providerCounts).sort(
+      (a, b) => group.providerCounts[b] - group.providerCounts[a]
+    );
   }
   return Array.from(map.values()).sort(
     (a, b) => b.mailboxes - a.mailboxes || a.domain.localeCompare(b.domain)

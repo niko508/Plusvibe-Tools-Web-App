@@ -10,6 +10,11 @@ import {
   uniqueContacted,
 } from "@/lib/format";
 import { Spinner } from "@/components/ui";
+import {
+  PROVIDER_BADGE,
+  providerBreakdown,
+  providerSummary,
+} from "./providers";
 
 type Heat = { text: string; bg: string };
 
@@ -45,6 +50,7 @@ interface Column {
 
 const COLUMNS: Column[] = [
   { key: "domain", label: "Domain", align: "left", numeric: false },
+  { key: "provider", label: "Provider", align: "left", numeric: false },
   { key: "mailboxes", label: "Mailboxes", align: "right", numeric: true },
   { key: "sent", label: "Sent", align: "right", numeric: true },
   { key: "contacted", label: "Contacted", align: "right", numeric: true },
@@ -57,6 +63,7 @@ const COLUMNS: Column[] = [
 
 export function metricValue(row: DomainRow, key: SortKey): number | string {
   if (key === "domain") return row.domain;
+  if (key === "provider") return providerSummary(row.providers).label;
   if (key === "mailboxes") return row.mailboxes;
   const h = row.header;
   if (!h) return -1; // unloaded rows sort to the bottom for numeric keys
@@ -97,7 +104,7 @@ export function DomainTable({ rows, sort, onSort, selected, onSelect }: Props) {
   return (
     <div className="pv-card overflow-hidden">
       <div className="pv-scroll overflow-x-auto">
-        <table className="w-full min-w-[820px] text-sm">
+        <table className="w-full min-w-[920px] text-sm">
           <thead>
             <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
               {COLUMNS.map((col) => {
@@ -141,6 +148,9 @@ export function DomainTable({ rows, sort, onSort, selected, onSelect }: Props) {
               <tr className="border-t border-border bg-muted/40 font-medium">
                 <td className="px-4 py-3">
                   Total · {totals.count} domain{totals.count === 1 ? "" : "s"}
+                </td>
+                <td className="px-4 py-3 text-xs font-normal text-muted-foreground">
+                  {providerBreakdown(totals.providerCounts) || "—"}
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums">
                   {formatNumber(totals.mailboxes)}
@@ -216,6 +226,9 @@ function DomainTableRow({
           )}
         </div>
       </td>
+      <td className="px-4 py-3">
+        <ProviderBadge row={row} />
+      </td>
       <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
         {formatNumber(row.mailboxes)}
       </td>
@@ -252,8 +265,24 @@ function DomainTableRow({
   );
 }
 
+function ProviderBadge({ row }: { row: DomainRow }) {
+  const summary = providerSummary(row.providers);
+  const breakdown = providerBreakdown(row.providerCounts);
+  return (
+    <span
+      className={`inline-block whitespace-nowrap rounded-md px-2 py-0.5 text-xs font-medium ${
+        PROVIDER_BADGE[summary.key] ?? PROVIDER_BADGE.REGULAR_ACCOUNT
+      }`}
+      title={breakdown}
+    >
+      {summary.label}
+    </span>
+  );
+}
+
 interface Totals {
   count: number;
+  providerCounts: Record<string, number>;
   mailboxes: number;
   sent: number;
   contacted: number;
@@ -276,12 +305,16 @@ export function computeTotals(rows: DomainRow[]): Totals {
   let posReplies = 0;
   let bounces = 0;
   let count = 0;
+  const providerCounts: Record<string, number> = {};
 
   for (const row of rows) {
     if (row.status !== "done" || !row.header) continue;
     const h = row.header;
     count++;
     mailboxes += row.mailboxes;
+    for (const [key, n] of Object.entries(row.providerCounts)) {
+      providerCounts[key] = (providerCounts[key] ?? 0) + n;
+    }
     sent += h.total_sent_count;
     contacted += uniqueContacted(h);
     replies += h.total_reply_count;
@@ -297,6 +330,7 @@ export function computeTotals(rows: DomainRow[]): Totals {
 
   return {
     count,
+    providerCounts,
     mailboxes,
     sent,
     contacted,

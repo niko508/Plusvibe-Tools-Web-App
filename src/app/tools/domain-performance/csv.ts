@@ -1,5 +1,6 @@
 import type { DomainRow } from "./types";
 import { uniqueContacted } from "@/lib/format";
+import { providerBreakdown, providerSummary } from "./providers";
 
 // Builds a CSV of the per-domain table and triggers a browser download.
 export function exportDomainsCsv(
@@ -8,6 +9,8 @@ export function exportDomainsCsv(
 ) {
   const headers = [
     "domain",
+    "provider",
+    "provider_breakdown",
     "mailboxes",
     "sent",
     "unique_contacted",
@@ -27,6 +30,8 @@ export function exportDomainsCsv(
     const h = row.header;
     const cells = [
       row.domain,
+      providerSummary(row.providers).label,
+      providerBreakdown(row.providerCounts),
       row.mailboxes,
       h?.total_sent_count ?? "",
       h ? uniqueContacted(h) : "",

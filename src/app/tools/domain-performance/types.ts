@@ -10,6 +10,7 @@ export interface DomainRow {
   mailboxes: number;
   status: RowStatus;
   providers: string[]; // sender ESPs among this domain's mailboxes
+  providerCounts: Record<string, number>; // mailboxes per sender ESP
   header?: EmailStatsHeader;
   chart?: EmailStatsChartPoint[];
   error?: string;
@@ -17,6 +18,7 @@ export interface DomainRow {
 
 export type SortKey =
   | "domain"
+  | "provider"
   | "mailboxes"
   | "sent"
   | "contacted"

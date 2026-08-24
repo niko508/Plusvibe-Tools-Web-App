@@ -33,6 +33,7 @@ import { Controls } from "./controls";
 import { OverviewChart } from "./overview-chart";
 import { DomainTable, computeTotals } from "./domain-table";
 import { exportDomainsCsv } from "./csv";
+import { providerLabel } from "./providers";
 import type { DomainRow, SortKey, SortState } from "./types";
 
 const LAST_WS_KEY = "pv_last_workspace";
@@ -47,7 +48,6 @@ interface RunParams {
   workspaceId: string;
   start: string;
   end: string;
-  recpProvider: string | null;
 }
 
 export function DomainPerformanceTool() {
@@ -63,13 +63,13 @@ export function DomainPerformanceTool() {
   const [start, setStart] = useState(initialRange.start);
   const [end, setEnd] = useState(initialRange.end);
   const [activePreset, setActivePreset] = useState<string | null>(DEFAULT_PRESET);
-  const [recpProvider, setRecpProvider] = useState<string | null>(null);
 
   // Results
   const [rows, setRows] = useState<DomainRow[]>([]);
   const [busy, setBusy] = useState(false);
-  // Client-side sender-ESP filter (instant, no re-fetch). Domains with no
-  // campaign sends in the range are always hidden.
+  // Which sending-inbox ESP to show. Applied client-side to the loaded
+  // domains, so switching it is instant. Domains with no campaign sends in the
+  // range are always hidden.
   const [senderProvider, setSenderProvider] = useState<string | null>(null);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
@@ -119,7 +119,7 @@ export function DomainPerformanceTool() {
         const initial =
           list.find((w) => w._id === stored)?._id ?? list[0]._id;
         setWorkspaceId(initial);
-        void run({ workspaceId: initial, start, end, recpProvider }, list);
+        void run({ workspaceId: initial, start, end }, list);
       } else {
         setWorkspaceId(null);
       }
@@ -130,7 +130,7 @@ export function DomainPerformanceTool() {
       setWorkspacesLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [start, end, recpProvider]);
+  }, [start, end]);
 
   useEffect(() => {
     if (ready && hasKey) {
@@ -170,7 +170,6 @@ export function DomainPerformanceTool() {
         workspace_id: params.workspaceId,
         start_date: params.start,
         end_date: params.end,
-        recp_provider: params.recpProvider ?? undefined,
       };
 
       try {
@@ -185,6 +184,7 @@ export function DomainPerformanceTool() {
             domain: g.domain,
             mailboxes: g.mailboxes,
             providers: g.providers,
+            providerCounts: g.providerCounts,
             status: "pending" as const,
           }))
         );
@@ -231,7 +231,7 @@ export function DomainPerformanceTool() {
   // --- Handlers ------------------------------------------------------------
   function handleWorkspaceChange(id: string) {
     setWorkspaceId(id);
-    void run({ workspaceId: id, start, end, recpProvider });
+    void run({ workspaceId: id, start, end });
   }
 
   function handlePreset(key: string) {
@@ -242,19 +242,12 @@ export function DomainPerformanceTool() {
     setEnd(range.end);
     setActivePreset(key);
     if (workspaceId) {
-      void run({ workspaceId, start: range.start, end: range.end, recpProvider });
-    }
-  }
-
-  function handleRecpProvider(value: string | null) {
-    setRecpProvider(value);
-    if (workspaceId) {
-      void run({ workspaceId, start, end, recpProvider: value });
+      void run({ workspaceId, start: range.start, end: range.end });
     }
   }
 
   function handleRefresh() {
-    if (workspaceId) void run({ workspaceId, start, end, recpProvider });
+    if (workspaceId) void run({ workspaceId, start, end });
   }
 
   function handleSort(key: SortKey) {
@@ -266,6 +259,15 @@ export function DomainPerformanceTool() {
   }
 
   // --- Derived -------------------------------------------------------------
+  // How many domains send through each ESP, for the filter chip counts. A
+  // mixed domain counts once under every provider it has mailboxes on.
+  const senderCounts: Record<string, number> = {};
+  for (const r of rows) {
+    for (const key of r.providers) {
+      senderCounts[key] = (senderCounts[key] ?? 0) + 1;
+    }
+  }
+
   // Client-side filters: sender ESP + hide warming/inactive (0 sent). A domain
   // is "warming/inactive" once loaded with 0 sent in the range.
   const activeRows = rows.filter((r) => {
@@ -276,6 +278,11 @@ export function DomainPerformanceTool() {
     }
     return true;
   });
+  // Domains in the current view whose mailboxes span more than one ESP. Their
+  // stats can't be attributed to a single provider (Plusvibe reports per
+  // domain), so the UI says so rather than implying a clean split.
+  const mixedShown = activeRows.filter((r) => r.providers.length > 1).length;
+
   const hiddenInactive = rows.filter(
     (r) =>
       (!senderProvider || r.providers.includes(senderProvider)) &&
@@ -289,7 +296,7 @@ export function DomainPerformanceTool() {
   const chartTitle = selectedRow
     ? `${selectedDomain} · ${start} → ${end}`
     : ranMeta
-      ? `${senderProvider ? providerLabel(senderProvider) + " domains" : "All domains"} · ${start} → ${end}`
+      ? `${senderProvider ? providerLabel(senderProvider) + " inboxes" : "All domains"} · ${start} → ${end}`
       : "";
   const hasResults = rows.length > 0;
 
@@ -352,8 +359,9 @@ export function DomainPerformanceTool() {
           setEnd(v);
           setActivePreset(null);
         }}
-        recpProvider={recpProvider}
-        onRecpProviderChange={handleRecpProvider}
+        senderProvider={senderProvider}
+        onSenderProviderChange={setSenderProvider}
+        senderCounts={senderCounts}
         onRefresh={handleRefresh}
         busy={busy}
       />
@@ -378,22 +386,31 @@ export function DomainPerformanceTool() {
 
       {hasResults && (
         <>
-          {/* Filters */}
+          {/* Filter context */}
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-muted-foreground">Sender ESP:</span>
-              {ESP_OPTIONS.map((o) => (
-                <button
-                  key={o.label}
-                  type="button"
-                  onClick={() => setSenderProvider(o.key)}
-                  className={`pv-chip ${
-                    senderProvider === o.key ? "pv-chip-active" : "hover:text-foreground"
-                  }`}
-                >
-                  {o.label}
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              {senderProvider ? (
+                <span>
+                  Showing {formatNumber(activeRows.length)} domain
+                  {activeRows.length === 1 ? "" : "s"} sending through{" "}
+                  <span className="text-foreground">
+                    {providerLabel(senderProvider)}
+                  </span>
+                  {mixedShown > 0 && (
+                    <>
+                      {" "}
+                      · {formatNumber(mixedShown)} of them also send through
+                      another provider, and Plusvibe reports stats per domain,
+                      so those rows include every mailbox on the domain
+                    </>
+                  )}
+                </span>
+              ) : (
+                <span>
+                  Showing all {formatNumber(activeRows.length)} sending domain
+                  {activeRows.length === 1 ? "" : "s"}
+                </span>
+              )}
             </div>
             {hiddenInactive > 0 && (
               <span className="text-xs text-muted-foreground">
@@ -625,17 +642,6 @@ function updateRow(
   setRows((prev) =>
     prev.map((r) => (r.domain === domain ? { ...r, ...patch } : r))
   );
-}
-
-const ESP_OPTIONS: { key: string | null; label: string }[] = [
-  { key: null, label: "All" },
-  { key: "GOOGLE_WORKSPACE", label: "Google" },
-  { key: "MICROSOFT365", label: "Microsoft" },
-  { key: "REGULAR_ACCOUNT", label: "Other / SMTP" },
-];
-
-function providerLabel(key: string): string {
-  return ESP_OPTIONS.find((o) => o.key === key)?.label ?? key;
 }
 
 // Sums the per-day charts of the given domain rows into a single workspace-like

@@ -4,6 +4,7 @@ import type { Workspace } from "@/lib/plusvibe-types";
 import { DATE_PRESETS } from "@/lib/format";
 import { ChevronDownIcon, RefreshIcon } from "@/components/icons";
 import { Spinner } from "@/components/ui";
+import { ESP_OPTIONS } from "./providers";
 
 interface Props {
   workspaces: Workspace[];
@@ -18,19 +19,15 @@ interface Props {
   onStartChange: (v: string) => void;
   onEndChange: (v: string) => void;
 
-  recpProvider: string | null;
-  onRecpProviderChange: (v: string | null) => void;
+  // Sending-inbox ESP filter. Applied client-side to the already-loaded
+  // domains, so switching it is instant — no refetch.
+  senderProvider: string | null;
+  onSenderProviderChange: (v: string | null) => void;
+  senderCounts: Record<string, number>; // domains per ESP, for the chip counts
 
   onRefresh: () => void;
   busy: boolean;
 }
-
-const RECP_OPTIONS: { key: string | null; label: string }[] = [
-  { key: null, label: "All inboxes" },
-  { key: "GOOGLE_WORKSPACE", label: "Google" },
-  { key: "MICROSOFT365", label: "Microsoft" },
-  { key: "REGULAR_ACCOUNT", label: "Other" },
-];
 
 export function Controls(props: Props) {
   return (
@@ -103,7 +100,7 @@ export function Controls(props: Props) {
         </button>
       </div>
 
-      {/* Presets + recipient filter */}
+      {/* Presets + sending-inbox filter */}
       <div className="mt-4 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap gap-2">
           {DATE_PRESETS.map((p) => (
@@ -121,20 +118,33 @@ export function Controls(props: Props) {
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">Recipient:</span>
+          <span className="text-xs text-muted-foreground">Sending inboxes:</span>
           <div className="flex flex-wrap gap-2">
-            {RECP_OPTIONS.map((o) => (
-              <button
-                key={o.label}
-                type="button"
-                onClick={() => props.onRecpProviderChange(o.key)}
-                className={`pv-chip ${
-                  props.recpProvider === o.key ? "pv-chip-active" : "hover:text-foreground"
-                }`}
-              >
-                {o.label}
-              </button>
-            ))}
+            {ESP_OPTIONS.map((o) => {
+              const count = o.key === null ? null : props.senderCounts[o.key] ?? 0;
+              return (
+                <button
+                  key={o.label}
+                  type="button"
+                  onClick={() => props.onSenderProviderChange(o.key)}
+                  className={`pv-chip ${
+                    props.senderProvider === o.key
+                      ? "pv-chip-active"
+                      : "hover:text-foreground"
+                  } ${count === 0 ? "opacity-40" : ""}`}
+                  title={
+                    count === 0
+                      ? "No domains sending through this provider"
+                      : undefined
+                  }
+                >
+                  {o.key === null ? "All" : o.label}
+                  {count !== null && (
+                    <span className="ml-1.5 tabular-nums opacity-60">{count}</span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
