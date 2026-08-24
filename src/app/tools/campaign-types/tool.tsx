@@ -294,7 +294,7 @@ export function CampaignTypesTool() {
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         {picked ? (
-                          <span className="text-success">
+                          <span className={m.loose && !overrides[m.role] ? "text-warning" : "text-success"}>
                             <CheckIcon size={14} />
                           </span>
                         ) : (
@@ -317,10 +317,17 @@ export function CampaignTypesTool() {
                         {!m.match && !m.ambiguous && !overrides[m.role] && (
                           <span className="text-warning"> · not found</span>
                         )}
+                        {m.loose && !overrides[m.role] && m.match && (
+                          <span className="text-warning">
+                            {" "}
+                            · matched “{m.match.name}” — only the punctuation
+                            differs, check this is the right one
+                          </span>
+                        )}
                       </div>
                     </div>
 
-                    {(!m.match || m.ambiguous) && (
+                    {(!m.match || m.ambiguous || m.loose) && (
                       <div className="relative shrink-0 sm:w-64">
                         <select
                           className="pv-input appearance-none pr-9 text-xs"

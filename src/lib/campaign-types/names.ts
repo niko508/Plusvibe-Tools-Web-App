@@ -1,12 +1,16 @@
-// Derives the three campaign names this tool creates from one source name.
+// Derives the three companion campaign names from one source name.
 //
-//   Tree Removal - August          (source, untouched)
-//   🔵 Tree Removal - August       (Microsoft leads)
-//   Tree Removal - Opt Out - August
-//   🔵 Tree Removal - Opt Out - August
+//   Tree Removal (August)             (source, untouched)
+//   🔵 Tree Removal (August)          Microsoft leads
+//   Tree Removal - Opt Out (August)   opt-out copy on step 1
+//   🔵 Tree Removal - Opt Out (August)
 //
 // The blue circle marks the Microsoft-only copy; "Opt Out" marks the copy whose
 // step 1 carries the opt-out spintax.
+//
+// The month sits in a trailing parenthetical and stays last, with NO separator
+// introduced in front of it — "Opt Out" goes before the parenthetical, not
+// after the campaign name.
 
 export const BLUE = "🔵";
 export const OPT_OUT = "Opt Out";
@@ -28,17 +32,18 @@ export function withBlue(name: string): string {
   return `${BLUE} ${trimmed}`;
 }
 
+/** A trailing "(August)"-style parenthetical, captured with its leading space. */
+const TRAILING_PAREN = /\s*(\([^()]*\))\s*$/;
+
 /**
- * Inserts an "Opt Out" segment before the final " - " segment:
+ * Adds the "Opt Out" marker, keeping any trailing parenthetical last:
  *
- *   "Tree Removal - August"  ->  "Tree Removal - Opt Out - August"
+ *   "Tree Removal (August)"  ->  "Tree Removal - Opt Out (August)"
+ *   "Tree Removal"           ->  "Tree Removal - Opt Out"
  *
- * The trailing segment is typically a month or a batch marker, and keeping it
- * last is what makes the four campaigns sort together in Plusvibe's list. A
- * name with no separator has the segment appended instead, since there's no
- * trailing part to sit in front of:
- *
- *   "Tree Removal"  ->  "Tree Removal - Opt Out"
+ * No separator is ever introduced in front of the parenthetical — the month
+ * keeps the single space it already had, so the four campaigns read the same
+ * way they do when created by hand.
  *
  * The blue prefix is preserved, so this composes with withBlue() either way.
  */
@@ -46,19 +51,17 @@ export function withOptOut(name: string): string {
   const trimmed = name.trim();
   if (hasOptOut(trimmed)) return trimmed;
 
-  const parts = trimmed.split(SEP);
-  if (parts.length < 2) return `${trimmed}${SEP}${OPT_OUT}`;
-
-  const last = parts[parts.length - 1];
-  const head = parts.slice(0, -1);
-  return [...head, OPT_OUT, last].join(SEP);
+  const m = trimmed.match(TRAILING_PAREN);
+  if (m) {
+    const head = trimmed.slice(0, m.index).trim();
+    return `${head}${SEP}${OPT_OUT} ${m[1]}`;
+  }
+  return `${trimmed}${SEP}${OPT_OUT}`;
 }
 
-/** True if a name already carries an "Opt Out" segment (case-insensitive). */
+/** True if a name already carries the "Opt Out" marker (case-insensitive). */
 export function hasOptOut(name: string): boolean {
-  return name
-    .split(SEP)
-    .some((p) => p.trim().toLowerCase() === OPT_OUT.toLowerCase());
+  return new RegExp(`(^|\\s|-)${OPT_OUT}(\\s|$|\\()`, "i").test(name);
 }
 
 export function deriveNames(sourceName: string): DerivedNames {

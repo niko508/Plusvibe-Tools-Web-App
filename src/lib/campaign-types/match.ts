@@ -31,6 +31,12 @@ export interface RoleMatch {
   match: CampaignLike | null;
   /** More than one campaign shares the name — ambiguous, so left unmatched. */
   ambiguous: boolean;
+  /**
+   * True when only the loose comparison matched, i.e. the stored name differs
+   * from the expected one by separators alone ("Tree Removal - (August)" vs
+   * "Tree Removal (August)"). Surfaced so the UI can ask for a second look.
+   */
+  loose?: boolean;
 }
 
 export interface MatchResult {
@@ -53,6 +59,20 @@ export function normalizeName(name: string): string {
     .toLowerCase();
 }
 
+/**
+ * Comparison key that also ignores hyphen separators, so a name carrying a
+ * stray dash still matches:
+ *
+ *   "🔵 Tree Removal - (August)"  ~  "🔵 Tree Removal (August)"
+ *
+ * Only used when the exact comparison finds nothing, and only when it picks out
+ * exactly one campaign — it loosens punctuation, never identity. The words and
+ * the parenthetical still have to agree.
+ */
+export function looseKey(name: string): string {
+  return normalizeName(name).replace(/-/g, " ").replace(/\s+/g, " ").trim();
+}
+
 export function matchCompanions(
   sourceName: string,
   campaigns: CampaignLike[],
@@ -65,11 +85,16 @@ export function matchCompanions(
   );
 
   const byName = new Map<string, CampaignLike[]>();
+  const byLoose = new Map<string, CampaignLike[]>();
   for (const c of pool) {
-    const key = normalizeName(c.name);
-    const list = byName.get(key);
-    if (list) list.push(c);
-    else byName.set(key, [c]);
+    for (const [map, key] of [
+      [byName, normalizeName(c.name)],
+      [byLoose, looseKey(c.name)],
+    ] as const) {
+      const list = map.get(key);
+      if (list) list.push(c);
+      else map.set(key, [c]);
+    }
   }
 
   const roles: { role: MatchRole; expectedName: string }[] = [
@@ -80,18 +105,34 @@ export function matchCompanions(
 
   const used = new Set<string>();
   const matches: RoleMatch[] = roles.map(({ role, expectedName }) => {
-    const found = byName.get(normalizeName(expectedName)) ?? [];
+    const exact = byName.get(normalizeName(expectedName)) ?? [];
     // Two campaigns with the same name: we can't tell which is meant.
-    if (found.length > 1) {
+    if (exact.length > 1) {
       return { role, expectedName, match: null, ambiguous: true };
     }
-    const candidate = found[0];
+
+    let candidate = exact[0];
+    let loose = false;
+
+    // Fall back to the punctuation-insensitive key only when the exact name
+    // found nothing, and only when it resolves to a single campaign.
+    if (!candidate) {
+      const near = (byLoose.get(looseKey(expectedName)) ?? []).filter(
+        (c) => !used.has(c.id)
+      );
+      if (near.length > 1) {
+        return { role, expectedName, match: null, ambiguous: true };
+      }
+      candidate = near[0];
+      loose = !!candidate;
+    }
+
     // One campaign can't fill two roles — that would move the same leads twice.
     if (!candidate || used.has(candidate.id)) {
       return { role, expectedName, match: null, ambiguous: false };
     }
     used.add(candidate.id);
-    return { role, expectedName, match: candidate, ambiguous: false };
+    return { role, expectedName, match: candidate, ambiguous: false, loose };
   });
 
   return { matches, complete: matches.every((m) => m.match !== null) };

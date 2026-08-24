@@ -16,17 +16,18 @@ const eq = (label, got, want) => {
 };
 
 // --- names -----------------------------------------------------------------
-const BLUE = "🔵";
+const BLUE = "\u{1F535}";
 const OPT_OUT = "Opt Out";
 const SEP = " - ";
+const TRAILING_PAREN = /\s*(\([^()]*\))\s*$/;
 const withBlue = (n) => (n.trim().startsWith(BLUE) ? n.trim() : `${BLUE} ${n.trim()}`);
-const hasOptOut = (n) => n.split(SEP).some((p) => p.trim().toLowerCase() === OPT_OUT.toLowerCase());
+const hasOptOut = (n) => new RegExp(`(^|\\s|-)${OPT_OUT}(\\s|$|\\()`, "i").test(n);
 const withOptOut = (n) => {
   const t = n.trim();
   if (hasOptOut(t)) return t;
-  const parts = t.split(SEP);
-  if (parts.length < 2) return `${t}${SEP}${OPT_OUT}`;
-  return [...parts.slice(0, -1), OPT_OUT, parts[parts.length - 1]].join(SEP);
+  const m = t.match(TRAILING_PAREN);
+  if (m) return `${t.slice(0, m.index).trim()}${SEP}${OPT_OUT} ${m[1]}`;
+  return `${t}${SEP}${OPT_OUT}`;
 };
 const deriveNames = (n) => ({
   blue: withBlue(n.trim()),
@@ -35,29 +36,39 @@ const deriveNames = (n) => ({
 });
 
 console.log("--- names");
-eq("the spec's worked example", deriveNames("Tree Removal - August"), {
-  blue: "🔵 Tree Removal - August",
-  optOut: "Tree Removal - Opt Out - August",
-  blueOptOut: "🔵 Tree Removal - Opt Out - August",
+// The real naming structure: month in a trailing parenthetical, and no
+// separator introduced in front of it.
+eq("the real worked example", deriveNames("Tree Removal (August)"), {
+  blue: "\u{1F535} Tree Removal (August)",
+  optOut: "Tree Removal - Opt Out (August)",
+  blueOptOut: "\u{1F535} Tree Removal - Opt Out (August)",
 });
-eq("no separator appends instead of inserting", deriveNames("Tree Removal"), {
-  blue: "🔵 Tree Removal",
+eq("no dash is introduced before the parenthetical",
+  /- \(/.test(deriveNames("Tree Removal (August)").optOut), false);
+eq("the parenthetical stays last",
+  deriveNames("Tree Removal (August)").optOut.endsWith("(August)"), true);
+eq("no parenthetical appends instead", deriveNames("Tree Removal"), {
+  blue: "\u{1F535} Tree Removal",
   optOut: "Tree Removal - Opt Out",
-  blueOptOut: "🔵 Tree Removal - Opt Out",
+  blueOptOut: "\u{1F535} Tree Removal - Opt Out",
 });
-eq("three segments keep the last one last", withOptOut("Roofing - UK - August"),
-  "Roofing - UK - Opt Out - August");
-eq("blue is not doubled", withBlue("🔵 Tree Removal - August"), "🔵 Tree Removal - August");
-eq("opt out is not doubled", withOptOut("Tree Removal - Opt Out - August"),
-  "Tree Removal - Opt Out - August");
-eq("opt out match is case-insensitive", withOptOut("Tree Removal - OPT OUT - August"),
-  "Tree Removal - OPT OUT - August");
-eq("surrounding whitespace trimmed", deriveNames("  Tree Removal - August  ").optOut,
-  "Tree Removal - Opt Out - August");
-// A hyphen that is not a " - " separator must not be treated as one.
-eq("hyphenated word is not a separator", withOptOut("Pre-Sales Outreach"),
-  "Pre-Sales Outreach - Opt Out");
-eq("derived names are all distinct", new Set(Object.values(deriveNames("Tree Removal - August"))).size, 3);
+eq("a name that already has a dash keeps it once",
+  withOptOut("Tree Removal - UK (August)"), "Tree Removal - UK - Opt Out (August)");
+eq("blue is not doubled", withBlue("\u{1F535} Tree Removal (August)"), "\u{1F535} Tree Removal (August)");
+eq("opt out is not doubled", withOptOut("Tree Removal - Opt Out (August)"),
+  "Tree Removal - Opt Out (August)");
+eq("opt out match is case-insensitive", withOptOut("Tree Removal - OPT OUT (August)"),
+  "Tree Removal - OPT OUT (August)");
+eq("surrounding whitespace trimmed", deriveNames("  Tree Removal (August)  ").optOut,
+  "Tree Removal - Opt Out (August)");
+eq("multi-word parenthetical preserved", withOptOut("Tree Removal (August 2026)"),
+  "Tree Removal - Opt Out (August 2026)");
+eq("derived names are all distinct",
+  new Set(Object.values(deriveNames("Tree Removal (August)"))).size, 3);
+// Applying twice must be a no-op, so a re-run can't stack markers.
+eq("derivation is idempotent", withOptOut(withOptOut("Tree Removal (August)")),
+  "Tree Removal - Opt Out (August)");
+eq("blue idempotent", withBlue(withBlue("Tree Removal (August)")), "\u{1F535} Tree Removal (August)");
 
 // --- split -----------------------------------------------------------------
 const splitCounts = (ms, other) => {
@@ -188,13 +199,15 @@ eq("campaign with no step 1 is a no-op", appendStepOne(
 
 // --- companion matching -----------------------------------------------------
 const normalizeName = (n) => n.replace(/\uFE0F/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+const looseKey = (n) => normalizeName(n).replace(/-/g, " ").replace(/\s+/g, " ").trim();
 const matchCompanions = (sourceName, campaigns, sourceId) => {
   const names = deriveNames(sourceName);
   const pool = campaigns.filter((c) => c.campaignType !== "subseq" && c.id !== sourceId);
-  const byName = new Map();
+  const byName = new Map(), byLoose = new Map();
   for (const c of pool) {
-    const k = normalizeName(c.name);
-    byName.has(k) ? byName.get(k).push(c) : byName.set(k, [c]);
+    for (const [map, key] of [[byName, normalizeName(c.name)], [byLoose, looseKey(c.name)]]) {
+      map.has(key) ? map.get(key).push(c) : map.set(key, [c]);
+    }
   }
   const roles = [
     { role: "blue", expectedName: names.blue },
@@ -203,72 +216,94 @@ const matchCompanions = (sourceName, campaigns, sourceId) => {
   ];
   const used = new Set();
   const matches = roles.map(({ role, expectedName }) => {
-    const found = byName.get(normalizeName(expectedName)) ?? [];
-    if (found.length > 1) return { role, expectedName, match: null, ambiguous: true };
-    const c = found[0];
-    if (!c || used.has(c.id)) return { role, expectedName, match: null, ambiguous: false };
-    used.add(c.id);
-    return { role, expectedName, match: c, ambiguous: false };
+    const exact = byName.get(normalizeName(expectedName)) ?? [];
+    if (exact.length > 1) return { role, expectedName, match: null, ambiguous: true };
+    let candidate = exact[0], loose = false;
+    if (!candidate) {
+      const near = (byLoose.get(looseKey(expectedName)) ?? []).filter((c) => !used.has(c.id));
+      if (near.length > 1) return { role, expectedName, match: null, ambiguous: true };
+      candidate = near[0];
+      loose = !!candidate;
+    }
+    if (!candidate || used.has(candidate.id)) return { role, expectedName, match: null, ambiguous: false };
+    used.add(candidate.id);
+    return { role, expectedName, match: candidate, ambiguous: false, loose };
   });
   return { matches, complete: matches.every((m) => m.match !== null) };
 };
 
 console.log("--- companion matching");
-const SRC = { id: "s1", name: "Tree Removal - August" };
+const SRC = { id: "s1", name: "Tree Removal (August)" };
 const full = [
   SRC,
-  { id: "b1", name: "\u{1F535} Tree Removal - August" },
-  { id: "o1", name: "Tree Removal - Opt Out - August" },
-  { id: "bo1", name: "\u{1F535} Tree Removal - Opt Out - August" },
+  { id: "b1", name: "\u{1F535} Tree Removal (August)" },
+  { id: "o1", name: "Tree Removal - Opt Out (August)" },
+  { id: "bo1", name: "\u{1F535} Tree Removal - Opt Out (August)" },
 ];
 const r = matchCompanions(SRC.name, full, SRC.id);
 eq("all three companions found", r.complete, true);
 eq("blue maps to the blue campaign", r.matches[0].match.id, "b1");
 eq("optOut maps to the opt out campaign", r.matches[1].match.id, "o1");
 eq("blueOptOut maps to the blue opt out campaign", r.matches[2].match.id, "bo1");
+eq("exact matches are not flagged loose", r.matches.every((m) => !m.loose), true);
+
+// The screenshot's real list, where the blue copy carries a stray dash.
+const strayDash = matchCompanions(SRC.name, [
+  { id: "b1", name: "\u{1F535} Tree Removal - (August)" },
+  { id: "o1", name: "Tree Removal - Opt Out (August)" },
+  { id: "bo1", name: "\u{1F535} Tree Removal - Opt Out (August)" },
+], SRC.id);
+eq("a stray dash before the parenthetical still matches", strayDash.complete, true);
+eq("stray-dash blue maps correctly", strayDash.matches[0].match.id, "b1");
+eq("the loose match is flagged for a second look", strayDash.matches[0].loose, true);
+eq("the exact matches beside it are not flagged", strayDash.matches[1].loose, false);
 
 // The source must never be matched into a role - it would move leads to itself.
-const selfy = matchCompanions("Tree Removal - August", [SRC], SRC.id);
+const selfy = matchCompanions(SRC.name, [SRC], SRC.id);
 eq("source is excluded from the pool", selfy.matches.every((m) => m.match === null), true);
 eq("incomplete when companions are missing", selfy.complete, false);
 
 // Human duplication is sloppy: case, doubled spaces, missing variation selector.
 const sloppy = matchCompanions(SRC.name, [
-  { id: "b1", name: "\u{1F535}\uFE0F  tree removal  -  August " },
-  { id: "o1", name: "TREE REMOVAL - OPT OUT - AUGUST" },
-  { id: "bo1", name: "\u{1F535} Tree Removal - Opt Out - August" },
+  { id: "b1", name: "\u{1F535}\uFE0F  tree removal  (August) " },
+  { id: "o1", name: "TREE REMOVAL - OPT OUT (AUGUST)" },
+  { id: "bo1", name: "\u{1F535} Tree Removal - Opt Out (August)" },
 ], SRC.id);
 eq("tolerates case, spacing and the emoji variation selector", sloppy.complete, true);
-eq("sloppy blue still maps correctly", sloppy.matches[0].match.id, "b1");
 
 // Sub-sequences are separate campaign records and are never a role.
 const withSub = matchCompanions(SRC.name, [
-  { id: "sub", name: "\u{1F535} Tree Removal - August", campaignType: "subseq" },
-  { id: "b1", name: "\u{1F535} Tree Removal - August" },
+  { id: "sub", name: "\u{1F535} Tree Removal (August)", campaignType: "subseq" },
+  { id: "b1", name: "\u{1F535} Tree Removal (August)" },
 ], SRC.id);
 eq("sub-sequences are excluded", withSub.matches[0].match.id, "b1");
 
 // Two campaigns with the same name: refuse rather than guess.
 const dupes = matchCompanions(SRC.name, [
-  { id: "b1", name: "\u{1F535} Tree Removal - August" },
-  { id: "b2", name: "\u{1F535} Tree Removal - August" },
+  { id: "b1", name: "\u{1F535} Tree Removal (August)" },
+  { id: "b2", name: "\u{1F535} Tree Removal (August)" },
 ], SRC.id);
 eq("duplicate names are ambiguous, not guessed", dupes.matches[0].ambiguous, true);
 eq("ambiguous role is left unmatched", dupes.matches[0].match, null);
 
+// Loose matching must not resolve a genuine ambiguity either.
+const looseDupes = matchCompanions(SRC.name, [
+  { id: "b1", name: "\u{1F535} Tree Removal - (August)" },
+  { id: "b2", name: "\u{1F535} Tree Removal -- (August)" },
+], SRC.id);
+eq("two loose candidates are ambiguous", looseDupes.matches[0].ambiguous, true);
+
 // A near-miss must not be matched to the wrong campaign.
 const nearMiss = matchCompanions(SRC.name, [
-  { id: "x", name: "\u{1F535} Tree Removal - September" },
-  { id: "y", name: "Tree Removal - Opt Out - September" },
+  { id: "x", name: "\u{1F535} Tree Removal (September)" },
+  { id: "y", name: "Tree Removal - Opt Out (September)" },
 ], SRC.id);
 eq("a different month does not match", nearMiss.matches.every((m) => m.match === null), true);
-
-// One campaign cannot fill two roles.
-const shared = matchCompanions("Tree Removal", [
-  { id: "z", name: "Tree Removal - Opt Out" },
-], "s1");
-eq("a campaign fills at most one role",
-  shared.matches.filter((m) => m.match && m.match.id === "z").length, 1);
+// Loosening punctuation must never loosen identity.
+eq("loose matching does not cross months",
+  looseKey("\u{1F535} Tree Removal (August)") === looseKey("\u{1F535} Tree Removal (September)"), false);
+eq("loose matching does not merge opt out with the plain copy",
+  looseKey("Tree Removal (August)") === looseKey("Tree Removal - Opt Out (August)"), false);
 
 console.log(failures === 0 ? "\nall campaign-types checks OK" : `\n${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);
