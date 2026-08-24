@@ -146,6 +146,16 @@ export const TOOLS: Tool[] = [
     Icon: ScissorsIcon,
   },
   {
+    slug: "follow-ups",
+    name: "Create Follow Up Emails",
+    tagline: "Add your follow-up template library to step 2",
+    description:
+      "Keep a numbered library of follow-up templates and add them all as variants of step 2 on any campaign, with the SERVICE OFFERING / OFFER placeholder replaced by the offer sentence you enter on the run.",
+    status: "active",
+    color: "teal",
+    Icon: MailIcon,
+  },
+  {
     slug: "move-leads",
     name: "Move Leads to Another Campaign",
     tagline: "Shift a set number of leads from one campaign to another",

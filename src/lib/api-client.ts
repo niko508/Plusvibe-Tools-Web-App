@@ -1,6 +1,7 @@
 "use client";
 
 import { getApiKey } from "@/lib/api-key";
+import type { FollowUpTemplate } from "@/lib/follow-ups/templates";
 import type {
   CampaignTypesJob,
   CampaignTypesStartPayload,
@@ -44,7 +45,11 @@ export class ApiClientError extends Error {
 
 async function request<T>(
   url: string,
-  init?: { method?: "GET" | "POST"; body?: unknown; signal?: AbortSignal }
+  init?: {
+    method?: "GET" | "POST" | "PUT";
+    body?: unknown;
+    signal?: AbortSignal;
+  }
 ): Promise<T> {
   const key = getApiKey();
   const headers: Record<string, string> = {};
@@ -508,6 +513,69 @@ export function deleteCampaignTypesJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/campaign-types/delete", {
     method: "POST",
     body: { jobId },
+    signal,
+  });
+}
+
+// --- Create Follow Up Emails -------------------------------------------------
+
+export function fetchFollowUpTemplates(signal?: AbortSignal) {
+  return request<{ templates: FollowUpTemplate[]; seeded: boolean }>(
+    "/api/follow-ups/templates",
+    { signal }
+  );
+}
+
+export function saveFollowUpTemplates(
+  templates: FollowUpTemplate[],
+  signal?: AbortSignal
+) {
+  return request<{ templates: FollowUpTemplate[] }>("/api/follow-ups/templates", {
+    method: "PUT",
+    body: { templates },
+    signal,
+  });
+}
+
+export interface FollowUpPlanRow {
+  variation: string;
+  name: string;
+  position: number;
+  replacements: number;
+  preview: string;
+}
+
+export interface FollowUpPlan {
+  campaignName: string;
+  step: number;
+  stepCreated: boolean;
+  waitTime: number;
+  existing: number;
+  adding: FollowUpPlanRow[];
+  skipped: number[];
+  droppedDeleted: number;
+  warnings: string[];
+  applied: boolean;
+  unchanged?: boolean;
+  expected?: number;
+  actual?: number;
+  verified?: boolean;
+}
+
+export function applyFollowUps(
+  params: {
+    workspace_id: string;
+    campaign_id: string;
+    offer: string;
+    templates: FollowUpTemplate[];
+    waitTime?: number;
+    dryRun?: boolean;
+  },
+  signal?: AbortSignal
+) {
+  return request<FollowUpPlan>("/api/follow-ups/apply", {
+    method: "POST",
+    body: params,
     signal,
   });
 }
