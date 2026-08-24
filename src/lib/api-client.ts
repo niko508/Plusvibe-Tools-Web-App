@@ -2,6 +2,10 @@
 
 import { getApiKey } from "@/lib/api-key";
 import type {
+  CampaignTypesJob,
+  CampaignTypesStartPayload,
+} from "@/lib/jobs/campaign-types-types";
+import type {
   CampaignDetail,
   CampaignSummary,
   EmailAccountsResponse,
@@ -165,42 +169,6 @@ export function addCampaignVariations(
   signal?: AbortSignal
 ) {
   return request<AddVariationsResult>("/api/plusvibe/campaign-variations", {
-    method: "POST",
-    body: params,
-    signal,
-  });
-}
-
-// --- Remove personalized opening line ---------------------------------------
-
-export interface OpeningLinePlanRow {
-  step: number;
-  variation: string;
-  subjectChanged: boolean;
-  bodyChanged: boolean;
-  removed: number;
-}
-
-export interface OpeningLinePlan {
-  campaignName: string;
-  rows: OpeningLinePlanRow[];
-  totals: {
-    variations: number;
-    subjectsChanged: number;
-    bodiesChanged: number;
-    openingLinesRemoved: number;
-  };
-  subjectSample?: { before: string; after: string };
-  applied: boolean;
-  leftover?: number;
-  verified?: boolean;
-}
-
-export function removeOpeningLine(
-  params: { workspace_id: string; campaign_id: string; dryRun?: boolean },
-  signal?: AbortSignal
-) {
-  return request<OpeningLinePlan>("/api/plusvibe/remove-opening-line", {
     method: "POST",
     body: params,
     signal,
@@ -496,6 +464,48 @@ export function listRemove50Jobs(signal?: AbortSignal) {
 
 export function abortRemove50(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/remove-50/abort", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
+// --- Create All Campaign Types ---------------------------------------------
+
+export function startCampaignTypes(
+  payload: CampaignTypesStartPayload,
+  signal?: AbortSignal
+) {
+  return request<{ jobId: string }>("/api/jobs/campaign-types/start", {
+    method: "POST",
+    body: payload,
+    signal,
+  });
+}
+
+export function listCampaignTypesJobs(signal?: AbortSignal) {
+  return request<{ jobs: CampaignTypesJob[] }>("/api/jobs/campaign-types/list", {
+    signal,
+  });
+}
+
+export function getCampaignTypesJob(jobId: string, signal?: AbortSignal) {
+  return request<{ job: CampaignTypesJob }>(
+    `/api/jobs/campaign-types/status?jobId=${encodeURIComponent(jobId)}`,
+    { signal }
+  );
+}
+
+export function abortCampaignTypes(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/campaign-types/abort", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
+export function deleteCampaignTypesJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/campaign-types/delete", {
     method: "POST",
     body: { jobId },
     signal,

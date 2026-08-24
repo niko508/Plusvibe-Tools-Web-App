@@ -136,11 +136,11 @@ export const TOOLS: Tool[] = [
     Icon: LayersIcon,
   },
   {
-    slug: "remove-opening-line",
-    name: "Remove Personalized Opening Line",
-    tagline: "Strip the opening-line personalization from a whole campaign",
+    slug: "campaign-types",
+    name: "Create All Campaign Types",
+    tagline: "Split a campaign across its Microsoft and Opt Out copies",
     description:
-      "Unwrap the {{fallback| {{subject_line}} …}} subject on every variation and drop {{opening_line}} from every body — the rest of the copy, and the variations themselves, stay exactly as they are.",
+      "Point it at the original campaign and it finds the three copies you duplicated, adds the opt-out line to step 1 of both Opt Out campaigns, then sorts the not-contacted leads by mailbox provider and splits them four ways — Microsoft into the \u{1F535} campaigns, the rest halved with the original.",
     status: "active",
     color: "amber",
     Icon: ScissorsIcon,

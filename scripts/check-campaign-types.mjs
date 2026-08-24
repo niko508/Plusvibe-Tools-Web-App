@@ -185,5 +185,90 @@ eq("missing body field is tolerated", hasBlock(appendStepOne(
 eq("campaign with no step 1 is a no-op", appendStepOne(
   [{ step: 2, variations: [{ variation: "A", body: "x" }] }]).changed, []);
 
+
+// --- companion matching -----------------------------------------------------
+const normalizeName = (n) => n.replace(/\uFE0F/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+const matchCompanions = (sourceName, campaigns, sourceId) => {
+  const names = deriveNames(sourceName);
+  const pool = campaigns.filter((c) => c.campaignType !== "subseq" && c.id !== sourceId);
+  const byName = new Map();
+  for (const c of pool) {
+    const k = normalizeName(c.name);
+    byName.has(k) ? byName.get(k).push(c) : byName.set(k, [c]);
+  }
+  const roles = [
+    { role: "blue", expectedName: names.blue },
+    { role: "optOut", expectedName: names.optOut },
+    { role: "blueOptOut", expectedName: names.blueOptOut },
+  ];
+  const used = new Set();
+  const matches = roles.map(({ role, expectedName }) => {
+    const found = byName.get(normalizeName(expectedName)) ?? [];
+    if (found.length > 1) return { role, expectedName, match: null, ambiguous: true };
+    const c = found[0];
+    if (!c || used.has(c.id)) return { role, expectedName, match: null, ambiguous: false };
+    used.add(c.id);
+    return { role, expectedName, match: c, ambiguous: false };
+  });
+  return { matches, complete: matches.every((m) => m.match !== null) };
+};
+
+console.log("--- companion matching");
+const SRC = { id: "s1", name: "Tree Removal - August" };
+const full = [
+  SRC,
+  { id: "b1", name: "\u{1F535} Tree Removal - August" },
+  { id: "o1", name: "Tree Removal - Opt Out - August" },
+  { id: "bo1", name: "\u{1F535} Tree Removal - Opt Out - August" },
+];
+const r = matchCompanions(SRC.name, full, SRC.id);
+eq("all three companions found", r.complete, true);
+eq("blue maps to the blue campaign", r.matches[0].match.id, "b1");
+eq("optOut maps to the opt out campaign", r.matches[1].match.id, "o1");
+eq("blueOptOut maps to the blue opt out campaign", r.matches[2].match.id, "bo1");
+
+// The source must never be matched into a role - it would move leads to itself.
+const selfy = matchCompanions("Tree Removal - August", [SRC], SRC.id);
+eq("source is excluded from the pool", selfy.matches.every((m) => m.match === null), true);
+eq("incomplete when companions are missing", selfy.complete, false);
+
+// Human duplication is sloppy: case, doubled spaces, missing variation selector.
+const sloppy = matchCompanions(SRC.name, [
+  { id: "b1", name: "\u{1F535}\uFE0F  tree removal  -  August " },
+  { id: "o1", name: "TREE REMOVAL - OPT OUT - AUGUST" },
+  { id: "bo1", name: "\u{1F535} Tree Removal - Opt Out - August" },
+], SRC.id);
+eq("tolerates case, spacing and the emoji variation selector", sloppy.complete, true);
+eq("sloppy blue still maps correctly", sloppy.matches[0].match.id, "b1");
+
+// Sub-sequences are separate campaign records and are never a role.
+const withSub = matchCompanions(SRC.name, [
+  { id: "sub", name: "\u{1F535} Tree Removal - August", campaignType: "subseq" },
+  { id: "b1", name: "\u{1F535} Tree Removal - August" },
+], SRC.id);
+eq("sub-sequences are excluded", withSub.matches[0].match.id, "b1");
+
+// Two campaigns with the same name: refuse rather than guess.
+const dupes = matchCompanions(SRC.name, [
+  { id: "b1", name: "\u{1F535} Tree Removal - August" },
+  { id: "b2", name: "\u{1F535} Tree Removal - August" },
+], SRC.id);
+eq("duplicate names are ambiguous, not guessed", dupes.matches[0].ambiguous, true);
+eq("ambiguous role is left unmatched", dupes.matches[0].match, null);
+
+// A near-miss must not be matched to the wrong campaign.
+const nearMiss = matchCompanions(SRC.name, [
+  { id: "x", name: "\u{1F535} Tree Removal - September" },
+  { id: "y", name: "Tree Removal - Opt Out - September" },
+], SRC.id);
+eq("a different month does not match", nearMiss.matches.every((m) => m.match === null), true);
+
+// One campaign cannot fill two roles.
+const shared = matchCompanions("Tree Removal", [
+  { id: "z", name: "Tree Removal - Opt Out" },
+], "s1");
+eq("a campaign fills at most one role",
+  shared.matches.filter((m) => m.match && m.match.id === "z").length, 1);
+
 console.log(failures === 0 ? "\nall campaign-types checks OK" : `\n${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);
