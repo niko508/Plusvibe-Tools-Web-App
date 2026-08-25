@@ -38,6 +38,7 @@ import type { DomainRow, SortKey, SortState } from "./types";
 
 const LAST_WS_KEY = "pv_last_workspace";
 const BURNED_THRESHOLD_KEY = "pv_burned_threshold";
+const MIN_SENDS_KEY = "pv_min_sends";
 const DEFAULT_PRESET = "30d";
 // A domain with an OOO reply rate at or above this is still delivering, so it's
 // never counted as burned even if its true reply rate is below the threshold.
@@ -86,6 +87,13 @@ export function DomainPerformanceTool() {
   const [thresholdLoaded, setThresholdLoaded] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  // Minimum sends a domain needs before it's counted at all. A domain with a
+  // handful of sends produces a reply rate that is mostly noise — one reply out
+  // of 15 reads as 57%, which then sorts to the top and skews every summary
+  // above the table. Persisted alongside the burned threshold.
+  const [minSends, setMinSends] = useState("0");
+  const [minSendsLoaded, setMinSendsLoaded] = useState(false);
+
   useEffect(() => {
     const saved =
       typeof window !== "undefined"
@@ -94,6 +102,21 @@ export function DomainPerformanceTool() {
     if (saved !== null) setThreshold(saved);
     setThresholdLoaded(true);
   }, []);
+
+  useEffect(() => {
+    const saved =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem(MIN_SENDS_KEY)
+        : null;
+    if (saved !== null) setMinSends(saved);
+    setMinSendsLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (minSendsLoaded && typeof window !== "undefined") {
+      window.localStorage.setItem(MIN_SENDS_KEY, minSends);
+    }
+  }, [minSends, minSendsLoaded]);
 
   useEffect(() => {
     if (thresholdLoaded && typeof window !== "undefined") {
@@ -270,10 +293,14 @@ export function DomainPerformanceTool() {
 
   // Client-side filters: sender ESP + hide warming/inactive (0 sent). A domain
   // is "warming/inactive" once loaded with 0 sent in the range.
+  // A blank or negative box means "no minimum"; 0 sends is always hidden
+  // regardless, since a domain that sent nothing has no performance to compare.
+  const minSendsNum = Math.max(1, Math.floor(Number(minSends)) || 0);
   const activeRows = rows.filter((r) => {
     if (senderProvider && !r.providers.includes(senderProvider)) return false;
-    // Always hide domains that sent no campaign emails in the range.
-    if (r.status === "done" && r.header && r.header.total_sent_count === 0) {
+    // Rows still loading have no header yet and are kept, so the table shows
+    // them working rather than popping in and out as each one lands.
+    if (r.status === "done" && r.header && r.header.total_sent_count < minSendsNum) {
       return false;
     }
     return true;
@@ -288,7 +315,7 @@ export function DomainPerformanceTool() {
       (!senderProvider || r.providers.includes(senderProvider)) &&
       r.status === "done" &&
       r.header &&
-      r.header.total_sent_count === 0
+      r.header.total_sent_count < minSendsNum
   ).length;
 
   const selectedRow = rows.find((r) => r.domain === selectedDomain);
@@ -412,12 +439,29 @@ export function DomainPerformanceTool() {
                 </span>
               )}
             </div>
-            {hiddenInactive > 0 && (
-              <span className="text-xs text-muted-foreground">
-                {formatNumber(hiddenInactive)} domain
-                {hiddenInactive === 1 ? "" : "s"} with no sends hidden
-              </span>
-            )}
+            <div className="flex flex-wrap items-center gap-3">
+              {hiddenInactive > 0 && (
+                <span className="text-xs text-muted-foreground">
+                  {formatNumber(hiddenInactive)} domain
+                  {hiddenInactive === 1 ? "" : "s"}{" "}
+                  {minSendsNum > 1
+                    ? `under ${formatNumber(minSendsNum)} sends hidden`
+                    : "with no sends hidden"}
+                </span>
+              )}
+              <div className="flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs">
+                <span className="text-muted-foreground">Min&nbsp;sends</span>
+                <input
+                  type="number"
+                  step="1"
+                  min="0"
+                  value={minSends}
+                  onChange={(e) => setMinSends(e.target.value)}
+                  className="w-16 rounded-md border border-input bg-background px-1.5 py-0.5 text-right tabular-nums outline-none focus:border-accent focus:ring-2 focus:ring-accent/25"
+                  aria-label="Minimum sends per domain"
+                />
+              </div>
+            </div>
           </div>
 
           {/* Summary cards */}
@@ -595,11 +639,31 @@ export function DomainPerformanceTool() {
                 No domains have a true reply rate below{" "}
                 {thresholdValid ? threshold : "0"}% in this range. Raise the
                 threshold or widen the date range.
+                {minSendsNum > 1 && hiddenInactive > 0 && (
+                  <>
+                    {" "}
+                    {formatNumber(hiddenInactive)} domain
+                    {hiddenInactive === 1 ? " is" : "s are"} also hidden by the{" "}
+                    {formatNumber(minSendsNum)}-send minimum.
+                  </>
+                )}
               </EmptyState>
             ) : (
               <EmptyState title="No sending domains found">
-                None of this workspace&apos;s mailboxes have a parseable sending
-                domain in the selected range.
+                {minSendsNum > 1 && hiddenInactive > 0 ? (
+                  <>
+                    {formatNumber(hiddenInactive)} domain
+                    {hiddenInactive === 1 ? "" : "s"} sent fewer than{" "}
+                    {formatNumber(minSendsNum)} emails in this range and{" "}
+                    {hiddenInactive === 1 ? "is" : "are"} hidden. Lower the
+                    minimum sends to see {hiddenInactive === 1 ? "it" : "them"}.
+                  </>
+                ) : (
+                  <>
+                    None of this workspace&apos;s mailboxes have a parseable
+                    sending domain in the selected range.
+                  </>
+                )}
               </EmptyState>
             ))
           )}
