@@ -25,6 +25,7 @@ import type {
   CreatedCampaign,
   CreatedRole,
   MoveTarget,
+  PhaseState,
 } from "@/lib/jobs/campaign-types-types";
 import { MAX_STORED_ERRORS } from "@/lib/jobs/campaign-types-types";
 
@@ -118,6 +119,120 @@ function flushRunningSync() {
 
 onShutdownFlush(flushRunningSync);
 
+/**
+ * Brings a persisted record up to the current shape.
+ *
+ * Jobs written before this tool did its own duplication have no `created`,
+ * `activation` or `sourceCampaignName`, and name their second phase
+ * "optOutCopy". Rendering those crashed the whole page, so old records are
+ * translated rather than trusted — and every array is defaulted, so a record
+ * from any past or future shape can still be listed.
+ */
+function migrateRecord(raw: CampaignTypesJob): CampaignTypesJob {
+  const legacy = raw as unknown as {
+    campaigns?: { role: string; campaignId: string; name: string }[];
+    optOut?: {
+      role: string;
+      name: string;
+      state: PhaseState;
+      applied?: string[];
+      alreadyPresent?: string[];
+      error?: string;
+    }[];
+    phaseStates?: Record<string, PhaseState>;
+  };
+
+  const rec = raw as CampaignTypesJob;
+  const byRole = new Map(
+    (legacy.campaigns ?? []).map((c) => [c.role, c] as const)
+  );
+  const legacyOptOut = new Map(
+    (legacy.optOut ?? []).map((o) => [o.role, o] as const)
+  );
+
+  if (!Array.isArray(rec.created)) {
+    rec.created = CREATED_ROLES.map((role) => {
+      const old = byRole.get(role);
+      const optOut = legacyOptOut.get(role);
+      return {
+        role,
+        name: old?.name ?? role,
+        campaignId: old?.campaignId,
+        // These campaigns were made by hand back then, so they were adopted
+        // rather than duplicated — "reused" is the honest label.
+        reused: old ? true : undefined,
+        state: old ? ("done" as PhaseState) : ("pending" as PhaseState),
+        ...(OPT_OUT_ROLES.includes(role)
+          ? {
+              optOut: {
+                state: optOut?.state ?? ("pending" as PhaseState),
+                applied: optOut?.applied ?? [],
+                alreadyPresent: optOut?.alreadyPresent ?? [],
+                error: optOut?.error,
+              },
+            }
+          : {}),
+      };
+    });
+  }
+
+  if (!rec.sourceCampaignName) {
+    rec.sourceCampaignName = byRole.get("source")?.name ?? rec.label ?? "";
+  }
+  if (!rec.sourceCampaignId) {
+    rec.sourceCampaignId = byRole.get("source")?.campaignId ?? "";
+  }
+
+  // Activation didn't exist then, so it's shown as skipped rather than pending
+  // — those runs were never going to launch anything.
+  if (!Array.isArray(rec.activation)) {
+    rec.activation = (["source", ...CREATED_ROLES] as CampaignRole[]).map(
+      (role) => ({
+        role,
+        name:
+          role === "source"
+            ? rec.sourceCampaignName
+            : (rec.created.find((c) => c.role === role)?.name ?? role),
+        state: "skipped" as PhaseState,
+      })
+    );
+  }
+
+  const ps = (legacy.phaseStates ?? {}) as Record<string, PhaseState>;
+  rec.phaseStates = {
+    sorting: ps.sorting ?? "pending",
+    duplicating: ps.duplicating ?? ps.optOutCopy ?? "pending",
+    moving: ps.moving ?? "pending",
+    activating: ps.activating ?? "skipped",
+  };
+  if ((rec.phase as string) === "optOutCopy") rec.phase = "duplicating";
+
+  // Everything the UI iterates, defaulted.
+  rec.errors = Array.isArray(rec.errors) ? rec.errors : [];
+  rec.moving = rec.moving ?? {
+    targets: [],
+    staysInSource: 0,
+    processed: 0,
+    plannedTotal: 0,
+  };
+  rec.moving.targets = Array.isArray(rec.moving.targets)
+    ? rec.moving.targets
+    : [];
+  rec.sorting = rec.sorting ?? {
+    leadsFound: 0,
+    microsoft: 0,
+    other: 0,
+    domainsTotal: 0,
+    domainsResolved: 0,
+    unresolvedDomains: 0,
+    fromLeadField: 0,
+  };
+
+  delete (rec as unknown as { campaigns?: unknown }).campaigns;
+  delete (rec as unknown as { optOut?: unknown }).optOut;
+  return rec;
+}
+
 async function loadOnce() {
   if (loaded) return;
   loaded = true;
@@ -136,7 +251,7 @@ async function loadOnce() {
           parsed.status = "interrupted";
           parsed.updatedAt = parsed.updatedAt || Date.now();
         }
-        records.set(parsed.id, parsed);
+        records.set(parsed.id, migrateRecord(parsed));
         meta.set(parsed.id, { fingerprint, aborted: false });
       } catch {
         // skip corrupt record

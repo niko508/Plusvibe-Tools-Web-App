@@ -35,8 +35,24 @@ export function JobCard({
   onRemove: (id: string) => void | Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
-  const status = STATUS_META[job.status];
+  const status = STATUS_META[job.status] ?? STATUS_META.error;
   const running = job.status === "running";
+
+  // A record persisted by an older build can be missing whole sections. The
+  // server migrates what it loads, but normalising here too means a shape this
+  // build has never seen degrades to an empty section instead of throwing and
+  // taking the entire page down with it.
+  const created = job.created ?? [];
+  const activation = job.activation ?? [];
+  const moving = job.moving ?? {
+    targets: [],
+    staysInSource: 0,
+    processed: 0,
+    plannedTotal: 0,
+  };
+  const targets = moving.targets ?? [];
+  const errors = job.errors ?? [];
+  const sorting = job.sorting;
 
   return (
     <div className="pv-card p-4 sm:p-5">
@@ -56,18 +72,22 @@ export function JobCard({
 
       {/* The four steps */}
       <ol className="mt-4 space-y-2.5">
-        {PHASE_ORDER.map((phase, i) => (
+        {PHASE_ORDER.map((phase, i) => {
+          // A record from an older build has no state for a phase that didn't
+          // exist then; treat that as pending rather than undefined.
+          const phaseState = job.phaseStates?.[phase] ?? "pending";
+          return (
           <li key={phase} className="flex gap-3">
             <StepBullet
               index={i + 1}
-              state={job.phaseStates[phase]}
+              state={phaseState}
               isCurrent={running && job.phase === phase}
             />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-baseline justify-between gap-x-3">
                 <span
                   className={`text-sm ${
-                    job.phaseStates[phase] === "pending"
+                    phaseState === "pending"
                       ? "text-muted-foreground"
                       : "font-medium"
                   }`}
@@ -75,16 +95,20 @@ export function JobCard({
                   {PHASE_LABELS[phase]}
                 </span>
                 <span className="text-xs tabular-nums text-muted-foreground">
-                  {phaseSummary(job, phase)}
+                  {phaseSummary(
+                    { created, activation, moving, sorting },
+                    phase,
+                    phaseState
+                  )}
                 </span>
               </div>
-              {phase === "moving" && job.moving.plannedTotal > 0 && (
+              {phase === "moving" && moving.plannedTotal > 0 && (
                 <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
                   <div
                     className="h-full rounded-full bg-accent transition-all duration-300"
                     style={{
                       width: `${Math.round(
-                        (job.moving.processed / job.moving.plannedTotal) * 100
+                        (moving.processed / moving.plannedTotal) * 100
                       )}%`,
                     }}
                   />
@@ -92,18 +116,19 @@ export function JobCard({
               )}
             </div>
           </li>
-        ))}
+          );
+        })}
       </ol>
 
       {/* Where the leads went */}
-      {job.moving.plannedTotal > 0 && (
+      {moving.plannedTotal > 0 && (
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Metric
-            label={shortName(job.sourceCampaignName)}
+            label={shortName(job.sourceCampaignName || job.label)}
             sub="stays put"
-            value={job.moving.staysInSource}
+            value={moving.staysInSource}
           />
-          {job.moving.targets.map((t) => (
+          {targets.map((t) => (
             <Metric
               key={t.role}
               label={shortName(t.name)}
@@ -115,21 +140,21 @@ export function JobCard({
         </div>
       )}
 
-      {job.errors.length > 0 && (
+      {errors.length > 0 && (
         <div className="mt-3 space-y-1.5">
-          {job.errors.slice(0, open ? undefined : 2).map((e, i) => (
+          {errors.slice(0, open ? undefined : 2).map((e, i) => (
             <p key={i} className="flex gap-1.5 text-xs text-warning">
               <AlertIcon size={13} className="mt-0.5 shrink-0" />
               <span>{e}</span>
             </p>
           ))}
-          {job.errors.length > 2 && !open && (
+          {errors.length > 2 && !open && (
             <button
               type="button"
               className="text-xs text-muted-foreground underline"
               onClick={() => setOpen(true)}
             >
-              {job.errors.length - 2} more
+              {errors.length - 2} more
             </button>
           )}
         </div>
@@ -182,7 +207,7 @@ export function JobCard({
                 : ""
             }`}
           />
-          {job.created.map((c) => (
+          {created.map((c) => (
             <Detail
               key={c.role}
               label={c.name}
@@ -198,7 +223,7 @@ export function JobCard({
               mono
             />
           ))}
-          {job.created
+          {created
             .filter((c) => c.optOut)
             .map((c) => (
               <Detail
@@ -215,7 +240,7 @@ export function JobCard({
                 }
               />
             ))}
-          {job.activation.map((a) => (
+          {activation.map((a) => (
             <Detail
               key={`launch-${a.role}`}
               label={`Activate · ${shortName(a.name)}`}
@@ -272,16 +297,28 @@ function StepBullet({
   );
 }
 
+/**
+ * The one-line summary shown to the right of each step.
+ *
+ * Takes the already-normalised pieces rather than the raw job, so it cannot be
+ * handed a record with a section missing — which is what blanked the page when
+ * jobs saved by an earlier build had no `created` array.
+ */
 function phaseSummary(
-  job: CampaignTypesJob,
-  phase: (typeof PHASE_ORDER)[number]
+  parts: {
+    created: CampaignTypesJob["created"];
+    activation: CampaignTypesJob["activation"];
+    moving: CampaignTypesJob["moving"];
+    sorting: CampaignTypesJob["sorting"];
+  },
+  phase: (typeof PHASE_ORDER)[number],
+  state: PhaseState
 ): string {
-  const state = job.phaseStates[phase];
   if (state === "pending") return "";
   if (state === "skipped") return "skipped";
 
   if (phase === "sorting") {
-    const s = job.sorting;
+    const s = parts.sorting;
     if (state === "running" && s.domainsTotal > 0) {
       return `${formatNumber(s.domainsResolved)} / ${formatNumber(s.domainsTotal)} domains`;
     }
@@ -290,18 +327,18 @@ function phaseSummary(
   }
 
   if (phase === "duplicating") {
-    const done = job.created.filter((c) => c.state === "done").length;
-    const reused = job.created.filter((c) => c.reused).length;
-    const base = `${done} / ${job.created.length} campaigns`;
+    const done = parts.created.filter((c) => c.state === "done").length;
+    const reused = parts.created.filter((c) => c.reused).length;
+    const base = `${done} / ${parts.created.length} campaigns`;
     return reused > 0 ? `${base} · ${reused} reused` : base;
   }
 
   if (phase === "activating") {
-    const done = job.activation.filter((a) => a.state === "done").length;
-    return `${done} / ${job.activation.length} launched`;
+    const done = parts.activation.filter((a) => a.state === "done").length;
+    return `${done} / ${parts.activation.length} launched`;
   }
 
-  return `${formatNumber(job.moving.processed)} / ${formatNumber(job.moving.plannedTotal)} leads`;
+  return `${formatNumber(parts.moving.processed)} / ${formatNumber(parts.moving.plannedTotal)} leads`;
 }
 
 function Metric({
