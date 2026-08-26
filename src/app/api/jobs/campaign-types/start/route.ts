@@ -2,68 +2,69 @@ import { NextResponse } from "next/server";
 import { resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { createJob, ActiveJobError } from "@/lib/jobs/campaign-types";
-import type {
-  CampaignRole,
-  CampaignTypesStartPayload,
-  RoleCampaign,
-} from "@/lib/jobs/campaign-types-types";
+import type { CampaignTypesStartPayload } from "@/lib/jobs/campaign-types-types";
+import { normalizeName } from "@/lib/campaign-types/match";
 
 export const dynamic = "force-dynamic";
 
-const ROLES: CampaignRole[] = ["source", "blue", "optOut", "blueOptOut"];
-
 // POST /api/jobs/campaign-types/start
-// Body: { workspaceId, workspaceName, campaigns: RoleCampaign[], skipOptOutCopy? }
+// Body: { workspaceId, workspaceName, sourceCampaignId, sourceCampaignName,
+//         names: { blue, optOut, blueOptOut }, activate? }
 export async function POST(request: Request) {
   try {
     const apiKey = resolveApiKey(request);
     const body = (await request.json()) as Partial<CampaignTypesStartPayload>;
 
     const workspaceId = String(body.workspaceId ?? "");
-    if (!workspaceId) {
+    const sourceCampaignId = String(body.sourceCampaignId ?? "");
+    if (!workspaceId || !sourceCampaignId) {
       return NextResponse.json(
-        { error: "workspaceId is required" },
+        { error: "workspaceId and sourceCampaignId are required" },
         { status: 400 }
       );
     }
 
-    const campaigns = Array.isArray(body.campaigns) ? body.campaigns : [];
-    // Every role must be filled: a missing one would silently skip a
-    // destination and leave that share of the leads in the source campaign.
-    for (const role of ROLES) {
-      const entry = campaigns.find((c) => c?.role === role);
-      if (!entry?.campaignId) {
+    const names = {
+      blue: String(body.names?.blue ?? "").trim(),
+      optOut: String(body.names?.optOut ?? "").trim(),
+      blueOptOut: String(body.names?.blueOptOut ?? "").trim(),
+    };
+    for (const [role, name] of Object.entries(names)) {
+      if (!name) {
         return NextResponse.json(
-          { error: `No campaign selected for the "${role}" role.` },
+          { error: `No name for the "${role}" campaign.` },
           { status: 400 }
         );
       }
     }
 
-    // Two roles pointing at the same campaign would move a bucket into a
-    // campaign that already holds another, or into the source itself.
-    const ids = campaigns.map((c) => c.campaignId);
-    if (new Set(ids).size !== ids.length) {
+    // Two copies under the same name would be indistinguishable afterwards,
+    // and the run's own reuse check would then adopt one for both roles.
+    const keys = Object.values(names).map(normalizeName);
+    if (new Set(keys).size !== keys.length) {
       return NextResponse.json(
-        { error: "The same campaign is selected for more than one role." },
+        { error: "Two of the new campaigns would have the same name." },
+        { status: 400 }
+      );
+    }
+    const sourceName = String(body.sourceCampaignName ?? "").trim();
+    if (keys.includes(normalizeName(sourceName))) {
+      return NextResponse.json(
+        {
+          error:
+            "One of the new campaigns would have the same name as the original.",
+        },
         { status: 400 }
       );
     }
 
-    const clean: RoleCampaign[] = ROLES.map((role) => {
-      const c = campaigns.find((x) => x.role === role)!;
-      return {
-        role,
-        campaignId: String(c.campaignId),
-        name: String(c.name ?? ""),
-      };
-    });
-
     const jobId = await createJob(apiKey, {
       workspaceId,
       workspaceName: String(body.workspaceName ?? ""),
-      campaigns: clean,
-      skipOptOutCopy: body.skipOptOutCopy === true,
+      sourceCampaignId,
+      sourceCampaignName: sourceName,
+      names,
+      activate: body.activate !== false,
     });
 
     return NextResponse.json({ jobId });

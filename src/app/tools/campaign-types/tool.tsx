@@ -2,11 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Workspace, CampaignSummary } from "@/lib/plusvibe-types";
-import type {
-  CampaignRole,
-  CampaignTypesJob,
-  RoleCampaign,
-} from "@/lib/jobs/campaign-types-types";
+import type { CampaignTypesJob } from "@/lib/jobs/campaign-types-types";
 import {
   fetchWorkspaces,
   fetchCampaigns,
@@ -22,20 +18,19 @@ import { Spinner, EmptyState } from "@/components/ui";
 import {
   LayersIcon,
   AlertIcon,
-  RefreshIcon,
   ChevronDownIcon,
   CheckIcon,
 } from "@/components/icons";
 import { deriveNames } from "@/lib/campaign-types/names";
-import { matchCompanions, type MatchRole } from "@/lib/campaign-types/match";
+import { normalizeName } from "@/lib/campaign-types/match";
 import { JobCard } from "./job-card";
 
 const POLL_MS = 2000;
-const ROLE_LABELS: Record<MatchRole, string> = {
-  blue: "Microsoft copy",
-  optOut: "Opt Out copy",
-  blueOptOut: "Microsoft + Opt Out copy",
-};
+const ROLE_LABELS = {
+  blue: "Microsoft leads",
+  optOut: "Opt-out copy on step 1",
+  blueOptOut: "Microsoft leads + opt-out copy",
+} as const;
 
 export function CampaignTypesTool() {
   const { hasKey, ready } = useApiKey();
@@ -47,10 +42,7 @@ export function CampaignTypesTool() {
   const [campaigns, setCampaigns] = useState<CampaignSummary[] | null>(null);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
   const [sourceId, setSourceId] = useState<string>("");
-
-  // Manual overrides for roles the name match couldn't resolve.
-  const [overrides, setOverrides] = useState<Partial<Record<MatchRole, string>>>({});
-  const [skipOptOut, setSkipOptOut] = useState(false);
+  const [activate, setActivate] = useState(true);
 
   const [jobs, setJobs] = useState<CampaignTypesJob[]>([]);
   const [starting, setStarting] = useState(false);
@@ -89,7 +81,6 @@ export function CampaignTypesTool() {
     }
   }, [ready, hasKey, loadWorkspaces, refreshJobs]);
 
-  // Poll while anything is running so progress moves without a manual refresh.
   const anyRunning = jobs.some((j) => j.status === "running");
   useEffect(() => {
     if (!anyRunning) return;
@@ -97,91 +88,72 @@ export function CampaignTypesTool() {
     return () => clearInterval(t);
   }, [anyRunning, refreshJobs]);
 
-  const loadCampaigns = useCallback(
-    async (wsId: string) => {
-      setCampaignsLoading(true);
-      setCampaigns(null);
-      setSourceId("");
-      setOverrides({});
-      setError(null);
-      try {
-        const { campaigns: list } = await fetchCampaigns({ workspace_id: wsId });
-        setCampaigns(list);
-      } catch (err) {
-        setError(errMessage(err));
-      } finally {
-        setCampaignsLoading(false);
-      }
-    },
-    []
-  );
+  const loadCampaigns = useCallback(async (wsId: string) => {
+    setCampaignsLoading(true);
+    setCampaigns(null);
+    setSourceId("");
+    setError(null);
+    try {
+      const { campaigns: list } = await fetchCampaigns({ workspace_id: wsId });
+      setCampaigns(list);
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setCampaignsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (workspaceId) void loadCampaigns(workspaceId);
   }, [workspaceId, loadCampaigns]);
 
   // --- Derived -------------------------------------------------------------
-  // Sub-sequences are separate campaign records and are never pickable here.
+  // Sub-sequences are separate campaign records and are never the source.
   const parents = useMemo(
     () => (campaigns ?? []).filter((c) => c.campaignType !== "subseq"),
     [campaigns]
   );
-
   const source = parents.find((c) => c.id === sourceId) ?? null;
   const names = source ? deriveNames(source.name) : null;
 
-  const match = useMemo(() => {
-    if (!source) return null;
-    return matchCompanions(source.name, parents, source.id);
-  }, [source, parents]);
-
-  /** Role → campaign, taking any manual override first. */
-  const resolved = useMemo(() => {
-    const out: Partial<Record<MatchRole, CampaignSummary>> = {};
-    if (!match) return out;
-    for (const m of match.matches) {
-      const overrideId = overrides[m.role];
-      if (overrideId) {
-        const c = parents.find((p) => p.id === overrideId);
-        if (c) out[m.role] = c;
-        continue;
-      }
-      if (m.match) out[m.role] = parents.find((p) => p.id === m.match!.id);
+  // Names already taken in this workspace. The job adopts an existing campaign
+  // rather than making a second one under the same name, so a re-run after an
+  // interruption is safe — this shows that before it happens.
+  const existing = useMemo(() => {
+    const map = new Map<string, CampaignSummary>();
+    for (const c of parents) {
+      const key = normalizeName(c.name);
+      if (!map.has(key)) map.set(key, c);
     }
-    return out;
-  }, [match, overrides, parents]);
+    return map;
+  }, [parents]);
 
-  const roleIds = [sourceId, ...Object.values(resolved).map((c) => c?.id)].filter(
-    Boolean
-  ) as string[];
-  const hasDuplicateRole = new Set(roleIds).size !== roleIds.length;
-  const allRolesFilled =
-    !!source && (["blue", "optOut", "blueOptOut"] as MatchRole[]).every((r) => resolved[r]);
+  const rows = names
+    ? (["blue", "optOut", "blueOptOut"] as const).map((role) => ({
+        role,
+        name: names[role],
+        reused: existing.get(normalizeName(names[role])) ?? null,
+      }))
+    : [];
+  const reusedCount = rows.filter((r) => r.reused).length;
 
   const activeJob = jobs.find((j) => j.status === "running") ?? null;
-  const canStart =
-    allRolesFilled && !hasDuplicateRole && !activeJob && !starting;
+  const canStart = !!source && !activeJob && !starting;
 
   // --- Actions -------------------------------------------------------------
   async function handleStart() {
-    if (!source || !allRolesFilled || startLock.current) return;
+    if (!source || !names || startLock.current) return;
     startLock.current = true;
     setStarting(true);
     setError(null);
     try {
-      const roleCampaigns: RoleCampaign[] = [
-        { role: "source" as CampaignRole, campaignId: source.id, name: source.name },
-        ...(["blue", "optOut", "blueOptOut"] as MatchRole[]).map((r) => ({
-          role: r as CampaignRole,
-          campaignId: resolved[r]!.id,
-          name: resolved[r]!.name,
-        })),
-      ];
       await startCampaignTypes({
         workspaceId: workspaceId!,
         workspaceName: workspaces.find((w) => w._id === workspaceId)?.name ?? "",
-        campaigns: roleCampaigns,
-        skipOptOutCopy: skipOptOut,
+        sourceCampaignId: source.id,
+        sourceCampaignName: source.name,
+        names,
+        activate,
       });
       setToast("Job started — you can close this tab");
       setTimeout(() => setToast(null), 5000);
@@ -200,7 +172,6 @@ export function CampaignTypesTool() {
 
   return (
     <div className="space-y-5">
-      {/* Setup */}
       <div className="pv-card space-y-4 p-4 sm:p-5">
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -241,10 +212,7 @@ export function CampaignTypesTool() {
                 className="pv-input appearance-none pr-9"
                 value={sourceId}
                 disabled={campaignsLoading || parents.length === 0}
-                onChange={(e) => {
-                  setSourceId(e.target.value);
-                  setOverrides({});
-                }}
+                onChange={(e) => setSourceId(e.target.value)}
               >
                 <option value="">
                   {campaignsLoading ? "Loading campaigns…" : "Select a campaign…"}
@@ -263,106 +231,49 @@ export function CampaignTypesTool() {
           </div>
         </div>
 
-        {/* Companion matching */}
-        {source && names && match && (
+        {source && names && (
           <div className="rounded-xl border border-border p-3 sm:p-4">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h3 className="text-sm font-medium">The other three campaigns</h3>
-              <button
-                type="button"
-                className="pv-btn-ghost text-xs"
-                onClick={() => workspaceId && loadCampaigns(workspaceId)}
-              >
-                <RefreshIcon size={14} />
-                Re-check
-              </button>
-            </div>
+            <h3 className="mb-1 text-sm font-medium">
+              Three campaigns will be created
+            </h3>
             <p className="mb-3 text-xs text-muted-foreground">
-              Matched by name against this workspace. Create any that are missing
-              in Plusvibe (duplicating the original, sub-sequences included), then
-              hit Re-check.
+              Duplicated from{" "}
+              <span className="font-mono">{source.name}</span> with their
+              sub-sequences. Leads aren&apos;t copied — they&apos;re split
+              deliberately in step 3.
             </p>
-
             <div className="space-y-2">
-              {match.matches.map((m) => {
-                const picked = resolved[m.role];
-                return (
-                  <div
-                    key={m.role}
-                    className="flex flex-col gap-2 rounded-lg border border-border/70 p-2.5 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        {picked ? (
-                          <span className={m.loose && !overrides[m.role] ? "text-warning" : "text-success"}>
-                            <CheckIcon size={14} />
-                          </span>
-                        ) : (
-                          <span className="text-warning">
-                            <AlertIcon size={14} />
-                          </span>
-                        )}
-                        <span className="truncate font-mono text-xs">
-                          {m.expectedName}
-                        </span>
-                      </div>
-                      <div className="mt-0.5 pl-6 text-[11px] text-muted-foreground">
-                        {ROLE_LABELS[m.role]}
-                        {m.ambiguous && (
-                          <span className="text-warning">
-                            {" "}
-                            · more than one campaign has this name, pick one
-                          </span>
-                        )}
-                        {!m.match && !m.ambiguous && !overrides[m.role] && (
-                          <span className="text-warning"> · not found</span>
-                        )}
-                        {m.loose && !overrides[m.role] && m.match && (
-                          <span className="text-warning">
-                            {" "}
-                            · matched “{m.match.name}” — only the punctuation
-                            differs, check this is the right one
-                          </span>
-                        )}
-                      </div>
+              {rows.map((r) => (
+                <div
+                  key={r.role}
+                  className="flex flex-col gap-1 rounded-lg border border-border/70 p-2.5 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate font-mono text-xs">{r.name}</div>
+                    <div className="mt-0.5 text-[11px] text-muted-foreground">
+                      {ROLE_LABELS[r.role]}
                     </div>
-
-                    {(!m.match || m.ambiguous || m.loose) && (
-                      <div className="relative shrink-0 sm:w-64">
-                        <select
-                          className="pv-input appearance-none pr-9 text-xs"
-                          value={overrides[m.role] ?? ""}
-                          onChange={(e) =>
-                            setOverrides((prev) => ({
-                              ...prev,
-                              [m.role]: e.target.value,
-                            }))
-                          }
-                        >
-                          <option value="">Pick manually…</option>
-                          {parents
-                            .filter((c) => c.id !== sourceId)
-                            .map((c) => (
-                              <option key={c.id} value={c.id}>
-                                {c.name}
-                              </option>
-                            ))}
-                        </select>
-                        <ChevronDownIcon
-                          size={14}
-                          className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                        />
-                      </div>
-                    )}
                   </div>
-                );
-              })}
+                  <span
+                    className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                      r.reused
+                        ? "bg-warning/10 text-warning"
+                        : "bg-success/10 text-success"
+                    }`}
+                  >
+                    {r.reused ? "already exists — will be reused" : "will be created"}
+                  </span>
+                </div>
+              ))}
             </div>
-
-            {hasDuplicateRole && (
-              <p className="mt-3 text-xs text-danger">
-                The same campaign is selected more than once — each role needs its
-                own campaign, or leads would be moved into the wrong one.
+            {reusedCount > 0 && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                {reusedCount === 1 ? "A campaign" : `${reusedCount} campaigns`}{" "}
+                with {reusedCount === 1 ? "this name" : "these names"} already
+                exist{reusedCount === 1 ? "s" : ""}, so{" "}
+                {reusedCount === 1 ? "it" : "they"} will be used as-is rather
+                than duplicated again. That&apos;s what makes re-running after an
+                interrupted job safe.
               </p>
             )}
 
@@ -370,12 +281,13 @@ export function CampaignTypesTool() {
               <input
                 type="checkbox"
                 className="mt-0.5"
-                checked={skipOptOut}
-                onChange={(e) => setSkipOptOut(e.target.checked)}
+                checked={activate}
+                onChange={(e) => setActivate(e.target.checked)}
               />
               <span>
-                Skip the opt-out copy step — I already added the opt-out line to
-                step 1 of both Opt Out campaigns myself.
+                Activate all four campaigns at the end, sub-sequences included.
+                Untick to leave the three copies as drafts and launch them
+                yourself.
               </span>
             </label>
           </div>
@@ -404,21 +316,15 @@ export function CampaignTypesTool() {
               start.
             </span>
           )}
-          {!activeJob && source && !allRolesFilled && (
-            <span className="text-xs text-muted-foreground">
-              All three companion campaigns need to be matched first.
-            </span>
-          )}
         </div>
       </div>
 
-      {/* Jobs */}
       <div className="space-y-3">
         <h2 className="text-sm font-semibold">Jobs</h2>
         {jobs.length === 0 ? (
           <EmptyState icon={<LayersIcon />} title="No jobs yet">
-            Pick the original campaign, confirm the other three, and start — the
-            run keeps going even if you close this tab.
+            Pick the original campaign and start — the run keeps going even if
+            you close this tab.
           </EmptyState>
         ) : (
           jobs.map((job) => (

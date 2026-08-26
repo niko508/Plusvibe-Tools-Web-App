@@ -305,5 +305,75 @@ eq("loose matching does not cross months",
 eq("loose matching does not merge opt out with the plain copy",
   looseKey("Tree Removal (August)") === looseKey("Tree Removal - Opt Out (August)"), false);
 
+
+// --- duplication reuse guard ------------------------------------------------
+// Duplication is NOT idempotent: /campaign/duplicate always creates a new
+// campaign. A resumed run must adopt the copies it already made instead of
+// creating a second set under the same names.
+console.log("--- duplication reuse guard");
+const planDuplication = (sourceName, existingCampaigns) => {
+  const names = deriveNames(sourceName);
+  const existing = new Map();
+  for (const c of existingCampaigns) {
+    if (c.campaignType === "subseq") continue;
+    const k = normalizeName(c.name);
+    if (!existing.has(k)) existing.set(k, c.id);
+  }
+  return ["blue", "optOut", "blueOptOut"].map((role) => {
+    const name = names[role];
+    const found = existing.get(normalizeName(name));
+    return { role, name, action: found ? "reuse" : "create", id: found ?? null };
+  });
+};
+
+const SRC2 = "Tree Removal (August)";
+eq("a fresh workspace creates all three",
+  planDuplication(SRC2, []).map((p) => p.action), ["create", "create", "create"]);
+
+// The resumed-run case: blue was made before the interruption.
+const partial = planDuplication(SRC2, [
+  { id: "b1", name: "\u{1F535} Tree Removal (August)" },
+]);
+eq("an existing copy is reused, not duplicated again",
+  partial.map((p) => p.action), ["reuse", "create", "create"]);
+eq("the reused copy keeps its id", partial[0].id, "b1");
+
+// Everything already there: a full re-run creates nothing.
+const allThere = planDuplication(SRC2, [
+  { id: "b1", name: "\u{1F535} Tree Removal (August)" },
+  { id: "o1", name: "Tree Removal - Opt Out (August)" },
+  { id: "bo1", name: "\u{1F535} Tree Removal - Opt Out (August)" },
+]);
+eq("a full re-run duplicates nothing",
+  allThere.map((p) => p.action), ["reuse", "reuse", "reuse"]);
+eq("ids all resolve", allThere.map((p) => p.id), ["b1", "o1", "bo1"]);
+
+// A sub-sequence sharing the name must not be adopted as a parent campaign.
+eq("a sub-sequence is never reused",
+  planDuplication(SRC2, [
+    { id: "sub", name: "\u{1F535} Tree Removal (August)", campaignType: "subseq" },
+  ])[0].action, "create");
+
+// The source itself must never be adopted for a role.
+eq("the source name does not collide with any derived name",
+  planDuplication(SRC2, [{ id: "s1", name: SRC2 }]).every((p) => p.action === "create"), true);
+
+// The three derived names must be distinct, or two roles would adopt the same
+// campaign and the split would move two buckets into one place.
+const derived = deriveNames(SRC2);
+eq("derived names are distinct after normalization",
+  new Set(Object.values(derived).map(normalizeName)).size, 3);
+eq("no derived name equals the source",
+  Object.values(derived).some((n) => normalizeName(n) === normalizeName(SRC2)), false);
+
+// Duplication order: blue must exist before the blue opt-out copies from it.
+const DUP_FROM = { blue: "source", optOut: "source", blueOptOut: "blue" };
+eq("blue opt out duplicates from blue", DUP_FROM.blueOptOut, "blue");
+eq("the other two duplicate from the source",
+  [DUP_FROM.blue, DUP_FROM.optOut], ["source", "source"]);
+const order = ["blue", "optOut", "blueOptOut"];
+eq("blue is created before the copy that needs it",
+  order.indexOf("blue") < order.indexOf("blueOptOut"), true);
+
 console.log(failures === 0 ? "\nall campaign-types checks OK" : `\n${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);

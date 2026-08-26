@@ -54,7 +54,7 @@ export function JobCard({
         </span>
       </div>
 
-      {/* The three steps */}
+      {/* The four steps */}
       <ol className="mt-4 space-y-2.5">
         {PHASE_ORDER.map((phase, i) => (
           <li key={phase} className="flex gap-3">
@@ -99,7 +99,7 @@ export function JobCard({
       {job.moving.plannedTotal > 0 && (
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Metric
-            label={shortName(job.label)}
+            label={shortName(job.sourceCampaignName)}
             sub="stays put"
             value={job.moving.staysInSource}
           />
@@ -166,9 +166,6 @@ export function JobCard({
       {open && (
         <div className="mt-3 space-y-3 rounded-xl border border-border p-3 text-xs">
           <Detail label="Workspace" value={job.workspaceName || "—"} />
-          {job.campaigns.map((c) => (
-            <Detail key={c.role} label={c.role} value={c.name} mono />
-          ))}
           <Detail
             label="Leads sorted"
             value={`${formatNumber(job.sorting.leadsFound)} not-contacted · ${formatNumber(
@@ -185,19 +182,44 @@ export function JobCard({
                 : ""
             }`}
           />
-          {job.optOut.map((t) => (
+          {job.created.map((c) => (
             <Detail
-              key={t.role}
-              label={`Opt-out copy · ${shortName(t.name)}`}
+              key={c.role}
+              label={c.name}
               value={
-                t.state === "error"
-                  ? t.error || "failed"
-                  : t.applied.length > 0
-                    ? `added to step 1 ${t.applied.join(", ")}`
-                    : t.alreadyPresent.length > 0
-                      ? `already present on ${t.alreadyPresent.join(", ")}`
-                      : t.state
+                c.state === "error"
+                  ? c.error || "failed"
+                  : c.reused
+                    ? "already existed — reused"
+                    : c.campaignId
+                      ? "duplicated with sub-sequences"
+                      : c.state
               }
+              mono
+            />
+          ))}
+          {job.created
+            .filter((c) => c.optOut)
+            .map((c) => (
+              <Detail
+                key={`optout-${c.role}`}
+                label={`Opt-out copy · ${shortName(c.name)}`}
+                value={
+                  c.optOut!.state === "error"
+                    ? c.optOut!.error || "failed"
+                    : c.optOut!.applied.length > 0
+                      ? `added to step 1 ${c.optOut!.applied.join(", ")}`
+                      : c.optOut!.alreadyPresent.length > 0
+                        ? `already present on ${c.optOut!.alreadyPresent.join(", ")}`
+                        : c.optOut!.state
+                }
+              />
+            ))}
+          {job.activation.map((a) => (
+            <Detail
+              key={`launch-${a.role}`}
+              label={`Activate · ${shortName(a.name)}`}
+              value={a.state === "error" ? a.error || "failed" : a.state}
             />
           ))}
         </div>
@@ -267,9 +289,16 @@ function phaseSummary(
     return `${formatNumber(s.microsoft)} Microsoft · ${formatNumber(s.other)} other`;
   }
 
-  if (phase === "optOutCopy") {
-    const done = job.optOut.filter((t) => t.state === "done").length;
-    return `${done} / ${job.optOut.length} campaigns`;
+  if (phase === "duplicating") {
+    const done = job.created.filter((c) => c.state === "done").length;
+    const reused = job.created.filter((c) => c.reused).length;
+    const base = `${done} / ${job.created.length} campaigns`;
+    return reused > 0 ? `${base} · ${reused} reused` : base;
+  }
+
+  if (phase === "activating") {
+    const done = job.activation.filter((a) => a.state === "done").length;
+    return `${done} / ${job.activation.length} launched`;
   }
 
   return `${formatNumber(job.moving.processed)} / ${formatNumber(job.moving.plannedTotal)} leads`;

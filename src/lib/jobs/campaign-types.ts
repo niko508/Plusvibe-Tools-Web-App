@@ -10,34 +10,39 @@ import {
   type LeadPayload,
   type RawLead,
 } from "@/lib/plusvibe-leads";
+import { listCampaigns } from "@/lib/plusvibe-campaigns";
 import { moveLeadChunk, MOVE_CHUNK } from "@/lib/move-leads-core";
 import { resolveLeadEsps } from "@/lib/campaign-types/resolve-esp";
 import { planSplit } from "@/lib/campaign-types/split";
 import { applyOptOutToCampaign } from "@/lib/campaign-types/apply-opt-out";
+import { duplicateCampaign, launchCampaign } from "@/lib/campaign-types/duplicate";
+import { normalizeName } from "@/lib/campaign-types/match";
 import type {
+  ActivationTarget,
   CampaignRole,
   CampaignTypesJob,
   CampaignTypesStartPayload,
+  CreatedCampaign,
+  CreatedRole,
   MoveTarget,
-  OptOutTarget,
-  RoleCampaign,
 } from "@/lib/jobs/campaign-types-types";
 import { MAX_STORED_ERRORS } from "@/lib/jobs/campaign-types-types";
 
 // Server-side manager for Create All Campaign Types jobs.
 //
-// Three phases, in order:
-//   1 sorting     collect the source campaign's NOT_CONTACTED leads and split
-//                 them into Microsoft / everything-else by MX lookup
-//   2 optOutCopy  append the opt-out spintax to step 1 of the two Opt Out
-//                 campaigns
+// Four phases, in order:
+//   1 sorting     collect the source's NOT_CONTACTED leads and split them into
+//                 Microsoft / everything-else by MX lookup
+//   2 duplicating create the three copies (sub-sequences included) and add the
+//                 opt-out spintax to step 1 of the two Opt Out copies
 //   3 moving      move each bucket into its campaign (add → verify → delete)
+//   4 activating  launch all four, sub-sequences included
 //
 // Runs in the Node process so the work survives the tab closing, and persists
 // to disk so a job can be read back later. The API key is memory-only.
 //
-// ONE JOB AT A TIME per API key: the phases move leads out of a live campaign,
-// and two overlapping runs over the same source would double-move.
+// ONE JOB AT A TIME per API key: the phases create campaigns and move leads out
+// of a live one, and two overlapping runs would duplicate both.
 
 const JOBS_BASE = process.env.JOBS_DIR || path.join(process.cwd(), ".jobs-data");
 const JOBS_DIR = path.join(JOBS_BASE, "campaign-types");
@@ -48,7 +53,6 @@ const PERSIST_EVERY = 5; // flush every N chunks
 interface JobMeta {
   fingerprint: string;
   apiKey?: string;
-  workspaceId?: string;
   payload?: CampaignTypesStartPayload;
   aborted: boolean;
 }
@@ -148,13 +152,12 @@ async function loadOnce() {
 export class ActiveJobError extends Error {
   constructor(readonly activeJobId: string) {
     super(
-      "A Create All Campaign Types job is already running. Wait for it to finish (or stop it) before starting another — two runs over the same campaigns would move the same leads twice."
+      "A Create All Campaign Types job is already running. Wait for it to finish (or stop it) before starting another — two runs over the same campaign would duplicate it twice and move the same leads twice."
     );
     this.name = "ActiveJobError";
   }
 }
 
-/** The one running job for this API key, if any. */
 export async function activeJob(apiKey: string): Promise<CampaignTypesJob | null> {
   await loadOnce();
   const fp = fingerprintKey(apiKey);
@@ -166,13 +169,8 @@ export async function activeJob(apiKey: string): Promise<CampaignTypesJob | null
   return null;
 }
 
-function roleName(campaigns: RoleCampaign[], role: CampaignRole): string {
-  return campaigns.find((c) => c.role === role)?.name ?? role;
-}
-
-function roleId(campaigns: RoleCampaign[], role: CampaignRole): string {
-  return campaigns.find((c) => c.role === role)?.campaignId ?? "";
-}
+const CREATED_ROLES: CreatedRole[] = ["blue", "optOut", "blueOptOut"];
+const OPT_OUT_ROLES: CreatedRole[] = ["optOut", "blueOptOut"];
 
 export async function createJob(
   apiKey: string,
@@ -185,42 +183,51 @@ export async function createJob(
 
   const id = randomUUID();
   const now = Date.now();
-  const { campaigns } = payload;
 
-  const optOutTargets: OptOutTarget[] = payload.skipOptOutCopy
-    ? []
-    : (["optOut", "blueOptOut"] as const).map((role) => ({
-        role,
-        name: roleName(campaigns, role),
-        state: "pending" as const,
-        applied: [],
-        alreadyPresent: [],
-      }));
-
-  const moveTargets: MoveTarget[] = (
-    ["blue", "blueOptOut", "optOut"] as const
-  ).map((role) => ({
+  const created: CreatedCampaign[] = CREATED_ROLES.map((role) => ({
     role,
-    name: roleName(campaigns, role),
+    name: payload.names[role],
+    state: "pending" as const,
+    ...(OPT_OUT_ROLES.includes(role)
+      ? { optOut: { state: "pending" as const, applied: [], alreadyPresent: [] } }
+      : {}),
+  }));
+
+  const moving: MoveTarget[] = CREATED_ROLES.map((role) => ({
+    role,
+    name: payload.names[role],
     planned: 0,
     moved: 0,
     state: "pending" as const,
   }));
 
+  const activation: ActivationTarget[] = (
+    ["source", ...CREATED_ROLES] as CampaignRole[]
+  ).map((role) => ({
+    role,
+    name:
+      role === "source"
+        ? payload.sourceCampaignName
+        : payload.names[role as CreatedRole],
+    state: "pending" as const,
+  }));
+
   const record: CampaignTypesJob = {
     id,
-    label: roleName(campaigns, "source"),
+    label: payload.sourceCampaignName,
     status: "running",
     phase: "sorting",
     phaseStates: {
       sorting: "running",
-      optOutCopy: payload.skipOptOutCopy ? "skipped" : "pending",
+      duplicating: "pending",
       moving: "pending",
+      activating: payload.activate === false ? "skipped" : "pending",
     },
     createdAt: now,
     updatedAt: now,
     workspaceName: payload.workspaceName,
-    campaigns,
+    sourceCampaignId: payload.sourceCampaignId,
+    sourceCampaignName: payload.sourceCampaignName,
     sorting: {
       leadsFound: 0,
       microsoft: 0,
@@ -230,24 +237,14 @@ export async function createJob(
       unresolvedDomains: 0,
       fromLeadField: 0,
     },
-    optOut: optOutTargets,
-    moving: {
-      targets: moveTargets,
-      staysInSource: 0,
-      processed: 0,
-      plannedTotal: 0,
-    },
+    created,
+    moving: { targets: moving, staysInSource: 0, processed: 0, plannedTotal: 0 },
+    activation,
     errors: [],
   };
 
   records.set(id, record);
-  meta.set(id, {
-    fingerprint: fingerprintKey(apiKey),
-    apiKey,
-    workspaceId: payload.workspaceId,
-    payload,
-    aborted: false,
-  });
+  meta.set(id, { fingerprint: fingerprintKey(apiKey), apiKey, payload, aborted: false });
 
   await persist(id);
   void runJob(id);
@@ -270,12 +267,14 @@ function pushError(rec: CampaignTypesJob, text: string) {
 async function runJob(id: string) {
   const rec = records.get(id);
   const m = meta.get(id);
-  if (!rec || !m || !m.apiKey || !m.workspaceId || !m.payload) return;
+  if (!rec || !m || !m.apiKey || !m.payload) return;
 
   const apiKey = m.apiKey;
-  const workspaceId = m.workspaceId;
-  const { campaigns } = m.payload;
-  const sourceId = roleId(campaigns, "source");
+  const { workspaceId, sourceCampaignId } = {
+    workspaceId: m.payload.workspaceId,
+    sourceCampaignId: m.payload.sourceCampaignId,
+  };
+  const activate = m.payload.activate !== false;
   const check = () => {
     if (m.aborted) throw new AbortedError();
   };
@@ -289,7 +288,7 @@ async function runJob(id: string) {
     const { leads, wrongStatus, hitPageLimit } = await fetchCampaignLeads(
       apiKey,
       workspaceId,
-      sourceId,
+      sourceCampaignId,
       MAX_LEADS
     );
     check();
@@ -335,59 +334,121 @@ async function runJob(id: string) {
     rec.phaseStates.sorting = "done";
     await persist(id);
 
-    // --- Phase 2: opt-out copy -------------------------------------------
-    if (rec.optOut.length > 0) {
-      rec.phase = "optOutCopy";
-      rec.phaseStates.optOutCopy = "running";
+    // --- Phase 2: duplicating campaigns ----------------------------------
+    rec.phase = "duplicating";
+    rec.phaseStates.duplicating = "running";
+    await persist(id);
+
+    // Existing names in the workspace, so a resumed or repeated run adopts the
+    // copies it already made instead of creating a second set under the same
+    // names. Duplication is not idempotent on its own.
+    const existingByName = new Map<string, string>();
+    try {
+      for (const c of await listCampaigns(apiKey, workspaceId)) {
+        if (c.campaignType === "subseq") continue;
+        const key = normalizeName(c.name);
+        if (!existingByName.has(key)) existingByName.set(key, c.id);
+      }
+    } catch (err) {
+      // Without the list we can't tell a resumed run from a fresh one, and
+      // duplicating blind could leave a second set of campaigns behind.
+      pushError(
+        rec,
+        `Could not list the workspace's campaigns to check for copies already made: ${msg(err)}. Stopped before duplicating anything.`
+      );
+      rec.phaseStates.duplicating = "error";
+      rec.status = "error";
+      return;
+    }
+
+    for (const target of rec.created) {
+      check();
+      target.state = "running";
+      rec.updatedAt = Date.now();
       await persist(id);
 
-      for (const target of rec.optOut) {
-        check();
-        target.state = "running";
-        rec.updatedAt = Date.now();
-        await persist(id);
+      // 🔵 Opt Out is duplicated from 🔵, the other two from the source.
+      const from =
+        target.role === "blueOptOut"
+          ? rec.created.find((c) => c.role === "blue")?.campaignId
+          : sourceCampaignId;
 
-        const campaignId = roleId(campaigns, target.role);
-        try {
-          const res = await applyOptOutToCampaign({
-            apiKey,
-            workspaceId,
-            campaignId,
-          });
-          target.applied = res.applied;
-          target.alreadyPresent = res.alreadyPresent;
-          target.state = "done";
-          if (!res.verified) {
-            pushError(
-              rec,
-              `Opt-out copy was written to "${target.name}" but the re-read didn't confirm it. Check step 1 in Plusvibe before launching.`
+      try {
+        const already = existingByName.get(normalizeName(target.name));
+        if (already) {
+          target.campaignId = already;
+          target.reused = true;
+        } else {
+          if (!from) {
+            throw new Error(
+              "the 🔵 copy it duplicates from was not created, so there is nothing to copy"
             );
           }
-        } catch (err) {
-          if (err instanceof AbortedError || m.aborted) throw err;
-          target.state = "error";
-          target.error = msg(err);
-          pushError(rec, `Opt-out copy failed for "${target.name}": ${msg(err)}`);
+          target.campaignId = await duplicateCampaign({
+            apiKey,
+            workspaceId,
+            sourceCampaignId: from,
+            newName: target.name,
+          });
+          existingByName.set(normalizeName(target.name), target.campaignId);
         }
-        rec.updatedAt = Date.now();
-        await persist(id);
+        target.state = "done";
+      } catch (err) {
+        if (err instanceof AbortedError || m.aborted) throw err;
+        target.state = "error";
+        target.error = msg(err);
+        pushError(rec, `Could not create "${target.name}": ${msg(err)}`);
       }
-
-      const anyFailed = rec.optOut.some((t) => t.state === "error");
-      rec.phaseStates.optOutCopy = anyFailed ? "error" : "done";
+      rec.updatedAt = Date.now();
       await persist(id);
+    }
 
-      // A failed opt-out edit must not be papered over by moving leads into a
-      // campaign that is missing its opt-out line — those leads would be sent
-      // the wrong copy, and moving is the irreversible half of this job.
-      if (anyFailed) {
-        pushError(
-          rec,
-          "Stopped before moving any leads: a campaign is missing its opt-out copy, and moving leads into it would send the wrong email. Fix it in Plusvibe, then run again — the opt-out step is idempotent and the leads are untouched."
-        );
-        rec.status = "error";
-        return;
+    // Opt-out copy on the two Opt Out campaigns.
+    for (const target of rec.created) {
+      if (!target.optOut || !target.campaignId || target.state === "error") continue;
+      check();
+      target.optOut.state = "running";
+      await persist(id);
+      try {
+        const res = await applyOptOutToCampaign({
+          apiKey,
+          workspaceId,
+          campaignId: target.campaignId,
+        });
+        target.optOut.applied = res.applied;
+        target.optOut.alreadyPresent = res.alreadyPresent;
+        target.optOut.state = "done";
+        if (!res.verified) {
+          pushError(
+            rec,
+            `Opt-out copy was written to "${target.name}" but the re-read didn't confirm it. Check step 1 in Plusvibe before launching.`
+          );
+        }
+      } catch (err) {
+        if (err instanceof AbortedError || m.aborted) throw err;
+        target.optOut.state = "error";
+        target.optOut.error = msg(err);
+        pushError(rec, `Opt-out copy failed for "${target.name}": ${msg(err)}`);
       }
+      rec.updatedAt = Date.now();
+      await persist(id);
+    }
+
+    const setupFailed = rec.created.some(
+      (c) => c.state === "error" || c.optOut?.state === "error"
+    );
+    rec.phaseStates.duplicating = setupFailed ? "error" : "done";
+    await persist(id);
+
+    // Moving leads into a campaign that is missing or lacks its opt-out line
+    // would send the wrong email — and the move is the irreversible half.
+    if (setupFailed) {
+      pushError(
+        rec,
+        "Stopped before moving any leads: a campaign is missing or lacks its opt-out copy. Fix it in Plusvibe, then run again — the copies already made are reused, the opt-out step is idempotent, and no leads have moved."
+      );
+      rec.status = "error";
+      return;
     }
 
     // --- Phase 3: moving leads -------------------------------------------
@@ -396,18 +457,20 @@ async function runJob(id: string) {
 
     const plan = planSplit(resolution.microsoft, resolution.other);
     rec.moving.staysInSource = plan.counts.source;
-    for (const t of rec.moving.targets) {
-      t.planned = plan.counts[t.role];
-    }
+    for (const t of rec.moving.targets) t.planned = plan.counts[t.role];
     rec.moving.plannedTotal =
       plan.counts.blue + plan.counts.blueOptOut + plan.counts.optOut;
     await persist(id);
 
     let sinceFlush = 0;
+    let moveFailed = false;
     for (const move of plan.moves) {
       check();
       const target = rec.moving.targets.find((t) => t.role === move.destination);
-      if (!target) continue;
+      const destinationCampaignId = rec.created.find(
+        (c) => c.role === move.destination
+      )?.campaignId;
+      if (!target || !destinationCampaignId) continue;
 
       if (move.leads.length === 0) {
         target.state = "done";
@@ -415,19 +478,17 @@ async function runJob(id: string) {
       }
 
       target.state = "running";
-      const destinationCampaignId = roleId(campaigns, move.destination);
       const payloads: LeadPayload[] = (move.leads as RawLead[])
         .map(leadToPayload)
         .filter((p) => p.email);
 
-      let failed = false;
       for (let i = 0; i < payloads.length; i += MOVE_CHUNK) {
         check();
         const chunk = payloads.slice(i, i + MOVE_CHUNK);
         const outcome = await moveLeadChunk({
           apiKey,
           workspaceId,
-          sourceCampaignId: sourceId,
+          sourceCampaignId,
           destinationCampaignId,
           chunk,
           isAborted: () => m.aborted,
@@ -440,7 +501,7 @@ async function runJob(id: string) {
           );
           target.state = "error";
           rec.status = "error";
-          failed = true;
+          moveFailed = true;
           break;
         }
 
@@ -453,17 +514,69 @@ async function runJob(id: string) {
         }
       }
 
-      if (failed) break;
+      if (moveFailed) break;
       target.state = "done";
       await persist(id);
     }
 
-    if (rec.status === "running") {
-      rec.status = "done";
-      rec.phaseStates.moving = "done";
-    } else {
-      rec.phaseStates.moving = "error";
+    rec.phaseStates.moving = moveFailed ? "error" : "done";
+    await persist(id);
+
+    // A half-moved split must not be launched: the campaigns would start
+    // sending with the wrong leads in them.
+    if (moveFailed) {
+      pushError(
+        rec,
+        "Stopped before activating: the lead split did not finish, so launching now would send from campaigns holding the wrong leads."
+      );
+      return;
     }
+
+    // --- Phase 4: activating campaigns -----------------------------------
+    if (!activate) {
+      rec.phaseStates.activating = "skipped";
+      for (const a of rec.activation) a.state = "skipped";
+      rec.status = "done";
+      await persist(id);
+      return;
+    }
+
+    rec.phase = "activating";
+    rec.phaseStates.activating = "running";
+    await persist(id);
+
+    for (const target of rec.activation) {
+      check();
+      const campaignId =
+        target.role === "source"
+          ? sourceCampaignId
+          : rec.created.find((c) => c.role === target.role)?.campaignId;
+      if (!campaignId) {
+        target.state = "error";
+        target.error = "no campaign id";
+        continue;
+      }
+      target.state = "running";
+      await persist(id);
+      try {
+        await launchCampaign({ apiKey, workspaceId, campaignId });
+        target.state = "done";
+      } catch (err) {
+        if (err instanceof AbortedError || m.aborted) throw err;
+        target.state = "error";
+        target.error = msg(err);
+        pushError(rec, `Could not activate "${target.name}": ${msg(err)}`);
+      }
+      rec.updatedAt = Date.now();
+      await persist(id);
+    }
+
+    const activationFailed = rec.activation.some((a) => a.state === "error");
+    rec.phaseStates.activating = activationFailed ? "error" : "done";
+    // Everything real is done by this point — the campaigns exist, carry the
+    // right copy and hold the right leads. A failed launch is a one-click fix
+    // in Plusvibe, so it's reported without discarding the run.
+    rec.status = activationFailed ? "error" : "done";
   } catch (err) {
     if (err instanceof AbortedError || m.aborted) {
       rec.status = "aborted";
@@ -477,7 +590,6 @@ async function runJob(id: string) {
     rec.phase = "finished";
     rec.updatedAt = Date.now();
     m.apiKey = undefined;
-    m.workspaceId = undefined;
     m.payload = undefined;
     await persist(id);
   }

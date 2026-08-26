@@ -18,11 +18,12 @@ export default function CampaignTypesPage() {
             Create All Campaign Types
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground sm:text-base">
-            Duplicate your campaign three times in Plusvibe — a 🔵 copy, an Opt
-            Out copy and a 🔵 Opt Out copy — then point this at the original. It
-            adds the opt-out line to step 1 of both Opt Out campaigns, sorts the
-            not-contacted leads by mailbox provider, and splits them four ways so
-            Microsoft recipients land in the 🔵 campaigns.
+            Point it at one campaign and it builds the other three — a 🔵 copy,
+            an Opt Out copy and a 🔵 Opt Out copy, each with their
+            sub-sequences. It adds the opt-out line to step 1 of both Opt Out
+            campaigns, sorts the not-contacted leads by mailbox provider,
+            splits them four ways so Microsoft recipients land in the 🔵
+            campaigns, then launches everything.
           </p>
         </div>
         <CampaignTypesTool />
