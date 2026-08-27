@@ -4,12 +4,14 @@
 // looked up in the Tenants tab, and its Tenant Provider becomes the domain's
 // Tenant / Inbox Source.
 //
-// The two tabs don't necessarily spell the same provider the same way — the
-// Tenants tab shows "Cheap Inboxes" where the Domains tab shows "CheapInboxes".
-// Writing the Tenants spelling straight across would put a value in the Domains
-// column that its dropdown doesn't offer. So the values ALREADY in the Domains
-// column are treated as the canonical vocabulary, and a provider is matched
-// against them ignoring case, spaces and punctuation.
+// The two tabs are expected to spell providers identically, in which case this
+// copies the value straight across. They have drifted before — the Domains
+// column read "CheapInboxes" while Tenants said "Cheap Inboxes" — and writing
+// the Tenants spelling into a column whose dropdown doesn't offer it produces a
+// cell Sheets marks invalid. So the values ALREADY in the Domains column are
+// treated as the canonical vocabulary, and a provider is matched against them
+// ignoring case, spaces and punctuation. When the tabs agree this changes
+// nothing; when they drift again it keeps the column valid and says so.
 
 /** Comparison key: case, spaces and separators don't distinguish providers. */
 export function providerKey(value: string): string {
@@ -76,8 +78,8 @@ export interface ResolvedSource {
   /** The value to write, or null when the email has no provider. */
   value: string | null;
   /**
-   * True when the Tenants spelling was rewritten to the Domains column's own
-   * spelling (e.g. "Cheap Inboxes" -> "CheapInboxes").
+   * True when the Tenants spelling had to be rewritten to the Domains column's
+   * own spelling — i.e. the two tabs have drifted apart.
    */
   adapted: boolean;
   /**

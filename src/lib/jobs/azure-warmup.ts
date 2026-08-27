@@ -583,7 +583,7 @@ async function updateDomainsSheet(rec: StoredJob) {
   if (sourcesAdapted > 0) {
     pushError(
       rec,
-      `${sourcesAdapted} ${COL_TENANT_SOURCE} value(s) were rewritten to the spelling that column already uses (e.g. "Cheap Inboxes" → "CheapInboxes").`
+      `${sourcesAdapted} ${COL_TENANT_SOURCE} value(s) were rewritten to the spelling that column already uses, because the Tenants tab spells them differently. Worth making the two tabs match.`
     );
   }
   void sourcesWritten;

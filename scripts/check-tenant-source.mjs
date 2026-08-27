@@ -61,14 +61,14 @@ const TENANTS = [
   ["admin@moorbriarlive.onmicrosoft.com", "TRUE", "Cheap Inboxes", "31/07/2026", "27"],
   ["admin@vesboco.onmicrosoft.com", "TRUE", "Azure Direct", "31/07/2026", "27"],
 ];
-// Domains tab: B = Tenant Email Address, H = Tenant / Inbox Source. The column
-// already holds "CheapInboxes" — no space — where Tenants says "Cheap Inboxes".
+// Domains tab: B = Tenant Email Address, H = Tenant / Inbox Source. Both tabs
+// now spell it "Cheap Inboxes", which is the normal case.
 const DOMAINS = [
   ["Domain", "Tenant Email Address", "Status", "Warmup Started", "Warmup Days",
    "Domain Host", "Infra Type", "Tenant / Inbox Source", "Client"],
-  ["builddesk.pro", "admin@x.onmicrosoft.com", "Warming Up", "", "", "Porkbun", "Azure", "CheapInboxes", ""],
-  ["drivenet.pro", "admin@y.onmicrosoft.com", "Warming Up", "", "", "Porkbun", "Azure", "CheapInboxes", ""],
-  ["other.pro", "admin@z.onmicrosoft.com", "Warming Up", "", "", "Porkbun", "Azure", "", ""],
+  ["demandspot.live", "", "Warming Up", "", "", "Spaceship", "Azure", "Cheap Inboxes", ""],
+  ["revhub.live", "", "Warming Up", "", "", "Spaceship", "Azure", "Cheap Inboxes", ""],
+  ["cymleda.co", "admin@varneolive.onmicrosoft.com", "Warming Up", "", "", "Spaceship", "Azure", "", ""],
 ];
 
 const { byEmail, duplicates } = buildProviderByEmail(TENANTS, 0, 2);
@@ -77,14 +77,24 @@ const vocab = buildSourceVocabulary(DOMAINS, 7);
 console.log("--- lookup");
 eq("three tenant emails mapped", byEmail.size, 3);
 eq("no duplicates in a clean sheet", duplicates, []);
-eq("the vocabulary is read from the Domains column", [...vocab.values()], ["CheapInboxes"]);
+eq("the vocabulary is read from the Domains column", [...vocab.values()], ["Cheap Inboxes"]);
 
-// The headline case: Tenants says "Cheap Inboxes", Domains uses "CheapInboxes".
-// Writing the Tenants spelling would put a value the dropdown doesn't offer.
+// The normal case: both tabs agree, so the value copies straight across and
+// nothing is rewritten or flagged.
 const r1 = resolveSource("admin@stonevalelive.onmicrosoft.com", byEmail, vocab);
-eq("the Domains spelling is written, not the Tenants one", r1.value, "CheapInboxes");
-eq("the rewrite is reported", r1.adapted, true);
-eq("a rewritten value is not flagged unknown", r1.unknown, false);
+eq("a matching spelling copies straight across", r1.value, "Cheap Inboxes");
+eq("nothing is rewritten when the tabs agree", r1.adapted, false);
+eq("a matching value is not flagged unknown", r1.unknown, false);
+
+// The fallback: if the two tabs drift apart again, the Domains column's own
+// spelling wins so its dropdown stays valid, and the rewrite is reported.
+const drifted = buildSourceVocabulary(
+  [["Tenant / Inbox Source"], ["CheapInboxes"]], 0
+);
+const r1b = resolveSource("admin@stonevalelive.onmicrosoft.com", byEmail, drifted);
+eq("drift writes the Domains spelling", r1b.value, "CheapInboxes");
+eq("drift is reported", r1b.adapted, true);
+eq("drift is not flagged unknown", r1b.unknown, false);
 
 // A provider the Domains column has never held is written as-is but flagged.
 const r2 = resolveSource("admin@vesboco.onmicrosoft.com", byEmail, vocab);
@@ -99,13 +109,13 @@ eq("an unknown email is not flagged unknown-provider", r3.unknown, false);
 
 console.log("--- matching tolerance");
 eq("email case is ignored",
-  resolveSource("ADMIN@StoneValeLive.onmicrosoft.com", byEmail, vocab).value, "CheapInboxes");
+  resolveSource("ADMIN@StoneValeLive.onmicrosoft.com", byEmail, vocab).value, "Cheap Inboxes");
 eq("surrounding whitespace is ignored",
-  resolveSource("  admin@stonevalelive.onmicrosoft.com  ", byEmail, vocab).value, "CheapInboxes");
+  resolveSource("  admin@stonevalelive.onmicrosoft.com  ", byEmail, vocab).value, "Cheap Inboxes");
 // Provider spellings that differ only by separators are the same provider.
 for (const variant of ["cheap inboxes", "CHEAPINBOXES", "Cheap-Inboxes", "Cheap_Inboxes", "cheap.inboxes"]) {
   eq(`"${variant}" maps to the Domains spelling`,
-    resolveSource("e", new Map([["e", variant]]), vocab).value, "CheapInboxes");
+    resolveSource("e", new Map([["e", variant]]), vocab).value, "Cheap Inboxes");
 }
 // But a genuinely different provider must not be collapsed into it.
 eq("a different provider is not collapsed",
@@ -144,8 +154,8 @@ eq("an identical repeat is not a conflict", same.duplicates, []);
 // The vocabulary keeps the first spelling seen, so a stray variant already in
 // the column doesn't win over the established one.
 eq("the first spelling in the column wins",
-  buildSourceVocabulary([["h"], ["CheapInboxes"], ["cheap inboxes"]], 0).get("cheapinboxes"),
-  "CheapInboxes");
+  buildSourceVocabulary([["h"], ["Cheap Inboxes"], ["cheapinboxes"]], 0).get("cheapinboxes"),
+  "Cheap Inboxes");
 
 console.log(failures === 0 ? "\nall tenant-source checks OK" : `\n${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);
