@@ -156,6 +156,16 @@ export const TOOLS: Tool[] = [
     Icon: MailIcon,
   },
   {
+    slug: "bulk-actions",
+    name: "General Bulk Actions",
+    tagline: "Run one action across many workspaces at once",
+    description:
+      "Pick as many workspaces as you like, then apply the same change to all of them. First action: add a webhook to every selected workspace, skipping any that already point at the same URL.",
+    status: "active",
+    color: "indigo",
+    Icon: ZapIcon,
+  },
+  {
     slug: "move-leads",
     name: "Move Leads to Another Campaign",
     tagline: "Shift a set number of leads from one campaign to another",

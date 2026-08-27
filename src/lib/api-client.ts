@@ -1,6 +1,7 @@
 "use client";
 
 import { getApiKey } from "@/lib/api-key";
+import type { WebhookConfig } from "@/lib/webhooks/config";
 import type { FollowUpTemplate } from "@/lib/follow-ups/templates";
 import type {
   CampaignTypesJob,
@@ -574,6 +575,37 @@ export function applyFollowUps(
   signal?: AbortSignal
 ) {
   return request<FollowUpPlan>("/api/follow-ups/apply", {
+    method: "POST",
+    body: params,
+    signal,
+  });
+}
+
+// --- General Bulk Actions ----------------------------------------------------
+
+export interface BulkWebhookResult {
+  workspaceId: string;
+  workspaceName: string;
+  outcome: "added" | "already" | "error";
+  hookId?: string;
+  reason?: string;
+}
+
+export interface BulkWebhookResponse {
+  dryRun: boolean;
+  results: BulkWebhookResult[];
+  totals: { added: number; already: number; errors: number };
+}
+
+export function addWebhookToWorkspaces(
+  params: {
+    workspaces: { id: string; name: string }[];
+    config: WebhookConfig;
+    dryRun?: boolean;
+  },
+  signal?: AbortSignal
+) {
+  return request<BulkWebhookResponse>("/api/bulk-actions/webhooks", {
     method: "POST",
     body: params,
     signal,
