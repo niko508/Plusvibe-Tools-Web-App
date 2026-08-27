@@ -152,5 +152,61 @@ eq("found among several", hasHookForUrl([{ url: "https://a.example/x" }, { url: 
 eq("scheme is significant",
   hasHookForUrl([{ url: "http://hooks.example.com/pv" }], URL1), false);
 
+
+// --- lead label event types -------------------------------------------------
+const LABEL_PREFIX = "LEAD_MARKED_AS_";
+const labelEventType = (key) => {
+  const t = key.trim();
+  if (!t) return "";
+  return t.toUpperCase().startsWith(LABEL_PREFIX) ? t : `${LABEL_PREFIX}${t}`;
+};
+const isLabelEvent = (e) =>
+  e.toUpperCase().startsWith(LABEL_PREFIX) && e !== "LEAD_MARKED_AS_INTERESTED";
+
+console.log("--- lead label event types");
+eq("a plain key is prefixed", labelEventType("NQ_INDIAN_COMPANY"), "LEAD_MARKED_AS_NQ_INDIAN_COMPANY");
+eq("whitespace is trimmed", labelEventType("  LOST_LEAD  "), "LEAD_MARKED_AS_LOST_LEAD");
+eq("an empty key yields nothing", labelEventType("   "), "");
+// A key that already carries the prefix must not be prefixed twice.
+eq("an already-prefixed key passes through",
+  labelEventType("LEAD_MARKED_AS_LOST_LEAD"), "LEAD_MARKED_AS_LOST_LEAD");
+eq("prefix check is case-insensitive",
+  labelEventType("lead_marked_as_lost"), "lead_marked_as_lost");
+eq("the key's own case is preserved", labelEventType("Booked"), "LEAD_MARKED_AS_Booked");
+eq("applying twice is stable",
+  labelEventType(labelEventType("NQ_OTHER")), labelEventType("NQ_OTHER"));
+
+// The built-in "interested" event is not a custom label, so selecting it must
+// not be reported as one.
+eq("built-in interested is not a label event", isLabelEvent("LEAD_MARKED_AS_INTERESTED"), false);
+eq("a custom label is a label event", isLabelEvent("LEAD_MARKED_AS_LOST_LEAD"), true);
+eq("all replies is not a label event", isLabelEvent("ALL_EMAIL_REPLIES"), false);
+eq("system alert is not a label event", isLabelEvent("SYSTEM_ALERT"), false);
+
+// Labels are per-workspace: the union carries a count so the UI can warn.
+const mergeLabels = (perWorkspace) => {
+  const byKey = new Map();
+  for (const labels of perWorkspace) {
+    for (const l of labels) {
+      const e = byKey.get(l.key);
+      if (e) e.presentIn += 1;
+      else byKey.set(l.key, { key: l.key, name: l.name, presentIn: 1 });
+    }
+  }
+  return [...byKey.values()].sort((a, b) =>
+    a.presentIn !== b.presentIn ? b.presentIn - a.presentIn : a.name.localeCompare(b.name));
+};
+const merged = mergeLabels([
+  [{ key: "A", name: "Alpha" }, { key: "B", name: "Beta" }],
+  [{ key: "A", name: "Alpha" }],
+  [{ key: "A", name: "Alpha" }, { key: "C", name: "Gamma" }],
+]);
+eq("a label in every workspace counts 3", merged.find((l) => l.key === "A").presentIn, 3);
+eq("a label in one workspace counts 1", merged.find((l) => l.key === "B").presentIn, 1);
+eq("the union has every label", merged.length, 3);
+// Labels present everywhere sort first — those are the safe ones to pick.
+eq("everywhere-labels sort first", merged[0].key, "A");
+eq("no duplicates in the union", new Set(merged.map((l) => l.key)).size, merged.length);
+
 console.log(failures === 0 ? "\nall webhook checks OK" : `\n${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);

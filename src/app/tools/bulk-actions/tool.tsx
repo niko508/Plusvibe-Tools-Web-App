@@ -7,17 +7,68 @@ import { useApiKey } from "@/lib/use-api-key";
 import { formatNumber } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { Spinner } from "@/components/ui";
-import { AlertIcon, RefreshIcon } from "@/components/icons";
+import {
+  AlertIcon,
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  ClockIcon,
+  RefreshIcon,
+  ZapIcon,
+  MailIcon,
+  TrashIcon,
+} from "@/components/icons";
+import { TOOL_COLORS, type ToolColor } from "@/lib/tools";
 import { AddWebhook } from "./add-webhook";
 
-// The container for actions that run across many workspaces at once. The
-// workspace picker is shared, so a second action only has to add its own panel.
-const ACTIONS = [{ id: "add-webhook", label: "Add webhook" }] as const;
-type ActionId = (typeof ACTIONS)[number]["id"];
+// The container for actions that run across many workspaces at once.
+//
+// The landing view is a card grid mirroring the home page, so adding an action
+// is one entry here plus its panel. The workspace picker is shared, so an
+// action never has to build its own.
+interface BulkAction {
+  id: string;
+  name: string;
+  description: string;
+  color: ToolColor;
+  Icon: typeof ZapIcon;
+  ready: boolean;
+}
+
+const ACTIONS: BulkAction[] = [
+  {
+    id: "add-webhook",
+    name: "Add Webhook",
+    description:
+      "Create the same webhook in every selected workspace, skipping any that already point at the same URL.",
+    color: "indigo",
+    Icon: ZapIcon,
+    ready: true,
+  },
+  {
+    id: "remove-webhook",
+    name: "Remove Webhook",
+    description:
+      "Delete a webhook by URL from every selected workspace at once.",
+    color: "rose",
+    Icon: TrashIcon,
+    ready: false,
+  },
+  {
+    id: "invite-user",
+    name: "Invite User",
+    description:
+      "Add the same teammate to a batch of workspaces without opening each one.",
+    color: "teal",
+    Icon: MailIcon,
+    ready: false,
+  },
+];
+type ActionId = string;
 
 export function BulkActionsTool() {
   const { hasKey, ready } = useApiKey();
-  const [action, setAction] = useState<ActionId>("add-webhook");
+  // null = the menu. Actions open into their own view with a way back.
+  const [action, setAction] = useState<ActionId | null>(null);
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [loading, setLoading] = useState(false);
@@ -84,20 +135,18 @@ export function BulkActionsTool() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center gap-2">
-        {ACTIONS.map((a) => (
+      {action === null ? (
+        <ActionMenu onPick={setAction} />
+      ) : (
+        <>
           <button
-            key={a.id}
             type="button"
-            onClick={() => setAction(a.id)}
-            className={`pv-chip ${
-              action === a.id ? "pv-chip-active" : "hover:text-foreground"
-            }`}
+            className="pv-btn-ghost text-xs"
+            onClick={() => setAction(null)}
           >
-            {a.label}
+            <ArrowLeftIcon size={14} />
+            All bulk actions
           </button>
-        ))}
-      </div>
 
       {/* Workspace picker — shared by every action */}
       <div className="pv-card p-4 sm:p-5">
@@ -179,13 +228,73 @@ export function BulkActionsTool() {
         )}
       </div>
 
-      {action === "add-webhook" && (
-        <AddWebhook
-          workspaces={workspaces}
-          selected={selected}
-          loading={loading}
-        />
+          {action === "add-webhook" && (
+            <AddWebhook
+              workspaces={workspaces}
+              selected={selected}
+              loading={loading}
+            />
+          )}
+        </>
       )}
+    </div>
+  );
+}
+
+/** The card grid, mirroring the home page's tool picker one level down. */
+function ActionMenu({ onPick }: { onPick: (id: ActionId) => void }) {
+  return (
+    <div>
+      <h2 className="mb-4 text-sm font-medium uppercase tracking-wide text-muted-foreground">
+        Actions
+      </h2>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {ACTIONS.map((a) => {
+          const c = TOOL_COLORS[a.color];
+          const Icon = a.Icon;
+          return (
+            <button
+              key={a.id}
+              type="button"
+              disabled={!a.ready}
+              onClick={() => a.ready && onPick(a.id)}
+              className={`pv-card group relative flex h-full flex-col p-5 text-left transition ${
+                a.ready
+                  ? `hover:-translate-y-0.5 hover:shadow-card ${c.border}`
+                  : "cursor-default opacity-70"
+              }`}
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <span
+                  className={`flex h-11 w-11 items-center justify-center rounded-xl ${
+                    a.ready ? c.tile : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  <Icon size={22} />
+                </span>
+                {!a.ready && (
+                  <span className="pv-chip">
+                    <ClockIcon size={12} />
+                    Coming soon
+                  </span>
+                )}
+              </div>
+              <h3 className="text-base font-semibold">{a.name}</h3>
+              <p className="mt-1.5 flex-1 text-sm leading-relaxed text-muted-foreground">
+                {a.description}
+              </p>
+              {a.ready && (
+                <span
+                  className={`mt-5 inline-flex items-center gap-1.5 text-sm font-medium ${c.link}`}
+                >
+                  Open
+                  <ArrowRightIcon size={16} />
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

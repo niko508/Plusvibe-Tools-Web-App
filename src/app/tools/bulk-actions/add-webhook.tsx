@@ -1,19 +1,22 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Workspace } from "@/lib/plusvibe-types";
 import {
   EVENT_TYPES,
   SYSTEM_ALERT,
   SYSTEM_ALERTS,
+  isLabelEvent,
   emptyWebhookConfig,
   validateWebhookConfig,
   type WebhookConfig,
 } from "@/lib/webhooks/config";
 import {
   addWebhookToWorkspaces,
+  fetchLeadLabels,
   ApiClientError,
   type BulkWebhookResponse,
+  type MergedLeadLabel,
 } from "@/lib/api-client";
 import { formatNumber } from "@/lib/format";
 import { Spinner } from "@/components/ui";
@@ -33,6 +36,14 @@ export function AddWebhook({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const runLock = useRef(false);
+
+  // Lead labels are per-workspace, so they're read for exactly the workspaces
+  // that are selected — a label only some of them define would create webhooks
+  // that never fire in the rest.
+  const [labels, setLabels] = useState<MergedLeadLabel[]>([]);
+  const [labelsLoading, setLabelsLoading] = useState(false);
+  const [labelsOpen, setLabelsOpen] = useState(false);
+  const [labelsFor, setLabelsFor] = useState<string>("");
 
   const chosen = useMemo(
     () =>
@@ -68,6 +79,51 @@ export function AddWebhook({
       has ? config.alerts.filter((a) => a !== value) : [...config.alerts, value]
     );
   }
+
+  const chosenIds = chosen.map((c) => c.id).join(",");
+
+  const loadLabels = useCallback(async () => {
+    if (!chosenIds) return;
+    setLabelsLoading(true);
+    setError(null);
+    try {
+      const res = await fetchLeadLabels(chosenIds.split(","));
+      setLabels(res.labels);
+      setLabelsFor(chosenIds);
+      if (res.failed.length > 0) {
+        setError(
+          `Labels could not be read for ${res.failed.length} of ${res.workspacesRequested} workspaces, so the "in all" counts below are incomplete.`
+        );
+      }
+    } catch (err) {
+      setError(
+        err instanceof ApiClientError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "Could not load labels"
+      );
+    } finally {
+      setLabelsLoading(false);
+    }
+  }, [chosenIds]);
+
+  // Labels belong to the selected workspaces, so a changed selection makes the
+  // loaded list stale — and any picked label may no longer exist everywhere.
+  useEffect(() => {
+    if (labelsOpen && chosenIds && chosenIds !== labelsFor) void loadLabels();
+  }, [labelsOpen, chosenIds, labelsFor, loadLabels]);
+
+  // Labels chosen as events, with how many selected workspaces define each.
+  const pickedLabels = config.eventTypes
+    .filter(isLabelEvent)
+    .map((et) => ({
+      eventType: et,
+      label: labels.find((l) => l.eventType === et) ?? null,
+    }));
+  const partialLabels = pickedLabels.filter(
+    (p) => p.label && p.label.presentIn < chosen.length
+  );
 
   async function run(dryRun: boolean) {
     if (!canRun || runLock.current) return;
@@ -144,6 +200,122 @@ export function AddWebhook({
               </button>
             ))}
           </div>
+        </div>
+
+        <div className="rounded-xl border border-border p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              Lead labels{" "}
+              {pickedLabels.length > 0 && (
+                <span className="text-foreground">
+                  · {pickedLabels.length} selected
+                </span>
+              )}
+            </span>
+            <div className="flex items-center gap-2">
+              {labelsOpen && (
+                <button
+                  type="button"
+                  className="pv-btn-ghost text-xs"
+                  onClick={loadLabels}
+                  disabled={labelsLoading || chosen.length === 0}
+                >
+                  {labelsLoading ? <Spinner size={13} /> : <RefreshIcon size={13} />}
+                  Reload
+                </button>
+              )}
+              <button
+                type="button"
+                className="pv-btn-ghost text-xs"
+                onClick={() => setLabelsOpen((v) => !v)}
+              >
+                {labelsOpen ? "Hide" : "Show labels"}
+              </button>
+            </div>
+          </div>
+
+          {labelsOpen && (
+            <div className="mt-2">
+              {chosen.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Pick some workspaces first — labels are defined per workspace.
+                </p>
+              ) : labelsLoading && labels.length === 0 ? (
+                <div className="h-20 animate-pulse rounded-lg bg-muted" />
+              ) : labels.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No labels found in the selected workspaces.
+                </p>
+              ) : (
+                <>
+                  <p className="mb-2 text-xs text-muted-foreground">
+                    Read from the {formatNumber(chosen.length)} selected
+                    workspace{chosen.length === 1 ? "" : "s"}. A label not
+                    defined everywhere is marked — the webhook would still be
+                    created there, it just would never fire.
+                  </p>
+                  <div className="pv-scroll max-h-56 space-y-1 overflow-y-auto">
+                    {labels.map((l) => {
+                      const everywhere = l.presentIn >= chosen.length;
+                      return (
+                        <label
+                          key={l.key}
+                          className="flex cursor-pointer items-start gap-2 rounded-lg px-1.5 py-1 text-xs transition hover:bg-muted/50"
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={config.eventTypes.includes(l.eventType)}
+                            onChange={() => toggleEvent(l.eventType)}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate">
+                              {l.name}
+                              {l.isSystem && (
+                                <span className="text-muted-foreground">
+                                  {" "}
+                                  · built-in
+                                </span>
+                              )}
+                              {!everywhere && (
+                                <span className="text-warning">
+                                  {" "}
+                                  · only in {l.presentIn} of{" "}
+                                  {formatNumber(chosen.length)}
+                                </span>
+                              )}
+                            </span>
+                            <span className="block truncate font-mono text-[10px] text-muted-foreground">
+                              {l.eventType}
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    The mono line is the exact{" "}
+                    <span className="font-mono">event_types</span> value that
+                    will be sent. Plusvibe&apos;s docs don&apos;t say whether a
+                    label is referenced by its key or its display name, so
+                    it&apos;s worth checking one against the webhook screen in
+                    Plusvibe before creating these everywhere.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+
+          {partialLabels.length > 0 && (
+            <p className="mt-2 flex gap-1.5 text-xs text-warning">
+              <AlertIcon size={13} className="mt-0.5 shrink-0" />
+              <span>
+                {partialLabels.length} selected label
+                {partialLabels.length === 1 ? " isn't" : "s aren't"} defined in
+                every selected workspace.
+              </span>
+            </p>
+          )}
         </div>
 
         {wantsAlerts && (

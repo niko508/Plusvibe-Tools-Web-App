@@ -611,3 +611,23 @@ export function addWebhookToWorkspaces(
     signal,
   });
 }
+
+export interface MergedLeadLabel {
+  key: string;
+  name: string;
+  sentiment: string;
+  isSystem: boolean;
+  eventType: string;
+  /** How many of the requested workspaces expose this label. */
+  presentIn: number;
+}
+
+export function fetchLeadLabels(workspaceIds: string[], signal?: AbortSignal) {
+  const qs = new URLSearchParams({ workspace_ids: workspaceIds.join(",") });
+  return request<{
+    labels: MergedLeadLabel[];
+    workspacesRead: number;
+    workspacesRequested: number;
+    failed: string[];
+  }>(`/api/bulk-actions/lead-labels?${qs.toString()}`, { signal });
+}

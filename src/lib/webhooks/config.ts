@@ -175,3 +175,44 @@ export function normalizeUrl(url: string): string {
     return trimmed.toLowerCase();
   }
 }
+
+// --- Custom lead labels -----------------------------------------------------
+
+/** A lead label as exposed by GET /workspace-settings/lead-labels. */
+export interface LeadLabel {
+  /** Stable reference key the API documents "for use in other APIs". */
+  key: string;
+  name: string;
+  sentiment: string;
+  isSystem: boolean;
+}
+
+export const LABEL_EVENT_PREFIX = "LEAD_MARKED_AS_";
+
+/**
+ * The event_types string for a lead label.
+ *
+ * The docs give the shape as LEAD_MARKED_AS_X "where X is a custom label" but
+ * never say whether X is the label's `key` or its display name. `key` is the
+ * field described as the stable reference for other APIs, so that's what's
+ * used — and the resulting string is shown in the UI, so it can be checked
+ * against Plusvibe's own webhook screen before anything is created.
+ *
+ * A key that already carries the prefix is passed through rather than being
+ * prefixed twice.
+ */
+export function labelEventType(key: string): string {
+  const trimmed = key.trim();
+  if (!trimmed) return "";
+  return trimmed.toUpperCase().startsWith(LABEL_EVENT_PREFIX)
+    ? trimmed
+    : `${LABEL_EVENT_PREFIX}${trimmed}`;
+}
+
+/** True if an event type refers to a lead label rather than a built-in event. */
+export function isLabelEvent(eventType: string): boolean {
+  return (
+    eventType.toUpperCase().startsWith(LABEL_EVENT_PREFIX) &&
+    eventType !== "LEAD_MARKED_AS_INTERESTED"
+  );
+}
