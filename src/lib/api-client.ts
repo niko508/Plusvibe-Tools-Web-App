@@ -47,7 +47,7 @@ export class ApiClientError extends Error {
 async function request<T>(
   url: string,
   init?: {
-    method?: "GET" | "POST" | "PUT";
+    method?: "GET" | "POST" | "PUT" | "DELETE";
     body?: unknown;
     signal?: AbortSignal;
   }
@@ -630,4 +630,47 @@ export function fetchLeadLabels(workspaceIds: string[], signal?: AbortSignal) {
     workspacesRequested: number;
     failed: string[];
   }>(`/api/bulk-actions/lead-labels?${qs.toString()}`, { signal });
+}
+
+// --- Add Signatures presets --------------------------------------------------
+
+export interface SignaturePreset {
+  titles: string[];
+  companies: string[];
+  phones: string[];
+  addresses: string[];
+  savedAt: number;
+}
+
+export function fetchSignaturePreset(workspaceId: string, signal?: AbortSignal) {
+  const qs = new URLSearchParams({ workspace_id: workspaceId });
+  return request<{ preset: SignaturePreset | null }>(
+    `/api/signatures/presets?${qs.toString()}`,
+    { signal }
+  );
+}
+
+export function saveSignaturePreset(
+  params: {
+    workspaceId: string;
+    titles: string[];
+    companies: string[];
+    phones: string[];
+    addresses: string[];
+  },
+  signal?: AbortSignal
+) {
+  return request<{ preset: SignaturePreset }>("/api/signatures/presets", {
+    method: "PUT",
+    body: params,
+    signal,
+  });
+}
+
+export function deleteSignaturePreset(workspaceId: string, signal?: AbortSignal) {
+  const qs = new URLSearchParams({ workspace_id: workspaceId });
+  return request<{ ok: boolean }>(`/api/signatures/presets?${qs.toString()}`, {
+    method: "DELETE",
+    signal,
+  });
 }

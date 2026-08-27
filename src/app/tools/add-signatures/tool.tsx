@@ -8,6 +8,10 @@ import {
   fetchTags,
   bulkUpdateSignature,
   ApiClientError,
+  fetchSignaturePreset,
+  saveSignaturePreset,
+  deleteSignaturePreset,
+  type SignaturePreset,
 } from "@/lib/api-client";
 import { useApiKey } from "@/lib/use-api-key";
 import { formatNumber } from "@/lib/format";
@@ -92,6 +96,11 @@ export function AddSignaturesTool() {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // What was last used for this workspace, so adding signatures to its new
+  // inboxes doesn't mean retyping the client's details every time.
+  const [preset, setPreset] = useState<SignaturePreset | null>(null);
+  const [presetLoading, setPresetLoading] = useState(false);
+  const [presetSaved, setPresetSaved] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const fields: SignatureFields = useMemo(
@@ -132,6 +141,43 @@ export function AddSignaturesTool() {
   useEffect(() => {
     if (ready && hasKey) void loadWorkspaces();
   }, [ready, hasKey, loadWorkspaces]);
+
+  /** Spreads saved values back across the fixed slots, padding the rest. */
+  const applyPreset = useCallback((p: SignaturePreset) => {
+    const pad = (values: string[], slots: number) =>
+      Array.from({ length: slots }, (_, i) => values[i] ?? "");
+    // Only fields the preset actually has are restored; an empty one leaves
+    // the randomised role slots alone rather than blanking them.
+    if (p.titles.length) setTitles(pad(p.titles, TITLE_SLOTS));
+    if (p.companies.length) setCompanies(pad(p.companies, COMPANY_SLOTS));
+    if (p.phones.length) setPhones(pad(p.phones, PHONE_SLOTS));
+    if (p.addresses.length) setAddresses(pad(p.addresses, ADDRESS_SLOTS));
+  }, []);
+
+  // Restore the workspace's remembered details when it's selected.
+  useEffect(() => {
+    if (!ready || !hasKey || !workspaceId) return;
+    let cancelled = false;
+    setPresetLoading(true);
+    setPresetSaved(false);
+    void (async () => {
+      try {
+        const { preset: found } = await fetchSignaturePreset(workspaceId);
+        if (cancelled) return;
+        setPreset(found);
+        if (found) applyPreset(found);
+      } catch {
+        // Remembering is a convenience; failing to read it must not stop the
+        // tool being used with details typed in by hand.
+        if (!cancelled) setPreset(null);
+      } finally {
+        if (!cancelled) setPresetLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, hasKey, workspaceId, applyPreset]);
 
   // --- Load inboxes for the selected workspace -----------------------------
   async function loadInboxes() {
@@ -291,6 +337,22 @@ export function AddSignaturesTool() {
         { concurrency: 3, minSpacingMs: 220, signal }
       );
       setApplied(true);
+
+      // Saved after the apply rather than as you type: this is the moment the
+      // details are known to be the ones actually used for this client.
+      try {
+        const { preset: saved } = await saveSignaturePreset({
+          workspaceId,
+          titles,
+          companies,
+          phones,
+          addresses,
+        });
+        setPreset(saved);
+        setPresetSaved(true);
+      } catch {
+        // Not worth failing the run over — the signatures are already applied.
+      }
       const message =
         errCount > 0
           ? `Signatures applied to ${formatNumber(okInboxes)} inboxes · ${formatNumber(
@@ -388,6 +450,44 @@ export function AddSignaturesTool() {
           onChange={setAddresses}
           placeholder="Rochester, MN 55901"
         />
+
+        {/* Whether these details came back from a previous run */}
+        {(presetLoading || preset) && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border px-3 py-2">
+            {presetLoading ? (
+              <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Spinner size={13} />
+                Checking for saved details…
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-xs text-success">
+                <CheckIcon size={13} />
+                {presetSaved
+                  ? "Saved for this workspace — next time these fill in automatically."
+                  : `Filled in from the last run for this workspace${
+                      preset?.savedAt ? ` · ${relativeDay(preset.savedAt)}` : ""
+                    }.`}
+              </span>
+            )}
+            {preset && !presetLoading && (
+              <button
+                type="button"
+                className="pv-btn-ghost text-xs"
+                onClick={async () => {
+                  try {
+                    await deleteSignaturePreset(workspaceId);
+                    setPreset(null);
+                    setPresetSaved(false);
+                  } catch (err) {
+                    setError(errMessage(err));
+                  }
+                }}
+              >
+                Forget these
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
           <p className="text-xs text-muted-foreground">
@@ -739,4 +839,14 @@ function errMessage(err: unknown): string {
   if (err instanceof ApiClientError) return err.message;
   if (err instanceof Error) return err.message;
   return "Something went wrong.";
+}
+
+/** "today" / "3 days ago" — enough context for a remembered preset. */
+function relativeDay(ts: number): string {
+  const days = Math.floor((Date.now() - ts) / 86400000);
+  if (days <= 0) return "saved today";
+  if (days === 1) return "saved yesterday";
+  if (days < 30) return `saved ${days} days ago`;
+  const months = Math.floor(days / 30);
+  return months === 1 ? "saved a month ago" : `saved ${months} months ago`;
 }
