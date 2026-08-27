@@ -14,6 +14,11 @@ import {
   type CellUpdate,
 } from "@/lib/google-sheets";
 import { extractSheetId } from "@/lib/sheet";
+import {
+  buildProviderByEmail,
+  buildSourceVocabulary,
+  resolveSource,
+} from "@/lib/jobs/tenant-source";
 import type {
   AzureDomainRow,
   AzureStartPayload,
@@ -25,8 +30,12 @@ import {
   COL_DOMAIN,
   COL_STATUS,
   COL_TENANT_EMAIL,
+  COL_TENANT_SOURCE,
+  COL_TENANTS_EMAIL,
+  COL_TENANTS_PROVIDER,
   COL_WARMUP_DAYS,
   COL_WARMUP_STARTED,
+  DEFAULT_TENANTS_TAB,
   MAX_CONSECUTIVE_FAILURES,
   MAX_RUN_MS,
   MAX_STORED_ERRORS,
@@ -90,6 +99,8 @@ interface JobMeta {
 interface StoredJob extends AzureWarmupJob {
   workspaceId: string;
   sheetUrl: string;
+  /** Tab the tenant provider is read from. */
+  tenantsTab?: string;
   rows: AzureUploadRow[];
   /** Emails already configured + switched on, so a resume doesn't redo them. */
   done: string[];
@@ -195,12 +206,14 @@ function toClient(rec: StoredJob): AzureWarmupJob {
   const {
     workspaceId: _w,
     sheetUrl: _u,
+    tenantsTab: _t,
     rows: _r,
     done: _d,
     ...client
   } = rec;
   void _w;
   void _u;
+  void _t;
   void _r;
   void _d;
   return client;
@@ -272,6 +285,7 @@ export async function createJob(
     errors: [],
     workspaceId: payload.workspaceId,
     sheetUrl: payload.sheetUrl,
+    tenantsTab: payload.tenantsTab,
     rows,
     done: [],
   };
@@ -461,6 +475,43 @@ async function updateDomainsSheet(rec: StoredJob) {
     );
   }
 
+  // Tenant / Inbox Source is filled in from the Tenants tab when both the
+  // column and the tab are readable. It's a convenience, not part of starting
+  // warmup, so a failure here is reported and everything else still writes.
+  const iSource = header.indexOf(COL_TENANT_SOURCE.toLowerCase());
+  let byEmail = new Map<string, string>();
+  let vocabulary = new Map<string, string>();
+  if (iSource !== -1) {
+    vocabulary = buildSourceVocabulary(grid, iSource);
+    const tenantsTab = rec.tenantsTab || DEFAULT_TENANTS_TAB;
+    try {
+      const tenants = await readTab(sheetId, tenantsTab);
+      const tHeader = (tenants[0] ?? []).map((h) => h.trim().toLowerCase());
+      const tEmail = tHeader.indexOf(COL_TENANTS_EMAIL.toLowerCase());
+      const tProvider = tHeader.indexOf(COL_TENANTS_PROVIDER.toLowerCase());
+      if (tEmail === -1 || tProvider === -1) {
+        pushError(
+          rec,
+          `The "${tenantsTab}" tab has no ${COL_TENANTS_EMAIL} / ${COL_TENANTS_PROVIDER} column, so ${COL_TENANT_SOURCE} was left alone.`
+        );
+      } else {
+        const built = buildProviderByEmail(tenants, tEmail, tProvider);
+        byEmail = built.byEmail;
+        if (built.duplicates.length > 0) {
+          pushError(
+            rec,
+            `${built.duplicates.length} tenant email(s) appear more than once in "${tenantsTab}" with different providers; the first row was used (e.g. ${built.duplicates.slice(0, 3).join(", ")}).`
+          );
+        }
+      }
+    } catch (err) {
+      pushError(
+        rec,
+        `Could not read the "${tenantsTab}" tab, so ${COL_TENANT_SOURCE} was left alone: ${err instanceof Error ? err.message : "unknown error"}`
+      );
+    }
+  }
+
   // domain (normalized) -> 1-based sheet row
   const rowByDomain = new Map<string, number>();
   for (let r = 1; r < grid.length; r++) {
@@ -470,6 +521,10 @@ async function updateDomainsSheet(rec: StoredJob) {
 
   const updates: CellUpdate[] = [];
   const notFound: string[] = [];
+  const noProvider = new Set<string>();
+  const unknownProviders = new Set<string>();
+  let sourcesWritten = 0;
+  let sourcesAdapted = 0;
   const tab = quoteTab(rec.sheetTab);
   for (const d of rec.domains) {
     const rowNo = rowByDomain.get(d.domain);
@@ -486,12 +541,52 @@ async function updateDomainsSheet(rec: StoredJob) {
       range: `${tab}!${columnLetter(iStatus)}${rowNo}`,
       value: STATUS_WARMING_UP,
     });
+
+    if (iSource !== -1 && byEmail.size > 0) {
+      const resolved = resolveSource(d.orderEmail, byEmail, vocabulary);
+      if (resolved.value) {
+        updates.push({
+          range: `${tab}!${columnLetter(iSource)}${rowNo}`,
+          value: resolved.value,
+        });
+        sourcesWritten += 1;
+        if (resolved.adapted) sourcesAdapted += 1;
+        if (resolved.unknown) unknownProviders.add(resolved.value);
+      } else {
+        noProvider.add(d.orderEmail);
+      }
+    }
+
     d.sheetUpdated = true;
   }
 
   const cells = await batchUpdateCells(sheetId, updates);
-  rec.sheet.rowsUpdated = updates.length / 2;
+  // Every matched row gets a tenant email and a status; the source cell is
+  // optional, so rows are counted directly rather than from the update count.
+  rec.sheet.rowsUpdated = rec.domains.filter((d) => d.sheetUpdated).length;
   rec.sheet.notFound = notFound;
+
+  if (noProvider.size > 0) {
+    pushError(
+      rec,
+      `${noProvider.size} tenant email(s) weren't found in the Tenants tab, so their ${COL_TENANT_SOURCE} was left blank: ${[...noProvider].slice(0, 5).join(", ")}${noProvider.size > 5 ? " …" : ""}`
+    );
+  }
+  if (unknownProviders.size > 0) {
+    // Written anyway, but the Domains column has never held this value, so its
+    // dropdown probably doesn't offer it.
+    pushError(
+      rec,
+      `${unknownProviders.size} provider value(s) from the Tenants tab aren't used anywhere in the ${COL_TENANT_SOURCE} column and were written as-is; check the dropdown accepts them: ${[...unknownProviders].join(", ")}`
+    );
+  }
+  if (sourcesAdapted > 0) {
+    pushError(
+      rec,
+      `${sourcesAdapted} ${COL_TENANT_SOURCE} value(s) were rewritten to the spelling that column already uses (e.g. "Cheap Inboxes" → "CheapInboxes").`
+    );
+  }
+  void sourcesWritten;
   if (notFound.length > 0) {
     pushError(
       rec,

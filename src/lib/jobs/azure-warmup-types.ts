@@ -83,6 +83,8 @@ export interface AzureStartPayload {
   delayMinutes: number;
   sheetUrl: string;
   sheetTab: string;
+  /** Tab the tenant provider is read from; defaults to DEFAULT_TENANTS_TAB. */
+  tenantsTab?: string;
   rows: AzureUploadRow[];
   /** Emails to skip entirely (known-bad from the provisioning side). */
   ignoreEmails?: string[];
@@ -98,7 +100,19 @@ export const COL_TENANT_EMAIL = "Tenant Email Address";
 export const COL_STATUS = "Status";
 export const COL_WARMUP_STARTED = "Warmup Started";
 export const COL_WARMUP_DAYS = "Warmup Days";
+export const COL_TENANT_SOURCE = "Tenant / Inbox Source";
 export const STATUS_WARMING_UP = "Warming Up";
+
+/**
+ * The tab the tenant's provider is looked up in, and its two columns.
+ *
+ * A tenant email in the Domains tab is matched against this tab to fill in
+ * "Tenant / Inbox Source", so the provider doesn't have to be typed in by hand
+ * for every domain.
+ */
+export const DEFAULT_TENANTS_TAB = "👴 Tenants";
+export const COL_TENANTS_EMAIL = "Tenant Email Address";
+export const COL_TENANTS_PROVIDER = "Tenant Provider";
 
 export const CHECK_INTERVAL_MS = 60 * 60 * 1000; // hourly
 export const MAX_RUN_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
