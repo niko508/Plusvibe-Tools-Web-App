@@ -28,6 +28,10 @@ import type {
   AzureWarmupJob,
   AzureStartPayload,
 } from "@/lib/jobs/azure-warmup-types";
+import type {
+  FirstCampaignJob,
+  FirstCampaignStartPayload,
+} from "@/lib/jobs/first-campaign-types";
 
 export type { WarmupSettings } from "@/lib/jobs/remove-50-types";
 
@@ -671,6 +675,48 @@ export function deleteSignaturePreset(workspaceId: string, signal?: AbortSignal)
   const qs = new URLSearchParams({ workspace_id: workspaceId });
   return request<{ ok: boolean }>(`/api/signatures/presets?${qs.toString()}`, {
     method: "DELETE",
+    signal,
+  });
+}
+
+// --- New Workspace 1st Campaign ---------------------------------------------
+
+export function startFirstCampaign(
+  payload: FirstCampaignStartPayload,
+  signal?: AbortSignal
+) {
+  return request<{ jobId: string }>("/api/jobs/first-campaign/start", {
+    method: "POST",
+    body: payload,
+    signal,
+  });
+}
+
+export function listFirstCampaignJobs(signal?: AbortSignal) {
+  return request<{ jobs: FirstCampaignJob[] }>("/api/jobs/first-campaign/list", {
+    signal,
+  });
+}
+
+export function getFirstCampaignJob(jobId: string, signal?: AbortSignal) {
+  return request<{ job: FirstCampaignJob }>(
+    `/api/jobs/first-campaign/status?jobId=${encodeURIComponent(jobId)}`,
+    { signal }
+  );
+}
+
+export function abortFirstCampaign(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/first-campaign/abort", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
+export function deleteFirstCampaignJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/first-campaign/delete", {
+    method: "POST",
+    body: { jobId },
     signal,
   });
 }

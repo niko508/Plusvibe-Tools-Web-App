@@ -106,6 +106,16 @@ export interface Tool {
 
 export const TOOLS: Tool[] = [
   {
+    slug: "first-campaign",
+    name: "New Workspace 1st Campaign",
+    tagline: "Build a new client's first campaign end to end",
+    description:
+      "Pick a new client's workspace and it builds their first campaign from scratch — the step 1 shell with your greeting and sign-off spintax, every safety and sending setting, the schedule and the Active tag, then all six sub-sequences wired to their lead labels, creating any labels the workspace doesn't have yet.",
+    status: "active",
+    color: "rose",
+    Icon: SparklesIcon,
+  },
+  {
     slug: "domain-performance",
     name: "Domain Performance Monitoring",
     tagline: "Compare deliverability & replies across every sending domain",

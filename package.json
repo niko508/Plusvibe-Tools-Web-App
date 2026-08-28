@@ -10,7 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "check": "node scripts/check-opt-out-spintax.mjs && node scripts/check-campaign-types.mjs && node scripts/check-follow-ups.mjs && node scripts/check-webhooks.mjs && node scripts/check-tenant-source.mjs"
+    "check": "node scripts/check-opt-out-spintax.mjs && node scripts/check-campaign-types.mjs && node scripts/check-follow-ups.mjs && node scripts/check-webhooks.mjs && node scripts/check-tenant-source.mjs && node scripts/check-first-campaign.mjs"
   },
   "dependencies": {
     "next": "14.2.35",
@@ -25,6 +25,7 @@
     "@types/react-dom": "18.3.0",
     "autoprefixer": "10.4.19",
     "postcss": "8.5.25",
+    "sucrase": "^3.35.1",
     "tailwindcss": "3.4.6",
     "typescript": "5.5.3"
   }
