@@ -142,7 +142,7 @@ export function DomainPerformanceTool() {
         const initial =
           list.find((w) => w._id === stored)?._id ?? list[0]._id;
         setWorkspaceId(initial);
-        void run({ workspaceId: initial, start, end }, list);
+        void loadDomains(initial, list);
       } else {
         setWorkspaceId(null);
       }
@@ -166,9 +166,11 @@ export function DomainPerformanceTool() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, hasKey]);
 
-  // --- The core run: derive domains, fetch per-domain stats ----------------
-  const run = useCallback(
-    async (params: RunParams, wsList?: Workspace[]) => {
+  // --- Stage 1: discover the workspace's domains ---------------------------
+  // One accounts call. Cheap, and it's what fills in the provider counts, so
+  // the ESP filter can be chosen BEFORE any per-domain stats are fetched.
+  const loadDomains = useCallback(
+    async (workspaceId: string, wsList?: Workspace[]) => {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
@@ -181,26 +183,17 @@ export function DomainPerformanceTool() {
       setProgress({ done: 0, total: 0 });
 
       const list = wsList ?? workspaces;
-      const workspaceName =
-        list.find((w) => w._id === params.workspaceId)?.name ?? "workspace";
-      setRanMeta({ workspaceName });
+      setRanMeta({
+        workspaceName:
+          list.find((w) => w._id === workspaceId)?.name ?? "workspace",
+      });
 
       if (typeof window !== "undefined") {
-        window.localStorage.setItem(LAST_WS_KEY, params.workspaceId);
+        window.localStorage.setItem(LAST_WS_KEY, workspaceId);
       }
 
-      const statsBase = {
-        workspace_id: params.workspaceId,
-        start_date: params.start,
-        end_date: params.end,
-      };
-
       try {
-        // Accounts -> unique sending domains (with their sender ESPs).
-        const accountsRes = await fetchAccounts(
-          { workspace_id: params.workspaceId },
-          signal
-        );
+        const accountsRes = await fetchAccounts({ workspace_id: workspaceId }, signal);
         const groups = groupByDomain(accountsRes.accounts ?? []);
         setRows(
           groups.map((g) => ({
@@ -211,26 +204,57 @@ export function DomainPerformanceTool() {
             status: "pending" as const,
           }))
         );
-        setProgress({ done: 0, total: groups.length });
+      } catch (err) {
+        if (!isAbort(err)) setError(errMessage(err));
+      } finally {
+        if (!controller.signal.aborted) setBusy(false);
+      }
+    },
+    [workspaces]
+  );
 
-        // 3) Per-domain stats, throttled under the rate limit.
+  // --- Stage 2: load stats for the domains currently in scope --------------
+  // One call per domain, so this only covers what the ESP filter selects.
+  // Domains already loaded for this date range are skipped, which makes
+  // switching from Google to Microsoft fetch only the new ones.
+  const loadStats = useCallback(
+    async (targets: DomainRow[], params: RunParams) => {
+      const todo = targets.filter((r) => r.status === "pending" || r.status === "error");
+      if (todo.length === 0) return;
+
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const { signal } = controller;
+
+      setBusy(true);
+      setError(null);
+      setProgress({ done: 0, total: todo.length });
+
+      const statsBase = {
+        workspace_id: params.workspaceId,
+        start_date: params.start,
+        end_date: params.end,
+      };
+
+      try {
         await mapPool(
-          groups,
-          async (group) => {
-            updateRow(setRows, group.domain, { status: "loading" });
+          todo,
+          async (row) => {
+            updateRow(setRows, row.domain, { status: "loading" });
             try {
               const res = await fetchEmailStats(
-                { ...statsBase, domain: group.domain },
+                { ...statsBase, domain: row.domain },
                 signal
               );
-              updateRow(setRows, group.domain, {
+              updateRow(setRows, row.domain, {
                 status: "done",
                 header: res.header,
                 chart: res.chart,
               });
             } catch (err) {
               if (isAbort(err)) throw err;
-              updateRow(setRows, group.domain, {
+              updateRow(setRows, row.domain, {
                 status: "error",
                 error: errMessage(err),
               });
@@ -248,13 +272,30 @@ export function DomainPerformanceTool() {
         if (!controller.signal.aborted) setBusy(false);
       }
     },
-    [workspaces]
+    []
   );
+
+  /** Drops loaded stats, keeping the domain list. */
+  const invalidateStats = useCallback(() => {
+    abortRef.current?.abort();
+    setBusy(false);
+    setSelectedDomain(null);
+    setProgress({ done: 0, total: 0 });
+    setRows((prev) =>
+      prev.map((r) => ({
+        ...r,
+        status: "pending" as const,
+        header: undefined,
+        chart: undefined,
+        error: undefined,
+      }))
+    );
+  }, []);
 
   // --- Handlers ------------------------------------------------------------
   function handleWorkspaceChange(id: string) {
     setWorkspaceId(id);
-    void run({ workspaceId: id, start, end });
+    void loadDomains(id);
   }
 
   function handlePreset(key: string) {
@@ -264,13 +305,21 @@ export function DomainPerformanceTool() {
     setStart(range.start);
     setEnd(range.end);
     setActivePreset(key);
-    if (workspaceId) {
-      void run({ workspaceId, start: range.start, end: range.end });
-    }
+    // Stats are scoped to the date range, so the loaded ones are now stale.
+    invalidateStats();
   }
 
-  function handleRefresh() {
-    if (workspaceId) void run({ workspaceId, start, end });
+  // Domains the ESP filter currently selects — exactly what Load will fetch.
+  const inScope = rows.filter(
+    (r) => !senderProvider || r.providers.includes(senderProvider)
+  );
+  const toLoad = inScope.filter(
+    (r) => r.status === "pending" || r.status === "error"
+  ).length;
+
+  function handleLoad() {
+    if (!workspaceId) return;
+    void loadStats(inScope, { workspaceId, start, end });
   }
 
   function handleSort(key: SortKey) {
@@ -330,6 +379,10 @@ export function DomainPerformanceTool() {
   // Aggregate summary from the filtered, loaded domains so the cards, chart,
   // table and burned% all reflect the same set.
   const loadedRows = activeRows.filter((r) => r.status === "done" && r.header);
+  // Domains are known but none of their stats have been fetched yet. The cards
+  // and chart would render as zeros, which reads as "no sends" rather than
+  // "not loaded", so a prompt takes their place instead.
+  const nothingLoaded = rows.length > 0 && loadedRows.length === 0 && !busy;
   const summary = computeTotals(loadedRows);
   const summaryLoading = busy && loadedRows.length === 0;
 
@@ -381,16 +434,20 @@ export function DomainPerformanceTool() {
         onStartChange={(v) => {
           setStart(v);
           setActivePreset(null);
+          invalidateStats();
         }}
         onEndChange={(v) => {
           setEnd(v);
           setActivePreset(null);
+          invalidateStats();
         }}
         senderProvider={senderProvider}
         onSenderProviderChange={setSenderProvider}
         senderCounts={senderCounts}
-        onRefresh={handleRefresh}
+        onRefresh={handleLoad}
         busy={busy}
+        toLoad={toLoad}
+        domainsKnown={rows.length}
       />
 
       {error && (
@@ -406,8 +463,8 @@ export function DomainPerformanceTool() {
 
       {!hasResults && !busy && !error && (
         <EmptyState icon={<GaugeIcon />} title="No data yet">
-          Pick a workspace and date range, then hit Refresh to load domain
-          performance.
+          Pick a workspace to see its sending domains, then choose which
+          provider to pull stats for.
         </EmptyState>
       )}
 
@@ -464,6 +521,23 @@ export function DomainPerformanceTool() {
             </div>
           </div>
 
+          {nothingLoaded ? (
+            <div className="pv-card flex flex-col items-center justify-center px-6 py-10 text-center">
+              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+                <GaugeIcon />
+              </div>
+              <h3 className="text-base font-semibold">
+                {formatNumber(rows.length)} sending domain
+                {rows.length === 1 ? "" : "s"} found
+              </h3>
+              <p className="mt-1.5 max-w-md text-sm text-muted-foreground">
+                Stats are one request per domain, so nothing is fetched until
+                you ask. Pick a provider above to narrow it down, then load{" "}
+                {senderProvider ? "just those" : "all of them"}.
+              </p>
+            </div>
+          ) : (
+          <>
           {/* Summary cards */}
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
             <StatCard
@@ -616,6 +690,8 @@ export function DomainPerformanceTool() {
               </p>
             )}
           </div>
+          </>
+          )}
 
           {visibleRows.length > 0 ? (
             <>

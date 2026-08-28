@@ -27,6 +27,10 @@ interface Props {
 
   onRefresh: () => void;
   busy: boolean;
+  /** Domains in scope that still need their stats fetched. */
+  toLoad: number;
+  /** Domains discovered in the workspace, before any filtering. */
+  domainsKnown: number;
 }
 
 export function Controls(props: Props) {
@@ -89,14 +93,23 @@ export function Controls(props: Props) {
           />
         </div>
 
+        {/* Stats are a request per domain, so they're loaded on demand rather
+            than the moment a workspace is picked — pick the provider first and
+            only those domains are fetched. */}
         <button
           type="button"
-          className="pv-btn-primary"
+          className="pv-btn-primary disabled:opacity-50"
           onClick={props.onRefresh}
-          disabled={props.busy || !props.workspaceId}
+          disabled={props.busy || !props.workspaceId || props.toLoad === 0}
         >
           {props.busy ? <Spinner /> : <RefreshIcon size={16} />}
-          {props.busy ? "Loading…" : "Refresh"}
+          {props.busy
+            ? "Loading…"
+            : props.toLoad > 0
+              ? `Load ${props.toLoad} domain${props.toLoad === 1 ? "" : "s"}`
+              : props.domainsKnown > 0
+                ? "All loaded"
+                : "Load"}
         </button>
       </div>
 
