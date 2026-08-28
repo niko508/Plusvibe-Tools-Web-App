@@ -251,10 +251,116 @@ ok("no email_accounts key when nothing resolved",
 const sub = bp.buildSubsequenceUpdate({ workspaceId: "w", campaignId: "c" });
 eq("subsequence gets its own window", sub.schedules.timing, { from: "09:30", to: "15:30" });
 eq("subsequence ignores the mailbox limit", sub.ignore_mailbox_limit, 1);
-// Sending `sequences` for a sub-sequence would also require first_wait_time;
-// the content is added in a later step, so neither belongs here.
-ok("subsequence sends no sequences and no first_wait_time",
+// A sub-sequence with no copy yet must not send `sequences` — and therefore
+// must not send first_wait_time, which the API only accepts alongside it.
+ok("a content-less subsequence sends no sequences and no first_wait_time",
   !("sequences" in sub) && !("first_wait_time" in sub));
+
+// --- Sub-sequence content ---------------------------------------------------
+console.log("--- sub-sequence content");
+const withContent = bp.SUBSEQUENCES.filter((s) => s.content);
+eq("three sub-sequences have copy", withContent.length, 3);
+eq(
+  "the three with copy",
+  withContent.map((s) => s.name).sort(),
+  ["Evergreen Follow Up", "Positive Reply 1", "Positive Reply 2"]
+);
+eq(
+  "the three still awaiting copy",
+  bp.SUBSEQUENCES.filter((s) => !s.content).map((s) => s.name).sort(),
+  [
+    "Meeting Confirmation - Normal",
+    "Meeting Confirmation - Prospect's Calendar",
+    "No Show",
+  ]
+);
+
+const byName = (n) => bp.SUBSEQUENCES.find((s) => s.name === n);
+// Delays, as specified: initial delay, then the gap between step 1 and 2.
+eq("Positive Reply 1 delays",
+  [byName("Positive Reply 1").content.firstWaitDays,
+   byName("Positive Reply 1").content.steps[0].waitDays], [1, 2]);
+eq("Evergreen Follow Up delays",
+  [byName("Evergreen Follow Up").content.firstWaitDays,
+   byName("Evergreen Follow Up").content.steps[0].waitDays], [2, 3]);
+eq("Positive Reply 2 delays",
+  [byName("Positive Reply 2").content.firstWaitDays,
+   byName("Positive Reply 2").content.steps[0].waitDays], [2, 3]);
+ok("every content sub-sequence has two steps",
+  withContent.every((s) => s.content.steps.length === 2));
+// Nothing follows the last step, so its wait never elapses.
+ok("the last step waits 0", withContent.every((s) => s.content.steps[1].waitDays === 0));
+
+// Positive Reply 1 and Evergreen send the same two emails; only the cadence
+// differs. If someone edits one copy and not the other, this catches it.
+eq("Positive Reply 1 and Evergreen share step 1",
+  byName("Positive Reply 1").content.steps[0].body,
+  byName("Evergreen Follow Up").content.steps[0].body);
+const stepTwos = withContent.map((s) => s.content.steps[1].body);
+eq("all three share step 2", new Set(stepTwos).size, 1);
+ok("Positive Reply 2 has its own step 1",
+  byName("Positive Reply 2").content.steps[0].body !==
+    byName("Positive Reply 1").content.steps[0].body);
+
+// Copy details that would be invisible until sent.
+const pr1s1 = byName("Positive Reply 1").content.steps[0].body;
+const pr2s1 = byName("Positive Reply 2").content.steps[0].body;
+const s2 = byName("Positive Reply 1").content.steps[1].body;
+ok("step 1 asks about the times", pr1s1.includes("Did those times work for you?"));
+ok("step 1 offers 11am - 4pm", pr1s1.includes("between 11am - 4pm if that helps."));
+ok("Positive Reply 2 answers a question", pr2s1.includes("Did that answer your question?"));
+ok("Positive Reply 2 offers 12pm - 4pm", pr2s1.includes("between 12pm - 4pm."));
+ok("Positive Reply 2 says 'availability on', not 'also on'",
+  pr2s1.includes("I have availability on ") && !pr2s1.includes("availability also on"));
+// Supplied that way: it ends on "Thanks," with no sender token.
+ok("Positive Reply 2 step 1 ends without a sender token",
+  pr2s1.trimEnd().endsWith("Thanks,") && !pr2s1.includes("{{sender_first_name}}"));
+ok("step 2 runs the greeting into the sentence",
+  s2.includes("{% endif %} haven't heard back"));
+ok("step 2 offers 10am - 2pm", s2.includes("between 10am - 2pm."));
+ok("step 2 signs off with the sender", s2.trimEnd().endsWith("{{sender_first_name}}"));
+
+// The weekday branch tables. The near one has no `else`, which is only safe
+// because the schedules never send at the weekend; the far one always renders.
+for (const [label, body, branches, hasElse] of [
+  ["step 1", pr1s1, ["this Wednesday and Thursday", "this Thursday and Friday",
+    "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], false],
+  ["step 2", s2, ["this Thursday or Friday", "this Friday or next Monday",
+    "next Monday or Tuesday", "next Tuesday or Wednesday", "next Wednesday or Thursday"], true],
+]) {
+  ok(`${label} has all five weekday branches`,
+    branches.every((b) => body.includes(b)),
+    branches.filter((b) => !body.includes(b)).join(" / "));
+  eq(`${label} else branch`, body.includes("{% else %}early next week"), hasElse);
+  ok(`${label} assigns today_number once`,
+    (body.match(/assign today_number/g) ?? []).length === 1);
+  ok(`${label} closes its liquid`, (body.match(/\{% endif %\}/g) ?? []).length === 2);
+}
+
+// The PATCH the runner actually sends.
+const subFull = bp.buildSubsequenceUpdate({
+  workspaceId: "w", campaignId: "c",
+  content: byName("Positive Reply 1").content,
+});
+eq("content patch carries first_wait_time", subFull.first_wait_time, 1);
+eq("content patch names the unit", subFull.first_wait_time_unit, "days");
+eq("content patch carries two steps", subFull.sequences.length, 2);
+eq("steps are numbered from 1", subFull.sequences.map((x) => x.step), [1, 2]);
+eq("step waits", subFull.sequences.map((x) => x.wait_time), [2, 0]);
+eq("content patch keeps its own window", subFull.schedules.timing,
+  { from: "09:30", to: "15:30" });
+// Empty subject on EVERY step: that's what makes it a reply on the lead's
+// existing thread rather than a new one.
+ok("every step has an empty subject",
+  subFull.sequences.every((x) => x.variations[0].subject === ""));
+ok("every step has one variation A",
+  subFull.sequences.every((x) => x.variations.length === 1 && x.variations[0].variation === "A"));
+// The liquid must survive HTML conversion, same as step 1 of the parent.
+const html = subFull.sequences[0].variations[0].body;
+ok("subsequence liquid survives conversion",
+  html.includes("{% if first_name != blank %}") && html.includes("{% assign today_number"));
+ok("subsequence html is not escaped", !html.includes("&lt;") && !html.includes("&gt;"));
+ok("subsequence body is wrapped in divs", html.startsWith("<div>"));
 
 console.log(
   failures === 0 ? "\nall first-campaign checks OK" : `\n${failures} failure(s)`

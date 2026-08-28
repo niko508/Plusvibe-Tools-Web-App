@@ -129,6 +129,11 @@ function migrateRecord(raw: FirstCampaignJob): FirstCampaignJob {
   rec.errors = Array.isArray(rec.errors) ? rec.errors : [];
   rec.labels = Array.isArray(rec.labels) ? rec.labels : [];
   rec.subsequences = Array.isArray(rec.subsequences) ? rec.subsequences : [];
+  for (const s of rec.subsequences) {
+    // Records written before the emails existed carry no step count.
+    if (typeof s.steps !== "number") s.steps = 0;
+    if (!Array.isArray(s.labelNames)) s.labelNames = [];
+  }
   rec.manualFollowUps = Array.isArray(rec.manualFollowUps)
     ? rec.manualFollowUps
     : [];
@@ -224,6 +229,8 @@ export async function createJob(
     labelNames: s.labels.map((l) => l.name),
     createState: "pending",
     settingsState: "pending",
+    steps: s.content?.steps.length ?? 0,
+    firstWaitDays: s.content?.firstWaitDays,
   }));
 
   const record: FirstCampaignJob = {
@@ -477,7 +484,9 @@ async function runJob(id: string) {
         continue;
       }
 
-      // Its own send window, which the create endpoint can't set.
+      // Its send window and its emails — neither of which the create endpoint
+      // can set. A sub-sequence whose copy isn't written yet gets the schedule
+      // only, and is reported as awaiting content rather than as finished.
       check();
       row.settingsState = "running";
       await persist(id);
@@ -488,14 +497,26 @@ async function runJob(id: string) {
           buildSubsequenceUpdate({
             workspaceId,
             campaignId: row.campaignId!,
+            content: spec.content,
           })
         );
         row.settingsState = "done";
+        if (!spec.content) {
+          // Not an error — the copy simply hasn't been written. It belongs
+          // with the other "still needs a manual pass" notes, or the whole job
+          // would report as failed for something that went exactly to plan.
+          rec.manualFollowUps.push(
+            `"${spec.name}" sub-sequence — trigger and schedule are set, but it has no emails yet`
+          );
+        }
       } catch (err) {
         if (err instanceof AbortedError) throw err;
         row.settingsState = "error";
         row.error = msg(err);
-        pushError(rec, `Sub-sequence "${spec.name}" schedule: ${msg(err)}`);
+        pushError(
+          rec,
+          `Sub-sequence "${spec.name}" schedule/emails: ${msg(err)}`
+        );
       }
       rec.updatedAt = Date.now();
       await persist(id);

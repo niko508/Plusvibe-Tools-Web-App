@@ -10,6 +10,11 @@
 // can assert the exact payloads without a key.
 
 import { bodyToHtml } from "@/lib/body-html";
+import {
+  ANSWER_STEP_ONE,
+  BUMP_STEP_ONE,
+  NUDGE_STEP_TWO,
+} from "@/lib/first-campaign/subsequence-content";
 
 // --- Step 1 ----------------------------------------------------------------
 
@@ -149,11 +154,33 @@ export interface SpecLabel {
   sentiment: Sentiment;
 }
 
+export interface SubsequenceStep {
+  /**
+   * Days to wait AFTER this step. The last step's value never elapses, so it
+   * is 0 — nothing follows it.
+   */
+  waitDays: number;
+  /** Plain text; converted to the editor's HTML shape on the way out. */
+  body: string;
+}
+
+export interface SubsequenceContent {
+  /** Days between the trigger firing and step 1. */
+  firstWaitDays: number;
+  steps: SubsequenceStep[];
+}
+
 export interface SubsequenceSpec {
   /** Sub-sequence name, as it appears in the campaign list. */
   name: string;
   /** Labels that add a lead to this sub-sequence. */
   labels: SpecLabel[];
+  /**
+   * The emails. Absent for the sub-sequences whose copy hasn't been written
+   * yet — those are still created with their trigger and schedule, and the run
+   * reports them as awaiting content rather than pretending they're finished.
+   */
+  content?: SubsequenceContent;
 }
 
 /**
@@ -164,10 +191,25 @@ export const SUBSEQUENCES: SubsequenceSpec[] = [
   {
     name: "Positive Reply 1",
     labels: [{ name: "🤩 positive reply 1", sentiment: "POSITIVE" }],
+    content: {
+      firstWaitDays: 1,
+      steps: [
+        { waitDays: 2, body: BUMP_STEP_ONE },
+        { waitDays: 0, body: NUDGE_STEP_TWO },
+      ],
+    },
   },
   {
     name: "Evergreen Follow Up",
     labels: [{ name: "😈 evergreen follow up", sentiment: "NEUTRAL" }],
+    // The same two emails as Positive Reply 1, on a slower cadence.
+    content: {
+      firstWaitDays: 2,
+      steps: [
+        { waitDays: 3, body: BUMP_STEP_ONE },
+        { waitDays: 0, body: NUDGE_STEP_TWO },
+      ],
+    },
   },
   {
     name: "Meeting Confirmation - Normal",
@@ -179,6 +221,13 @@ export const SUBSEQUENCES: SubsequenceSpec[] = [
   {
     name: "Positive Reply 2",
     labels: [{ name: "🤩 positive reply 2", sentiment: "POSITIVE" }],
+    content: {
+      firstWaitDays: 2,
+      steps: [
+        { waitDays: 3, body: ANSWER_STEP_ONE },
+        { waitDays: 0, body: NUDGE_STEP_TWO },
+      ],
+    },
   },
   { name: "No Show", labels: [{ name: "😡 no show", sentiment: "NEGATIVE" }] },
   {
@@ -246,21 +295,47 @@ export function buildParentUpdate(args: {
 }
 
 /**
- * The PATCH body for a sub-sequence.
+ * The PATCH body for a sub-sequence: its schedule, its emails, and the delay
+ * before the first one.
  *
- * `sequences` is deliberately not sent: the email content is added separately,
- * and sending `sequences` for a sub-sequence would also require
- * `first_wait_time`. `ignore_mailbox_limit` is on so a follow-up to an
- * interested lead isn't held back by the mailbox's cold-email daily cap.
+ * Every step's subject is empty on purpose. In a sub-sequence that makes the
+ * email a reply on the lead's existing thread instead of starting a new one.
+ *
+ * `first_wait_time` is only meaningful alongside `sequences`, and the API
+ * requires it whenever `sequences` is sent for a sub-sequence — so a
+ * sub-sequence with no copy yet gets its schedule and nothing else.
+ *
+ * `ignore_mailbox_limit` is on so a follow-up to an interested lead isn't held
+ * back by the mailbox's cold-email daily cap.
  */
 export function buildSubsequenceUpdate(args: {
   workspaceId: string;
   campaignId: string;
+  content?: SubsequenceContent;
 }): Record<string, unknown> {
-  return {
+  const base: Record<string, unknown> = {
     workspace_id: args.workspaceId,
     campaign_id: args.campaignId,
     schedules: SUBSEQUENCE_SCHEDULE,
     ignore_mailbox_limit: 1,
+  };
+  if (!args.content) return base;
+
+  return {
+    ...base,
+    first_wait_time: args.content.firstWaitDays,
+    first_wait_time_unit: "days",
+    sequences: args.content.steps.map((s, i) => ({
+      step: i + 1,
+      wait_time: s.waitDays,
+      variations: [
+        {
+          variation: "A",
+          subject: "",
+          name: "",
+          body: bodyToHtml(s.body),
+        },
+      ],
+    })),
   };
 }

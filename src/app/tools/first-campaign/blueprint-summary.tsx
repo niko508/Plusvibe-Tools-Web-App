@@ -91,12 +91,28 @@ export function Blueprint() {
                 <li key={s.name}>
                   <span className="text-foreground">{s.name}</span> ←{" "}
                   {s.labels.map((l) => l.name).join(" or ")}
+                  {s.content ? (
+                    <>
+                      {" "}
+                      ·{" "}
+                      {s.content.steps.length} step
+                      {s.content.steps.length === 1 ? "" : "s"}, first after{" "}
+                      {s.content.firstWaitDays} day
+                      {s.content.firstWaitDays === 1 ? "" : "s"}
+                      {s.content.steps.length > 1 &&
+                        `, then ${s.content.steps[0].waitDays} more`}
+                    </>
+                  ) : (
+                    <span className="text-warning"> · no emails yet</span>
+                  )}
                 </li>
               ))}
             </ul>
             <p className="mt-1.5 text-muted-foreground">
-              Labels the workspace doesn&apos;t have yet are created first; ones
-              it already has are reused, whatever their spelling.
+              Every sub-sequence step has an empty subject, so it lands as a
+              reply on the lead&apos;s existing thread. Labels the workspace
+              doesn&apos;t have yet are created first; ones it already has are
+              reused, whatever their spelling.
             </p>
           </section>
 

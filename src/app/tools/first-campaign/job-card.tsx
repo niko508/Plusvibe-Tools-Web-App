@@ -257,7 +257,11 @@ export function JobCard({
                     {s.createState === "error" || s.settingsState === "error"
                       ? s.error || "failed"
                       : s.campaignId
-                        ? `${s.reused ? "reused" : "created"} · ${s.labelNames.join(", ")}`
+                        ? `${s.reused ? "reused" : "created"} · ${
+                            s.steps > 0
+                              ? `${s.steps} step${s.steps === 1 ? "" : "s"}, +${s.firstWaitDays}d`
+                              : "no emails yet"
+                          } · ${(s.labelNames ?? []).join(", ")}`
                         : s.createState}
                   </span>
                 </li>

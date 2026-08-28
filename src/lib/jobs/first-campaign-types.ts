@@ -74,7 +74,12 @@ export interface SubsequenceProgress {
   campaignId?: string;
   reused?: boolean;
   createState: PhaseState;
+  /** Schedule, emails and the delay before the first one. */
   settingsState: PhaseState;
+  /** How many email steps were written; 0 when the copy isn't written yet. */
+  steps: number;
+  /** Days from the trigger firing to step 1, when there are steps. */
+  firstWaitDays?: number;
   error?: string;
 }
 
