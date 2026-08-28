@@ -111,6 +111,12 @@ ok("every yes/no field is the string yes or no",
   yesNoFields.every((f) => s[f] === "yes" || s[f] === "no"),
   JSON.stringify(yesNoFields.filter((f) => s[f] !== "yes" && s[f] !== "no")));
 
+// --- Campaign name ----------------------------------------------------------
+console.log("--- campaign name");
+// Fixed, not asked for. The re-run guard matches on it, so a change here
+// silently turns re-runs into duplicate campaigns.
+eq("the campaign is always TEMPLATE CAMPAIGN", bp.CAMPAIGN_NAME, "TEMPLATE CAMPAIGN");
+
 // --- Sub-sequences ----------------------------------------------------------
 console.log("--- sub-sequences");
 eq("six sub-sequences", bp.SUBSEQUENCES.length, 6);
@@ -258,54 +264,54 @@ ok("a content-less subsequence sends no sequences and no first_wait_time",
 
 // --- Sub-sequence content ---------------------------------------------------
 console.log("--- sub-sequence content");
-const withContent = bp.SUBSEQUENCES.filter((s) => s.content);
-eq("three sub-sequences have copy", withContent.length, 3);
-eq(
-  "the three with copy",
-  withContent.map((s) => s.name).sort(),
-  ["Evergreen Follow Up", "Positive Reply 1", "Positive Reply 2"]
-);
-eq(
-  "the three still awaiting copy",
-  bp.SUBSEQUENCES.filter((s) => !s.content).map((s) => s.name).sort(),
-  [
-    "Meeting Confirmation - Normal",
-    "Meeting Confirmation - Prospect's Calendar",
-    "No Show",
-  ]
-);
+ok("every sub-sequence now has copy", bp.SUBSEQUENCES.every((s) => s.content),
+  bp.SUBSEQUENCES.filter((s) => !s.content).map((s) => s.name).join(", "));
 
 const byName = (n) => bp.SUBSEQUENCES.find((s) => s.name === n);
-// Delays, as specified: initial delay, then the gap between step 1 and 2.
-eq("Positive Reply 1 delays",
-  [byName("Positive Reply 1").content.firstWaitDays,
-   byName("Positive Reply 1").content.steps[0].waitDays], [1, 2]);
-eq("Evergreen Follow Up delays",
-  [byName("Evergreen Follow Up").content.firstWaitDays,
-   byName("Evergreen Follow Up").content.steps[0].waitDays], [2, 3]);
-eq("Positive Reply 2 delays",
-  [byName("Positive Reply 2").content.firstWaitDays,
-   byName("Positive Reply 2").content.steps[0].waitDays], [2, 3]);
-ok("every content sub-sequence has two steps",
-  withContent.every((s) => s.content.steps.length === 2));
+// Initial delay, then the gap between step 1 and 2, exactly as specified.
+for (const [name, first, unit, gap, steps] of [
+  ["Positive Reply 1", 1, "days", 2, 2],
+  ["Evergreen Follow Up", 2, "days", 3, 2],
+  ["Positive Reply 2", 2, "days", 3, 2],
+  ["No Show", 2, "days", 2, 2],
+  ["Meeting Confirmation - Normal", 120, "minutes", 0, 1],
+  ["Meeting Confirmation - Prospect's Calendar", 120, "minutes", 0, 1],
+]) {
+  const c = byName(name).content;
+  eq(`${name} cadence`,
+    [c.firstWait, c.firstWaitUnit, c.steps[0].waitDays, c.steps.length],
+    [first, unit, gap, steps]);
+}
 // Nothing follows the last step, so its wait never elapses.
-ok("the last step waits 0", withContent.every((s) => s.content.steps[1].waitDays === 0));
+ok("every last step waits 0",
+  bp.SUBSEQUENCES.every((s) => s.content.steps.at(-1).waitDays === 0));
 
 // Positive Reply 1 and Evergreen send the same two emails; only the cadence
 // differs. If someone edits one copy and not the other, this catches it.
 eq("Positive Reply 1 and Evergreen share step 1",
   byName("Positive Reply 1").content.steps[0].body,
   byName("Evergreen Follow Up").content.steps[0].body);
-const stepTwos = withContent.map((s) => s.content.steps[1].body);
-eq("all three share step 2", new Set(stepTwos).size, 1);
+eq("the three reply sub-sequences share step 2",
+  new Set(["Positive Reply 1", "Evergreen Follow Up", "Positive Reply 2"]
+    .map((n) => byName(n).content.steps[1].body)).size, 1);
 ok("Positive Reply 2 has its own step 1",
   byName("Positive Reply 2").content.steps[0].body !==
     byName("Positive Reply 1").content.steps[0].body);
+// No Show is its own copy end to end — it must not have picked up the shared
+// step 2 by accident.
+ok("No Show step 2 is its own",
+  byName("No Show").content.steps[1].body !==
+    byName("Positive Reply 1").content.steps[1].body);
 
 // Copy details that would be invisible until sent.
 const pr1s1 = byName("Positive Reply 1").content.steps[0].body;
 const pr2s1 = byName("Positive Reply 2").content.steps[0].body;
 const s2 = byName("Positive Reply 1").content.steps[1].body;
+const ns1 = byName("No Show").content.steps[0].body;
+const ns2 = byName("No Show").content.steps[1].body;
+const mcn = byName("Meeting Confirmation - Normal").content.steps[0].body;
+const mcp = byName("Meeting Confirmation - Prospect's Calendar").content.steps[0].body;
+
 ok("step 1 asks about the times", pr1s1.includes("Did those times work for you?"));
 ok("step 1 offers 11am - 4pm", pr1s1.includes("between 11am - 4pm if that helps."));
 ok("Positive Reply 2 answers a question", pr2s1.includes("Did that answer your question?"));
@@ -320,13 +326,50 @@ ok("step 2 runs the greeting into the sentence",
 ok("step 2 offers 10am - 2pm", s2.includes("between 10am - 2pm."));
 ok("step 2 signs off with the sender", s2.trimEnd().endsWith("{{sender_first_name}}"));
 
-// The weekday branch tables. The near one has no `else`, which is only safe
-// because the schedules never send at the weekend; the far one always renders.
+ok("No Show step 1 offers another time",
+  ns1.includes("Still happy to find another time that works."));
+ok("No Show step 1 offers 12pm - 4pm", ns1.includes("I'm free between 12pm - 4pm."));
+ok("No Show step 2 offers to stop", ns2.includes("I don't want to keep following up"));
+ok("No Show step 2 offers 10am - 3pm", ns2.includes("between 10am - 3pm."));
+ok("No Show step 2 closes warmly", ns2.includes("Either way, appreciate your time."));
+
+ok("Meeting Confirmation - Normal runs into the greeting",
+  mcn.includes("{% endif %} just to double-check:"));
+ok("Meeting Confirmation - Normal asks about the invite",
+  mcn.includes("Did you get the calendar invite from our JOB TITLE, CLIENT FIRST NAME?"));
+ok("Meeting Confirmation - Normal keeps the curly quotes",
+  mcn.includes("\u201CYour Name and Alix Rudin\u201D"));
+ok("Meeting Confirmation - Prospect's names the speaker",
+  mcp.includes("HE/SHE will be the one speaking with you."));
+ok("Meeting Confirmation - Prospect's asks about the booking",
+  mcp.includes("Did the booking come through to you as well?"));
+// The ALL-CAPS markers are deliberate template placeholders and must NOT be
+// reported as unfinished work — only the stale real name is.
+ok("the caps markers are left in the copy",
+  mcn.includes("JOB TITLE") && mcn.includes("CLIENT FIRST NAME") &&
+  mcp.includes("JOB TITLE") && mcp.includes("HE/SHE"));
+eq("the caps markers are not reported as edits",
+  bp.SUBSEQUENCES.flatMap((x) => x.content.manualEdits ?? [])
+    .filter((e) => /JOB TITLE|CLIENT FIRST NAME|HE\/SHE/.test(e)),
+  []);
+eq("only the stale name is reported",
+  bp.SUBSEQUENCES.flatMap((x) => x.content.manualEdits ?? []),
+  ["Your Name and Alix Rudin"]);
+ok("the reported text is actually in the copy",
+  mcn.includes("Your Name and Alix Rudin"));
+
+// The weekday branch tables. The two "near" ones have no `else`, which is only
+// safe because the schedules never send at the weekend; the far one always
+// renders.
 for (const [label, body, branches, hasElse] of [
-  ["step 1", pr1s1, ["this Wednesday and Thursday", "this Thursday and Friday",
+  ["reply step 1", pr1s1, ["this Wednesday and Thursday", "this Thursday and Friday",
     "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], false],
-  ["step 2", s2, ["this Thursday or Friday", "this Friday or next Monday",
+  ["reply step 2", s2, ["this Thursday or Friday", "this Friday or next Monday",
     "next Monday or Tuesday", "next Tuesday or Wednesday", "next Wednesday or Thursday"], true],
+  ["No Show step 1", ns1, ["this Wednesday or Thursday", "this Thursday or Friday",
+    "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], false],
+  ["No Show step 2", ns2, ["this Wednesday or Thursday", "this Thursday or Friday",
+    "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], false],
 ]) {
   ok(`${label} has all five weekday branches`,
     branches.every((b) => body.includes(b)),
@@ -336,6 +379,12 @@ for (const [label, body, branches, hasElse] of [
     (body.match(/assign today_number/g) ?? []).length === 1);
   ok(`${label} closes its liquid`, (body.match(/\{% endif %\}/g) ?? []).length === 2);
 }
+// No Show uses the "or" table, not the "and" one — they differ only on Mon/Tue.
+ok("No Show uses the 'or' phrasing on Monday and Tuesday",
+  ns1.includes("this Wednesday or Thursday") && !ns1.includes("this Wednesday and Thursday"));
+// The meeting confirmations offer no times at all, so they carry no table.
+ok("the confirmations carry no weekday table",
+  !mcn.includes("today_number") && !mcp.includes("today_number"));
 
 // The PATCH the runner actually sends.
 const subFull = bp.buildSubsequenceUpdate({
@@ -344,6 +393,15 @@ const subFull = bp.buildSubsequenceUpdate({
 });
 eq("content patch carries first_wait_time", subFull.first_wait_time, 1);
 eq("content patch names the unit", subFull.first_wait_time_unit, "days");
+// A confirmation waits two hours, not two days — the unit has to travel with
+// the number or the email lands 120 days late.
+const subMinutes = bp.buildSubsequenceUpdate({
+  workspaceId: "w", campaignId: "c",
+  content: byName("Meeting Confirmation - Normal").content,
+});
+eq("a minutes-based delay keeps its unit",
+  [subMinutes.first_wait_time, subMinutes.first_wait_time_unit], [120, "minutes"]);
+eq("a one-step subsequence sends one step", subMinutes.sequences.length, 1);
 eq("content patch carries two steps", subFull.sequences.length, 2);
 eq("steps are numbered from 1", subFull.sequences.map((x) => x.step), [1, 2]);
 eq("step waits", subFull.sequences.map((x) => x.wait_time), [2, 0]);

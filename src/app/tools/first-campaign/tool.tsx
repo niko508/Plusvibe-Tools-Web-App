@@ -15,6 +15,7 @@ import { useApiKey } from "@/lib/use-api-key";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { EmptyState, Spinner } from "@/components/ui";
 import { AlertIcon, ChevronDownIcon, SparklesIcon } from "@/components/icons";
+import { CAMPAIGN_NAME } from "@/lib/first-campaign/blueprint";
 import { JobCard } from "./job-card";
 import { Blueprint } from "./blueprint-summary";
 
@@ -28,7 +29,6 @@ export function FirstCampaignTool() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspacesLoading, setWorkspacesLoading] = useState(false);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
-  const [campaignName, setCampaignName] = useState("");
 
   const [jobs, setJobs] = useState<FirstCampaignJob[]>([]);
   const [starting, setStarting] = useState(false);
@@ -96,12 +96,10 @@ export function FirstCampaignTool() {
   }, [jobs, refreshJobs]);
 
   const running = jobs.find((j) => j.status === "running");
-  const trimmedName = campaignName.trim();
-  const canStart =
-    !!workspaceId && trimmedName.length > 0 && !starting && !running;
+  const canStart = !!workspaceId && !starting && !running;
 
   async function handleStart() {
-    if (!workspaceId || !trimmedName) return;
+    if (!workspaceId) return;
     setStarting(true);
     setError(null);
     try {
@@ -112,9 +110,7 @@ export function FirstCampaignTool() {
         workspaceId,
         workspaceName:
           workspaces.find((w) => w._id === workspaceId)?.name ?? "",
-        campaignName: trimmedName,
       });
-      setCampaignName("");
       await refreshJobs();
     } catch (err) {
       setError(errMessage(err));
@@ -181,20 +177,15 @@ export function FirstCampaignTool() {
           </div>
 
           <div className="min-w-[240px] flex-1">
-            <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
+            <span className="mb-1.5 block text-xs font-medium text-muted-foreground">
               Campaign name
-            </label>
-            <input
-              type="text"
-              className="pv-input"
-              placeholder="e.g. Tree Removal (August)"
-              value={campaignName}
-              maxLength={200}
-              onChange={(e) => setCampaignName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && canStart) void handleStart();
-              }}
-            />
+            </span>
+            {/* Fixed, not asked for: this is the template every real campaign
+                gets duplicated from, and a stable name is what lets a re-run
+                adopt it instead of building a second one. */}
+            <div className="pv-input flex items-center bg-muted/40 text-muted-foreground">
+              {CAMPAIGN_NAME}
+            </div>
           </div>
 
           <button
@@ -239,8 +230,8 @@ export function FirstCampaignTool() {
         </div>
       ) : (
         <EmptyState icon={<SparklesIcon />} title="No campaigns built yet">
-          Pick the new client&apos;s workspace, name the campaign, and it builds
-          the whole thing — you can close the tab, it keeps running.
+          Pick the new client&apos;s workspace and it builds the whole thing —
+          you can close the tab, it keeps running.
         </EmptyState>
       )}
     </div>

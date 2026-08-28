@@ -78,8 +78,9 @@ export interface SubsequenceProgress {
   settingsState: PhaseState;
   /** How many email steps were written; 0 when the copy isn't written yet. */
   steps: number;
-  /** Days from the trigger firing to step 1, when there are steps. */
-  firstWaitDays?: number;
+  /** Wait from the trigger firing to step 1, when there are steps. */
+  firstWait?: number;
+  firstWaitUnit?: "days" | "minutes";
   error?: string;
 }
 
@@ -111,5 +112,4 @@ export interface FirstCampaignJob {
 export interface FirstCampaignStartPayload {
   workspaceId: string;
   workspaceName: string;
-  campaignName: string;
 }

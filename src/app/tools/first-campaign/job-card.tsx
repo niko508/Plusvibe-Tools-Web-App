@@ -259,7 +259,10 @@ export function JobCard({
                       : s.campaignId
                         ? `${s.reused ? "reused" : "created"} · ${
                             s.steps > 0
-                              ? `${s.steps} step${s.steps === 1 ? "" : "s"}, +${s.firstWaitDays}d`
+                              ? `${s.steps} step${s.steps === 1 ? "" : "s"}, +${describeWait(
+                                  s.firstWait,
+                                  s.firstWaitUnit
+                                )}`
                               : "no emails yet"
                           } · ${(s.labelNames ?? []).join(", ")}`
                         : s.createState}
@@ -316,6 +319,15 @@ function StepBullet({
   return (
     <span className={`${base} bg-muted text-muted-foreground`}>{index}</span>
   );
+}
+
+/** "1d", "120m" — compact enough to sit inline on a sub-sequence row. */
+function describeWait(
+  value: number | undefined,
+  unit: "days" | "minutes" | undefined
+): string {
+  if (typeof value !== "number") return "?";
+  return `${value}${unit === "minutes" ? "m" : "d"}`;
 }
 
 function Detail({ label, value }: { label: string; value: string }) {

@@ -94,13 +94,20 @@ export function Blueprint() {
                   {s.content ? (
                     <>
                       {" "}
-                      ·{" "}
-                      {s.content.steps.length} step
+                      · {s.content.steps.length} step
                       {s.content.steps.length === 1 ? "" : "s"}, first after{" "}
-                      {s.content.firstWaitDays} day
-                      {s.content.firstWaitDays === 1 ? "" : "s"}
+                      {s.content.firstWait}{" "}
+                      {s.content.firstWaitUnit === "minutes"
+                        ? "minutes"
+                        : `day${s.content.firstWait === 1 ? "" : "s"}`}
                       {s.content.steps.length > 1 &&
-                        `, then ${s.content.steps[0].waitDays} more`}
+                        `, then ${s.content.steps[0].waitDays} days more`}
+                      {s.content.manualEdits?.length ? (
+                        <span className="text-warning">
+                          {" "}
+                          · placeholders to replace
+                        </span>
+                      ) : null}
                     </>
                   ) : (
                     <span className="text-warning"> · no emails yet</span>

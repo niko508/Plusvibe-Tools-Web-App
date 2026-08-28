@@ -7,6 +7,7 @@ import { onShutdownFlush } from "@/lib/jobs/shutdown";
 import { acquireSlot } from "@/lib/jobs/rate-limit";
 import { listCampaigns } from "@/lib/plusvibe-campaigns";
 import {
+  CAMPAIGN_NAME,
   SUBSEQUENCES,
   UNSETTABLE_PARENT_SETTINGS,
   SENDING_TAG_NAME,
@@ -133,6 +134,14 @@ function migrateRecord(raw: FirstCampaignJob): FirstCampaignJob {
     // Records written before the emails existed carry no step count.
     if (typeof s.steps !== "number") s.steps = 0;
     if (!Array.isArray(s.labelNames)) s.labelNames = [];
+    // The delay was days-only before the meeting confirmations needed minutes,
+    // and was stored as `firstWaitDays`. Without this the card renders "+?".
+    const legacy = s as unknown as { firstWaitDays?: number };
+    if (typeof s.firstWait !== "number" && typeof legacy.firstWaitDays === "number") {
+      s.firstWait = legacy.firstWaitDays;
+      s.firstWaitUnit = "days";
+      delete legacy.firstWaitDays;
+    }
   }
   rec.manualFollowUps = Array.isArray(rec.manualFollowUps)
     ? rec.manualFollowUps
@@ -230,12 +239,13 @@ export async function createJob(
     createState: "pending",
     settingsState: "pending",
     steps: s.content?.steps.length ?? 0,
-    firstWaitDays: s.content?.firstWaitDays,
+    firstWait: s.content?.firstWait,
+    firstWaitUnit: s.content?.firstWaitUnit,
   }));
 
   const record: FirstCampaignJob = {
     id,
-    label: payload.campaignName,
+    label: CAMPAIGN_NAME,
     status: "running",
     phase: "labels",
     phaseStates: { labels: "running", parent: "pending", subsequences: "pending" },
@@ -244,7 +254,7 @@ export async function createJob(
     workspaceName: payload.workspaceName,
     labels,
     parent: {
-      name: payload.campaignName,
+      name: CAMPAIGN_NAME,
       createState: "pending",
       settingsState: "pending",
       tagName: SENDING_TAG_NAME,
@@ -286,7 +296,8 @@ async function runJob(id: string) {
   if (!rec || !m || !m.apiKey || !m.payload) return;
 
   const apiKey = m.apiKey;
-  const { workspaceId, campaignName } = m.payload;
+  const { workspaceId } = m.payload;
+  const campaignName = CAMPAIGN_NAME;
   const check = () => {
     if (m.aborted) throw new AbortedError();
   };
@@ -501,12 +512,16 @@ async function runJob(id: string) {
           })
         );
         row.settingsState = "done";
+        // Neither of these is an error — the run did exactly what it should.
+        // They belong with the other "still needs a manual pass" notes, or the
+        // job would report as failed for something that went entirely to plan.
         if (!spec.content) {
-          // Not an error — the copy simply hasn't been written. It belongs
-          // with the other "still needs a manual pass" notes, or the whole job
-          // would report as failed for something that went exactly to plan.
           rec.manualFollowUps.push(
             `"${spec.name}" sub-sequence — trigger and schedule are set, but it has no emails yet`
+          );
+        } else if (spec.content.manualEdits?.length) {
+          rec.manualFollowUps.push(
+            `"${spec.name}" sub-sequence — replace the per-client placeholders in its copy: ${spec.content.manualEdits.join(", ")}`
           );
         }
       } catch (err) {

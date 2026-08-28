@@ -13,6 +13,11 @@ import { bodyToHtml } from "@/lib/body-html";
 import {
   ANSWER_STEP_ONE,
   BUMP_STEP_ONE,
+  MEETING_CONFIRMATION_NORMAL_EDITS,
+  MEETING_CONFIRMATION_NORMAL,
+  MEETING_CONFIRMATION_PROSPECT,
+  NO_SHOW_STEP_ONE,
+  NO_SHOW_STEP_TWO,
   NUDGE_STEP_TWO,
 } from "@/lib/first-campaign/subsequence-content";
 
@@ -144,6 +149,16 @@ export const UNSETTABLE_PARENT_SETTINGS = [
 /** The tag whose email accounts send this campaign. */
 export const SENDING_TAG_NAME = "Active";
 
+/**
+ * The campaign is always created under this name.
+ *
+ * It's a template the real campaigns get duplicated from, not a campaign that
+ * sends on its own — so the name is fixed rather than asked for. It also makes
+ * the re-run guard exact: a second run on the same workspace adopts the
+ * existing TEMPLATE CAMPAIGN instead of building a second one.
+ */
+export const CAMPAIGN_NAME = "TEMPLATE CAMPAIGN";
+
 // --- Sub-sequences ---------------------------------------------------------
 
 export type Sentiment = "POSITIVE" | "NEGATIVE" | "NEUTRAL";
@@ -165,9 +180,24 @@ export interface SubsequenceStep {
 }
 
 export interface SubsequenceContent {
-  /** Days between the trigger firing and step 1. */
-  firstWaitDays: number;
+  /** Wait between the trigger firing and step 1, in `firstWaitUnit`. */
+  firstWait: number;
+  /**
+   * The meeting confirmations go out two hours after the booking, so the delay
+   * can't always be whole days.
+   */
+  firstWaitUnit: "days" | "minutes";
   steps: SubsequenceStep[];
+  /**
+   * Text that reads as finished copy but belongs to another client — a real
+   * name left over from the template. Reported once so it doesn't survive into
+   * a duplicate unnoticed.
+   *
+   * The ALL-CAPS markers (JOB TITLE, CLIENT FIRST NAME, HE/SHE) are NOT listed
+   * here: they are deliberate placeholders in a template campaign, and calling
+   * them unfinished would be wrong.
+   */
+  manualEdits?: string[];
 }
 
 export interface SubsequenceSpec {
@@ -192,7 +222,8 @@ export const SUBSEQUENCES: SubsequenceSpec[] = [
     name: "Positive Reply 1",
     labels: [{ name: "🤩 positive reply 1", sentiment: "POSITIVE" }],
     content: {
-      firstWaitDays: 1,
+      firstWait: 1,
+      firstWaitUnit: "days",
       steps: [
         { waitDays: 2, body: BUMP_STEP_ONE },
         { waitDays: 0, body: NUDGE_STEP_TWO },
@@ -204,7 +235,8 @@ export const SUBSEQUENCES: SubsequenceSpec[] = [
     labels: [{ name: "😈 evergreen follow up", sentiment: "NEUTRAL" }],
     // The same two emails as Positive Reply 1, on a slower cadence.
     content: {
-      firstWaitDays: 2,
+      firstWait: 2,
+      firstWaitUnit: "days",
       steps: [
         { waitDays: 3, body: BUMP_STEP_ONE },
         { waitDays: 0, body: NUDGE_STEP_TWO },
@@ -217,19 +249,38 @@ export const SUBSEQUENCES: SubsequenceSpec[] = [
       { name: "🤑 meeting booked", sentiment: "POSITIVE" },
       { name: "🤑 meeting booked - cell phone call", sentiment: "POSITIVE" },
     ],
+    // Two hours after the booking, so it lands while the invite is fresh.
+    content: {
+      firstWait: 120,
+      firstWaitUnit: "minutes",
+      steps: [{ waitDays: 0, body: MEETING_CONFIRMATION_NORMAL }],
+      manualEdits: MEETING_CONFIRMATION_NORMAL_EDITS,
+    },
   },
   {
     name: "Positive Reply 2",
     labels: [{ name: "🤩 positive reply 2", sentiment: "POSITIVE" }],
     content: {
-      firstWaitDays: 2,
+      firstWait: 2,
+      firstWaitUnit: "days",
       steps: [
         { waitDays: 3, body: ANSWER_STEP_ONE },
         { waitDays: 0, body: NUDGE_STEP_TWO },
       ],
     },
   },
-  { name: "No Show", labels: [{ name: "😡 no show", sentiment: "NEGATIVE" }] },
+  {
+    name: "No Show",
+    labels: [{ name: "😡 no show", sentiment: "NEGATIVE" }],
+    content: {
+      firstWait: 2,
+      firstWaitUnit: "days",
+      steps: [
+        { waitDays: 2, body: NO_SHOW_STEP_ONE },
+        { waitDays: 0, body: NO_SHOW_STEP_TWO },
+      ],
+    },
+  },
   {
     name: "Meeting Confirmation - Prospect's Calendar",
     labels: [
@@ -238,6 +289,11 @@ export const SUBSEQUENCES: SubsequenceSpec[] = [
         sentiment: "POSITIVE",
       },
     ],
+    content: {
+      firstWait: 120,
+      firstWaitUnit: "minutes",
+      steps: [{ waitDays: 0, body: MEETING_CONFIRMATION_PROSPECT }],
+    },
   },
 ];
 
@@ -323,8 +379,8 @@ export function buildSubsequenceUpdate(args: {
 
   return {
     ...base,
-    first_wait_time: args.content.firstWaitDays,
-    first_wait_time_unit: "days",
+    first_wait_time: args.content.firstWait,
+    first_wait_time_unit: args.content.firstWaitUnit,
     sequences: args.content.steps.map((s, i) => ({
       step: i + 1,
       wait_time: s.waitDays,
