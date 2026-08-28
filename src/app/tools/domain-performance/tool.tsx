@@ -28,6 +28,7 @@ import {
   CopyIcon,
   CheckIcon,
   FireIcon,
+  RefreshIcon,
 } from "@/components/icons";
 import { Controls } from "./controls";
 import { OverviewChart } from "./overview-chart";
@@ -67,6 +68,11 @@ export function DomainPerformanceTool() {
 
   // Results
   const [rows, setRows] = useState<DomainRow[]>([]);
+  // Two independent loads: finding the workspace's domains (one cheap call) and
+  // fetching their stats (one call per domain). They're tracked separately so
+  // changing the date range — which only invalidates stats — can never look
+  // like, or cancel, domain discovery.
+  const [domainsBusy, setDomainsBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   // Which sending-inbox ESP to show. Applied client-side to the loaded
   // domains, so switching it is instant. Domains with no campaign sends in the
@@ -124,7 +130,11 @@ export function DomainPerformanceTool() {
     }
   }, [threshold, thresholdLoaded]);
 
-  const abortRef = useRef<AbortController | null>(null);
+  // Separate controllers per stage. Sharing one meant a date-preset click while
+  // the accounts request was still in flight aborted domain discovery, leaving
+  // the page permanently empty with no error (the abort is swallowed).
+  const domainsAbortRef = useRef<AbortController | null>(null);
+  const statsAbortRef = useRef<AbortController | null>(null);
 
   // --- Load workspaces when a key becomes available ------------------------
   const loadWorkspaces = useCallback(async () => {
@@ -152,8 +162,10 @@ export function DomainPerformanceTool() {
     } finally {
       setWorkspacesLoading(false);
     }
+    // loadDomains is declared below and doesn't depend on the date range —
+    // stats are the only thing the range affects, and those load on demand.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [start, end]);
+  }, []);
 
   useEffect(() => {
     if (ready && hasKey) {
@@ -171,12 +183,15 @@ export function DomainPerformanceTool() {
   // the ESP filter can be chosen BEFORE any per-domain stats are fetched.
   const loadDomains = useCallback(
     async (workspaceId: string, wsList?: Workspace[]) => {
-      abortRef.current?.abort();
+      domainsAbortRef.current?.abort();
+      // A different workspace's stats are meaningless here, so stop that too.
+      statsAbortRef.current?.abort();
       const controller = new AbortController();
-      abortRef.current = controller;
+      domainsAbortRef.current = controller;
       const { signal } = controller;
 
-      setBusy(true);
+      setDomainsBusy(true);
+      setBusy(false);
       setError(null);
       setSelectedDomain(null);
       setRows([]);
@@ -207,7 +222,7 @@ export function DomainPerformanceTool() {
       } catch (err) {
         if (!isAbort(err)) setError(errMessage(err));
       } finally {
-        if (!controller.signal.aborted) setBusy(false);
+        if (!controller.signal.aborted) setDomainsBusy(false);
       }
     },
     [workspaces]
@@ -222,9 +237,9 @@ export function DomainPerformanceTool() {
       const todo = targets.filter((r) => r.status === "pending" || r.status === "error");
       if (todo.length === 0) return;
 
-      abortRef.current?.abort();
+      statsAbortRef.current?.abort();
       const controller = new AbortController();
-      abortRef.current = controller;
+      statsAbortRef.current = controller;
       const { signal } = controller;
 
       setBusy(true);
@@ -275,9 +290,12 @@ export function DomainPerformanceTool() {
     []
   );
 
-  /** Drops loaded stats, keeping the domain list. */
+  /**
+   * Drops loaded stats, keeping the domain list. Deliberately touches only the
+   * stats controller — domain discovery must survive a date-range change.
+   */
   const invalidateStats = useCallback(() => {
-    abortRef.current?.abort();
+    statsAbortRef.current?.abort();
     setBusy(false);
     setSelectedDomain(null);
     setProgress({ done: 0, total: 0 });
@@ -446,6 +464,7 @@ export function DomainPerformanceTool() {
         senderCounts={senderCounts}
         onRefresh={handleLoad}
         busy={busy}
+        domainsBusy={domainsBusy}
         toLoad={toLoad}
         domainsKnown={rows.length}
       />
@@ -457,14 +476,41 @@ export function DomainPerformanceTool() {
         </div>
       )}
 
+      {domainsBusy && (
+        <div className="pv-card flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground">
+          <Spinner size={13} />
+          Finding this workspace&apos;s sending domains…
+        </div>
+      )}
+
       {busy && progress.total > 0 && (
         <ProgressBar done={progress.done} total={progress.total} />
       )}
 
-      {!hasResults && !busy && !error && (
-        <EmptyState icon={<GaugeIcon />} title="No data yet">
-          Pick a workspace to see its sending domains, then choose which
-          provider to pull stats for.
+      {!hasResults && !domainsBusy && (
+        <EmptyState icon={<GaugeIcon />} title="No domains loaded">
+          {workspaceId ? (
+            <>
+              Nothing was found for this workspace
+              {error ? " — the lookup failed" : ""}. Set the date range and
+              sending-inbox filter you want, then look again.
+              <span className="mt-3 block">
+                <button
+                  type="button"
+                  className="pv-btn-ghost"
+                  onClick={() => loadDomains(workspaceId)}
+                >
+                  <RefreshIcon size={16} />
+                  Find domains
+                </button>
+              </span>
+            </>
+          ) : (
+            <>
+              Pick a workspace to see its sending domains, then choose the date
+              range and provider before loading stats.
+            </>
+          )}
         </EmptyState>
       )}
 

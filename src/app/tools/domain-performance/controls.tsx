@@ -26,7 +26,10 @@ interface Props {
   senderCounts: Record<string, number>; // domains per ESP, for the chip counts
 
   onRefresh: () => void;
+  /** Stats are being fetched. */
   busy: boolean;
+  /** The workspace's domain list is still being discovered. */
+  domainsBusy: boolean;
   /** Domains in scope that still need their stats fetched. */
   toLoad: number;
   /** Domains discovered in the workspace, before any filtering. */
@@ -100,16 +103,27 @@ export function Controls(props: Props) {
           type="button"
           className="pv-btn-primary disabled:opacity-50"
           onClick={props.onRefresh}
-          disabled={props.busy || !props.workspaceId || props.toLoad === 0}
+          disabled={
+            props.busy ||
+            props.domainsBusy ||
+            !props.workspaceId ||
+            props.toLoad === 0
+          }
         >
-          {props.busy ? <Spinner /> : <RefreshIcon size={16} />}
-          {props.busy
-            ? "Loading…"
-            : props.toLoad > 0
-              ? `Load ${props.toLoad} domain${props.toLoad === 1 ? "" : "s"}`
-              : props.domainsKnown > 0
-                ? "All loaded"
-                : "Load"}
+          {props.busy || props.domainsBusy ? (
+            <Spinner />
+          ) : (
+            <RefreshIcon size={16} />
+          )}
+          {props.domainsBusy
+            ? "Finding domains…"
+            : props.busy
+              ? "Loading stats…"
+              : props.toLoad > 0
+                ? `Load ${props.toLoad} domain${props.toLoad === 1 ? "" : "s"}`
+                : props.domainsKnown > 0
+                  ? "All loaded"
+                  : "Load"}
         </button>
       </div>
 
