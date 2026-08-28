@@ -2,8 +2,13 @@
 // `provider` field on /account/list. Plusvibe returns three values; anything
 // unrecognised is bucketed as REGULAR_ACCOUNT by providerBucket().
 
-export const ESP_OPTIONS: { key: string | null; label: string }[] = [
-  { key: null, label: "All" },
+// Sentinel for "every ESP". It has to be a real value rather than null,
+// because null now means "the user hasn't picked a type yet" — and until they
+// have, the tool deliberately fetches no per-domain stats.
+export const ALL_ESP = "ALL";
+
+export const ESP_OPTIONS: { key: string; label: string }[] = [
+  { key: ALL_ESP, label: "All" },
   { key: "GOOGLE_WORKSPACE", label: "Google" },
   { key: "MICROSOFT365", label: "Microsoft" },
   { key: "REGULAR_ACCOUNT", label: "Other / SMTP" },
@@ -11,6 +16,12 @@ export const ESP_OPTIONS: { key: string | null; label: string }[] = [
 
 export function providerLabel(key: string): string {
   return ESP_OPTIONS.find((o) => o.key === key)?.label ?? key;
+}
+
+// Whether a domain belongs to the selected ESP view. ALL_ESP matches every
+// domain; a mixed domain matches each ESP it has mailboxes on.
+export function matchesEsp(providers: string[], esp: string): boolean {
+  return esp === ALL_ESP || providers.includes(esp);
 }
 
 // Short form for the table badge, where column width is tight.

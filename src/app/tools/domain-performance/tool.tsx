@@ -28,12 +28,13 @@ import {
   CopyIcon,
   CheckIcon,
   FireIcon,
+  MailIcon,
 } from "@/components/icons";
-import { Controls } from "./controls";
+import { Controls, EspChips } from "./controls";
 import { OverviewChart } from "./overview-chart";
 import { DomainTable, computeTotals } from "./domain-table";
 import { exportDomainsCsv } from "./csv";
-import { providerLabel } from "./providers";
+import { ALL_ESP, matchesEsp, providerLabel } from "./providers";
 import type { DomainRow, SortKey, SortState } from "./types";
 
 const LAST_WS_KEY = "pv_last_workspace";
@@ -65,12 +66,16 @@ export function DomainPerformanceTool() {
   const [end, setEnd] = useState(initialRange.end);
   const [activePreset, setActivePreset] = useState<string | null>(DEFAULT_PRESET);
 
-  // Results
+  // Results. `rows` is the workspace's sending domains; it is filled by the
+  // cheap accounts call as soon as a workspace is picked, but every row starts
+  // out "pending" with no stats attached.
   const [rows, setRows] = useState<DomainRow[]>([]);
+  const [domainsLoading, setDomainsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  // Which sending-inbox ESP to show. Applied client-side to the loaded
-  // domains, so switching it is instant. Domains with no campaign sends in the
-  // range are always hidden.
+  // Which sending-inbox ESP to load. null means the user hasn't picked yet —
+  // and until they do, no per-domain stats are fetched at all. Picking a type
+  // fetches only that type's domains; already-loaded ones are reused, so
+  // switching back to a type you've seen is instant.
   const [senderProvider, setSenderProvider] = useState<string | null>(null);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
@@ -125,68 +130,54 @@ export function DomainPerformanceTool() {
   }, [threshold, thresholdLoaded]);
 
   const abortRef = useRef<AbortController | null>(null);
-
-  // --- Load workspaces when a key becomes available ------------------------
-  const loadWorkspaces = useCallback(async () => {
-    setWorkspacesLoading(true);
-    setError(null);
-    try {
-      const res = await fetchWorkspaces();
-      const list = res.workspaces ?? [];
-      setWorkspaces(list);
-      if (list.length) {
-        const stored =
-          typeof window !== "undefined"
-            ? window.localStorage.getItem(LAST_WS_KEY)
-            : null;
-        const initial =
-          list.find((w) => w._id === stored)?._id ?? list[0]._id;
-        setWorkspaceId(initial);
-        void run({ workspaceId: initial, start, end }, list);
-      } else {
-        setWorkspaceId(null);
-      }
-    } catch (err) {
-      setError(errMessage(err));
-      setWorkspaces([]);
-    } finally {
-      setWorkspacesLoading(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [start, end]);
-
+  // Mirrors `rows` so the stats loader can read the current domain list without
+  // taking it as a dependency (it runs from event handlers, after render).
+  const rowsRef = useRef<DomainRow[]>([]);
   useEffect(() => {
-    if (ready && hasKey) {
-      void loadWorkspaces();
-    } else if (ready && !hasKey) {
-      setWorkspaces([]);
-      setWorkspaceId(null);
-      setRows([]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, hasKey]);
+    rowsRef.current = rows;
+  }, [rows]);
+  // Which workspace + date range the stats currently held on `rows` belong to.
+  // When it no longer matches, cached stats are stale and get refetched.
+  const statsKeyRef = useRef<string | null>(null);
 
-  // --- The core run: derive domains, fetch per-domain stats ----------------
-  const run = useCallback(
-    async (params: RunParams, wsList?: Workspace[]) => {
+  // --- Phase 2: per-domain stats for one sending-inbox type ----------------
+  // Only ever fetches the domains that match `esp` and don't already have stats
+  // for the current workspace/range, so picking "Microsoft" costs 17 requests
+  // rather than every domain in the workspace.
+  const loadStats = useCallback(
+    async (
+      esp: string,
+      params: RunParams,
+      opts: { rows?: DomainRow[]; force?: boolean } = {}
+    ) => {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
       const { signal } = controller;
 
-      setBusy(true);
+      const key = `${params.workspaceId}|${params.start}|${params.end}`;
+      const stale = statsKeyRef.current !== key || opts.force === true;
+      statsKeyRef.current = key;
+
       setError(null);
       setSelectedDomain(null);
-      setRows([]);
-      setProgress({ done: 0, total: 0 });
 
-      const list = wsList ?? workspaces;
-      const workspaceName =
-        list.find((w) => w._id === params.workspaceId)?.name ?? "workspace";
-      setRanMeta({ workspaceName });
+      // A different workspace or date range invalidates every cached stat.
+      const base = (opts.rows ?? rowsRef.current).map((r) =>
+        stale ? resetRow(r) : r
+      );
+      if (stale) setRows(base);
 
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(LAST_WS_KEY, params.workspaceId);
+      const targets = base.filter(
+        (r) => matchesEsp(r.providers, esp) && r.status !== "done"
+      );
+      setProgress({ done: 0, total: targets.length });
+      // Nothing left to fetch — every domain of this type is already loaded.
+      // Still clear `busy`, because aborting the previous run above skips its
+      // own cleanup (it checks its now-aborted signal).
+      if (targets.length === 0) {
+        setBusy(false);
+        return;
       }
 
       const statsBase = {
@@ -195,42 +186,25 @@ export function DomainPerformanceTool() {
         end_date: params.end,
       };
 
+      setBusy(true);
       try {
-        // Accounts -> unique sending domains (with their sender ESPs).
-        const accountsRes = await fetchAccounts(
-          { workspace_id: params.workspaceId },
-          signal
-        );
-        const groups = groupByDomain(accountsRes.accounts ?? []);
-        setRows(
-          groups.map((g) => ({
-            domain: g.domain,
-            mailboxes: g.mailboxes,
-            providers: g.providers,
-            providerCounts: g.providerCounts,
-            status: "pending" as const,
-          }))
-        );
-        setProgress({ done: 0, total: groups.length });
-
-        // 3) Per-domain stats, throttled under the rate limit.
         await mapPool(
-          groups,
-          async (group) => {
-            updateRow(setRows, group.domain, { status: "loading" });
+          targets,
+          async (row) => {
+            updateRow(setRows, row.domain, { status: "loading" });
             try {
               const res = await fetchEmailStats(
-                { ...statsBase, domain: group.domain },
+                { ...statsBase, domain: row.domain },
                 signal
               );
-              updateRow(setRows, group.domain, {
+              updateRow(setRows, row.domain, {
                 status: "done",
                 header: res.header,
                 chart: res.chart,
               });
             } catch (err) {
               if (isAbort(err)) throw err;
-              updateRow(setRows, group.domain, {
+              updateRow(setRows, row.domain, {
                 status: "error",
                 error: errMessage(err),
               });
@@ -248,13 +222,121 @@ export function DomainPerformanceTool() {
         if (!controller.signal.aborted) setBusy(false);
       }
     },
+    []
+  );
+
+  // --- Phase 1: the workspace's sending domains ----------------------------
+  // One accounts call. It gives the domain list and the per-ESP counts behind
+  // the type chips, and deliberately stops there — no stats are pulled until a
+  // type is chosen. Returns the rows so a caller can chain straight into
+  // loadStats without waiting for a re-render.
+  const loadDomains = useCallback(
+    async (
+      workspaceId: string,
+      opts: { wsList?: Workspace[]; keepProvider?: string | null } = {}
+    ): Promise<DomainRow[] | null> => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const { signal } = controller;
+
+      setDomainsLoading(true);
+      setBusy(false);
+      setError(null);
+      setSelectedDomain(null);
+      setRows([]);
+      setProgress({ done: 0, total: 0 });
+      setSenderProvider(opts.keepProvider ?? null);
+      statsKeyRef.current = null;
+
+      const list = opts.wsList ?? workspaces;
+      setRanMeta({
+        workspaceName:
+          list.find((w) => w._id === workspaceId)?.name ?? "workspace",
+      });
+
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(LAST_WS_KEY, workspaceId);
+      }
+
+      try {
+        const accountsRes = await fetchAccounts({ workspace_id: workspaceId }, signal);
+        const next: DomainRow[] = groupByDomain(accountsRes.accounts ?? []).map(
+          (g) => ({
+            domain: g.domain,
+            mailboxes: g.mailboxes,
+            providers: g.providers,
+            providerCounts: g.providerCounts,
+            status: "pending" as const,
+          })
+        );
+        setRows(next);
+        rowsRef.current = next;
+        return next;
+      } catch (err) {
+        if (!isAbort(err)) setError(errMessage(err));
+        return null;
+      } finally {
+        if (!controller.signal.aborted) setDomainsLoading(false);
+      }
+    },
     [workspaces]
   );
+
+  // --- Load workspaces when a key becomes available ------------------------
+  const loadWorkspaces = useCallback(async () => {
+    setWorkspacesLoading(true);
+    setError(null);
+    try {
+      const res = await fetchWorkspaces();
+      const list = res.workspaces ?? [];
+      setWorkspaces(list);
+      if (list.length) {
+        const stored =
+          typeof window !== "undefined"
+            ? window.localStorage.getItem(LAST_WS_KEY)
+            : null;
+        const initial = list.find((w) => w._id === stored)?._id ?? list[0]._id;
+        setWorkspaceId(initial);
+        void loadDomains(initial, { wsList: list });
+      } else {
+        setWorkspaceId(null);
+      }
+    } catch (err) {
+      setError(errMessage(err));
+      setWorkspaces([]);
+    } finally {
+      setWorkspacesLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadDomains]);
+
+  useEffect(() => {
+    if (ready && hasKey) {
+      void loadWorkspaces();
+    } else if (ready && !hasKey) {
+      setWorkspaces([]);
+      setWorkspaceId(null);
+      setRows([]);
+      setSenderProvider(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, hasKey]);
 
   // --- Handlers ------------------------------------------------------------
   function handleWorkspaceChange(id: string) {
     setWorkspaceId(id);
-    void run({ workspaceId: id, start, end });
+    // Just the domain list. The type picker resets, so nothing is fetched until
+    // the user says which inboxes they want.
+    void loadDomains(id);
+  }
+
+  // Picking a sending-inbox type is what starts the stats fetch.
+  function handleSenderProviderChange(esp: string) {
+    if (esp === senderProvider) return;
+    setSenderProvider(esp);
+    setBurnedOnly(false);
+    if (workspaceId) void loadStats(esp, { workspaceId, start, end });
   }
 
   function handlePreset(key: string) {
@@ -264,13 +346,24 @@ export function DomainPerformanceTool() {
     setStart(range.start);
     setEnd(range.end);
     setActivePreset(key);
-    if (workspaceId) {
-      void run({ workspaceId, start: range.start, end: range.end });
+    // A new range invalidates the cached stats, but only reload if a type is
+    // already selected — otherwise we'd be back to loading before being asked.
+    if (workspaceId && senderProvider) {
+      void loadStats(senderProvider, {
+        workspaceId,
+        start: range.start,
+        end: range.end,
+      });
     }
   }
 
-  function handleRefresh() {
-    if (workspaceId) void run({ workspaceId, start, end });
+  async function handleRefresh() {
+    if (!workspaceId) return;
+    const esp = senderProvider;
+    const next = await loadDomains(workspaceId, { keepProvider: esp });
+    if (esp && next) {
+      void loadStats(esp, { workspaceId, start, end }, { rows: next, force: true });
+    }
   }
 
   function handleSort(key: SortKey) {
@@ -297,7 +390,7 @@ export function DomainPerformanceTool() {
   // regardless, since a domain that sent nothing has no performance to compare.
   const minSendsNum = Math.max(1, Math.floor(Number(minSends)) || 0);
   const activeRows = rows.filter((r) => {
-    if (senderProvider && !r.providers.includes(senderProvider)) return false;
+    if (!senderProvider || !matchesEsp(r.providers, senderProvider)) return false;
     // Rows still loading have no header yet and are kept, so the table shows
     // them working rather than popping in and out as each one lands.
     if (r.status === "done" && r.header && r.header.total_sent_count < minSendsNum) {
@@ -312,7 +405,8 @@ export function DomainPerformanceTool() {
 
   const hiddenInactive = rows.filter(
     (r) =>
-      (!senderProvider || r.providers.includes(senderProvider)) &&
+      senderProvider !== null &&
+      matchesEsp(r.providers, senderProvider) &&
       r.status === "done" &&
       r.header &&
       r.header.total_sent_count < minSendsNum
@@ -322,10 +416,18 @@ export function DomainPerformanceTool() {
   const chartData = selectedRow?.chart ?? aggregateChart(activeRows);
   const chartTitle = selectedRow
     ? `${selectedDomain} · ${start} → ${end}`
-    : ranMeta
-      ? `${senderProvider ? providerLabel(senderProvider) + " inboxes" : "All domains"} · ${start} → ${end}`
+    : ranMeta && senderProvider
+      ? `${
+          senderProvider === ALL_ESP
+            ? "All domains"
+            : providerLabel(senderProvider) + " inboxes"
+        } · ${start} → ${end}`
       : "";
-  const hasResults = rows.length > 0;
+  // Domains are known, but nothing is loaded until a sending-inbox type is
+  // chosen — that choice is the gate on every request below.
+  const hasDomains = rows.length > 0;
+  const awaitingType = hasDomains && senderProvider === null;
+  const hasResults = hasDomains && senderProvider !== null;
 
   // Aggregate summary from the filtered, loaded domains so the cards, chart,
   // table and burned% all reflect the same set.
@@ -387,10 +489,12 @@ export function DomainPerformanceTool() {
           setActivePreset(null);
         }}
         senderProvider={senderProvider}
-        onSenderProviderChange={setSenderProvider}
+        onSenderProviderChange={handleSenderProviderChange}
         senderCounts={senderCounts}
+        domainCount={rows.length}
+        espDisabled={domainsLoading || !hasDomains}
         onRefresh={handleRefresh}
-        busy={busy}
+        busy={busy || domainsLoading}
       />
 
       {error && (
@@ -404,7 +508,36 @@ export function DomainPerformanceTool() {
         <ProgressBar done={progress.done} total={progress.total} />
       )}
 
-      {!hasResults && !busy && !error && (
+      {domainsLoading && (
+        <div className="pv-card flex items-center gap-2.5 px-4 py-3 text-sm text-muted-foreground">
+          <Spinner size={14} />
+          Finding sending domains…
+        </div>
+      )}
+
+      {/* The gate: domains are known, nothing has been fetched for them yet. */}
+      {awaitingType && !busy && (
+        <EmptyState icon={<MailIcon />} title="Which inboxes do you want?">
+          <p>
+            Found {formatNumber(rows.length)} sending domain
+            {rows.length === 1 ? "" : "s"} in{" "}
+            <span className="text-foreground">{ranMeta?.workspaceName}</span>.
+            Pick a sending-inbox type to pull its stats — only that type&apos;s
+            domains are loaded, so it&apos;s quicker than fetching all of them.
+          </p>
+          <div className="mt-5 flex justify-center">
+            <EspChips
+              value={senderProvider}
+              onChange={handleSenderProviderChange}
+              counts={senderCounts}
+              total={rows.length}
+              size="lg"
+            />
+          </div>
+        </EmptyState>
+      )}
+
+      {!hasDomains && !domainsLoading && !busy && !error && (
         <EmptyState icon={<GaugeIcon />} title="No data yet">
           Pick a workspace and date range, then hit Refresh to load domain
           performance.
@@ -416,7 +549,7 @@ export function DomainPerformanceTool() {
           {/* Filter context */}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              {senderProvider ? (
+              {senderProvider && senderProvider !== ALL_ESP ? (
                 <span>
                   Showing {formatNumber(activeRows.length)} domain
                   {activeRows.length === 1 ? "" : "s"} sending through{" "}
@@ -658,6 +791,12 @@ export function DomainPerformanceTool() {
                     {hiddenInactive === 1 ? "is" : "are"} hidden. Lower the
                     minimum sends to see {hiddenInactive === 1 ? "it" : "them"}.
                   </>
+                ) : senderProvider && senderProvider !== ALL_ESP ? (
+                  <>
+                    No sending domains in this workspace use{" "}
+                    {providerLabel(senderProvider)} inboxes. Pick another type
+                    above.
+                  </>
                 ) : (
                   <>
                     None of this workspace&apos;s mailboxes have a parseable
@@ -696,6 +835,20 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
       </div>
     </div>
   );
+}
+
+// Drops a row's cached stats, putting it back to "pending" so the next run
+// refetches it. Used when the workspace or date range changes under rows that
+// were loaded for the previous one.
+function resetRow(row: DomainRow): DomainRow {
+  if (row.status === "pending") return row;
+  return {
+    ...row,
+    status: "pending",
+    header: undefined,
+    chart: undefined,
+    error: undefined,
+  };
 }
 
 function updateRow(

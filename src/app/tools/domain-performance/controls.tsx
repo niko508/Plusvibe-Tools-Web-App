@@ -4,7 +4,7 @@ import type { Workspace } from "@/lib/plusvibe-types";
 import { DATE_PRESETS } from "@/lib/format";
 import { ChevronDownIcon, RefreshIcon } from "@/components/icons";
 import { Spinner } from "@/components/ui";
-import { ESP_OPTIONS } from "./providers";
+import { ALL_ESP, ESP_OPTIONS } from "./providers";
 
 interface Props {
   workspaces: Workspace[];
@@ -19,14 +19,68 @@ interface Props {
   onStartChange: (v: string) => void;
   onEndChange: (v: string) => void;
 
-  // Sending-inbox ESP filter. Applied client-side to the already-loaded
-  // domains, so switching it is instant — no refetch.
+  // Sending-inbox ESP selector. Nothing is selected (null) until the user picks
+  // one, and picking one is what triggers the per-domain stats fetch — so the
+  // tool never loads every domain in the workspace up front.
   senderProvider: string | null;
-  onSenderProviderChange: (v: string | null) => void;
+  onSenderProviderChange: (v: string) => void;
   senderCounts: Record<string, number>; // domains per ESP, for the chip counts
+  domainCount: number; // total sending domains found, for the "All" chip
+  espDisabled: boolean; // no domain list yet, so there is nothing to pick from
 
   onRefresh: () => void;
   busy: boolean;
+}
+
+interface EspChipsProps {
+  value: string | null;
+  onChange: (v: string) => void;
+  counts: Record<string, number>;
+  total: number;
+  disabled?: boolean;
+  size?: "sm" | "lg";
+}
+
+/**
+ * The sending-inbox type picker. Rendered both in the controls bar and, while
+ * no type is selected, as the primary call to action below it — same component
+ * either way so the two can't drift apart.
+ */
+export function EspChips({
+  value,
+  onChange,
+  counts,
+  total,
+  disabled = false,
+  size = "sm",
+}: EspChipsProps) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {ESP_OPTIONS.map((o) => {
+        const count = o.key === ALL_ESP ? total : counts[o.key] ?? 0;
+        const empty = count === 0;
+        return (
+          <button
+            key={o.key}
+            type="button"
+            disabled={disabled || empty}
+            onClick={() => onChange(o.key)}
+            className={`pv-chip ${size === "lg" ? "px-4 py-2 text-sm" : ""} ${
+              value === o.key ? "pv-chip-active" : "hover:text-foreground"
+            } ${disabled || empty ? "cursor-not-allowed opacity-40" : ""}`}
+            title={
+              empty && !disabled
+                ? "No domains sending through this provider"
+                : undefined
+            }
+          >
+            {o.label}
+            <span className="ml-1.5 tabular-nums opacity-60">{count}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 export function Controls(props: Props) {
@@ -119,33 +173,13 @@ export function Controls(props: Props) {
 
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">Sending inboxes:</span>
-          <div className="flex flex-wrap gap-2">
-            {ESP_OPTIONS.map((o) => {
-              const count = o.key === null ? null : props.senderCounts[o.key] ?? 0;
-              return (
-                <button
-                  key={o.label}
-                  type="button"
-                  onClick={() => props.onSenderProviderChange(o.key)}
-                  className={`pv-chip ${
-                    props.senderProvider === o.key
-                      ? "pv-chip-active"
-                      : "hover:text-foreground"
-                  } ${count === 0 ? "opacity-40" : ""}`}
-                  title={
-                    count === 0
-                      ? "No domains sending through this provider"
-                      : undefined
-                  }
-                >
-                  {o.key === null ? "All" : o.label}
-                  {count !== null && (
-                    <span className="ml-1.5 tabular-nums opacity-60">{count}</span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
+          <EspChips
+            value={props.senderProvider}
+            onChange={props.onSenderProviderChange}
+            counts={props.senderCounts}
+            total={props.domainCount}
+            disabled={props.espDisabled}
+          />
         </div>
       </div>
     </div>
