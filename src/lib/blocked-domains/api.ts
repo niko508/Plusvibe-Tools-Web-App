@@ -4,7 +4,12 @@ import "server-only";
 // them: list workspaces, page an entire workspace's inboxes, stop an inbox
 // sending, and delete it.
 
-import { plusvibeGet, plusvibePut, plusvibePost } from "@/lib/plusvibe-server";
+import {
+  plusvibeGet,
+  plusvibePut,
+  plusvibePatch,
+  plusvibePost,
+} from "@/lib/plusvibe-server";
 import { acquireSlot } from "@/lib/jobs/rate-limit";
 import type { Workspace } from "@/lib/plusvibe-types";
 
@@ -75,26 +80,60 @@ export async function listInboxes(
  * This is the reversible half of handling a blocked domain, so it runs before
  * anyone is asked to confirm anything.
  */
+export interface QuarantineResult {
+  sendingStopped: boolean;
+  warmupStopped: boolean;
+  errors: string[];
+}
+
 export async function quarantineInboxes(
   apiKey: string,
   workspaceId: string,
   ids: string[]
-): Promise<void> {
-  if (ids.length === 0) return;
+): Promise<QuarantineResult> {
+  const result: QuarantineResult = {
+    sendingStopped: false,
+    warmupStopped: false,
+    errors: [],
+  };
+  if (ids.length === 0) return result;
 
-  await acquireSlot();
-  await plusvibePut({
-    apiKey,
-    path: "/account/bulk-update",
-    body: { workspace_id: workspaceId, ids, daily_limit: 0 },
-  });
+  // The two halves are attempted independently. If warmup can't be switched
+  // off, stopping campaign sending is still worth having — failing both
+  // because one endpoint misbehaved would leave the domain sending.
+  try {
+    await acquireSlot();
+    // PUT — /account/bulk-update
+    await plusvibePut({
+      apiKey,
+      path: "/account/bulk-update",
+      body: { workspace_id: workspaceId, ids, daily_limit: 0 },
+    });
+    result.sendingStopped = true;
+  } catch (err) {
+    result.errors.push(
+      `campaign sending: ${err instanceof Error ? err.message : "failed"}`
+    );
+  }
 
-  await acquireSlot();
-  await plusvibePut({
-    apiKey,
-    path: "/account/bulk-update-warmup",
-    body: { workspace_id: workspaceId, ids, warmup_status: "INACTIVE" },
-  });
+  try {
+    await acquireSlot();
+    // PATCH, not PUT — the warmup endpoint is the one method that differs, and
+    // Plusvibe answers an unrouted method with a 404 ("Page not found") rather
+    // than a 405, which makes the mistake look like a bad path.
+    await plusvibePatch({
+      apiKey,
+      path: "/account/bulk-update-warmup",
+      body: { workspace_id: workspaceId, ids, warmup_status: "INACTIVE" },
+    });
+    result.warmupStopped = true;
+  } catch (err) {
+    result.errors.push(
+      `warmup: ${err instanceof Error ? err.message : "failed"}`
+    );
+  }
+
+  return result;
 }
 
 /** Deletes one inbox. Plusvibe deletes by address, not id. */

@@ -105,6 +105,10 @@ export interface BlockedDomainJob {
   inboxesFound: number;
   /** Inboxes whose sending and warmup were stopped. */
   inboxesQuarantined: number;
+  /** Campaign daily limit set to 0. */
+  sendingStopped?: boolean;
+  /** Warmup switched off. */
+  warmupStopped?: boolean;
   /** Inboxes actually deleted. */
   inboxesDeleted: number;
 

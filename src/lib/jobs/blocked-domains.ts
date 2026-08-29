@@ -310,13 +310,24 @@ async function runLocateAndQuarantine(id: string) {
     rec.phaseStates.quarantining = "running";
     await persist(id);
     try {
-      await quarantineInboxes(
+      const q = await quarantineInboxes(
         apiKey,
         workspaceId!,
         inboxes.map((i) => i.id)
       );
-      rec.inboxesQuarantined = inboxes.length;
-      rec.phaseStates.quarantining = "done";
+      rec.sendingStopped = q.sendingStopped;
+      rec.warmupStopped = q.warmupStopped;
+      // Only count inboxes as quarantined when BOTH halves landed. Claiming
+      // they're stopped while warmup is still running is worse than saying
+      // nothing — it's the sentence someone reads before deciding not to go
+      // and check Plusvibe.
+      rec.inboxesQuarantined =
+        q.sendingStopped && q.warmupStopped ? inboxes.length : 0;
+      for (const e of q.errors) {
+        pushError(rec, `Could not stop ${e}`);
+      }
+      rec.phaseStates.quarantining =
+        q.sendingStopped && q.warmupStopped ? "done" : "error";
     } catch (err) {
       rec.phaseStates.quarantining = "error";
       pushError(rec, `Could not stop sending/warmup: ${msg(err)}`);

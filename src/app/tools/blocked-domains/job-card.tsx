@@ -50,6 +50,9 @@ export function JobCard({
   // row instead of throwing and blanking the page.
   const errors = job.errors ?? [];
   const sheet = job.sheet;
+  // Both halves of the quarantine have to have landed before the card is
+  // allowed to say the domain is stopped.
+  const fullyStopped = job.sendingStopped === true && job.warmupStopped === true;
 
   function phaseDetail(phase: (typeof PHASE_ORDER)[number]): string {
     if (phase === "locating") {
@@ -62,9 +65,13 @@ export function JobCard({
       }`;
     }
     if (phase === "quarantining") {
-      return job.inboxesQuarantined > 0
-        ? `${formatNumber(job.inboxesQuarantined)} stopped`
-        : "";
+      if (job.phaseStates?.quarantining === "pending") return "";
+      if (fullyStopped) return `${formatNumber(job.inboxesFound)} stopped`;
+      const done = [
+        job.sendingStopped ? "sending" : null,
+        job.warmupStopped ? "warmup" : null,
+      ].filter(Boolean);
+      return done.length > 0 ? `only ${done.join(" + ")} stopped` : "";
     }
     if (phase === "deleting") {
       if (awaiting) return "waiting for you";
@@ -143,17 +150,46 @@ export function JobCard({
       </ol>
 
       {awaiting && (
-        <div className="mt-3 rounded-xl border border-warning/30 bg-warning/5 p-3 text-xs">
-          <p className="font-medium text-warning">
-            Sending and warmup are already stopped
+        <div
+          className={`mt-3 rounded-xl border p-3 text-xs ${
+            fullyStopped
+              ? "border-warning/30 bg-warning/5"
+              : "border-danger/40 bg-danger/5"
+          }`}
+        >
+          {/* Never claim more than actually happened: someone reads this line
+              and decides whether to go and check Plusvibe themselves. */}
+          <p
+            className={`font-medium ${
+              fullyStopped ? "text-warning" : "text-danger"
+            }`}
+          >
+            {fullyStopped
+              ? "Sending and warmup are already stopped"
+              : job.sendingStopped
+                ? "Sending is stopped — but warmup is NOT"
+                : job.warmupStopped
+                  ? "Warmup is stopped — but sending is NOT"
+                  : "These inboxes are still sending"}
           </p>
           <p className="mt-1 text-muted-foreground">
             {formatNumber(job.inboxesFound)} inbox
             {job.inboxesFound === 1 ? "" : "es"} on{" "}
             <span className="font-mono">{job.domain}</span> in{" "}
-            {job.workspaceName ?? "this workspace"} have their daily limit at 0
-            and warmup off, so nothing is going out. Deleting them cannot be
-            undone.
+            {job.workspaceName ?? "this workspace"}
+            {fullyStopped ? (
+              <>
+                {" "}
+                have their daily limit at 0 and warmup off, so nothing is going
+                out. Deleting them cannot be undone.
+              </>
+            ) : (
+              <>
+                {" "}
+                could not be fully stopped, so they may still be sending. Fix
+                that first, or delete them now — deleting cannot be undone.
+              </>
+            )}
           </p>
         </div>
       )}
