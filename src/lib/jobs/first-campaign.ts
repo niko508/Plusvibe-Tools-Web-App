@@ -410,15 +410,19 @@ async function runJob(id: string) {
       await acquireSlot();
       tagId = await findTagId(apiKey, workspaceId, SENDING_TAG_NAME);
     } catch (err) {
+      // The lookup itself breaking IS an error — something went wrong.
       pushError(rec, `Could not read this workspace's tags: ${msg(err)}`);
     }
     if (tagId) {
       rec.parent.tagId = tagId;
     } else {
       rec.parent.tagMissing = true;
-      pushError(
-        rec,
-        `No "${SENDING_TAG_NAME}" tag attached, so the campaign has no sending accounts. Add the tag (or pick accounts) before launching.`
+      // The tag simply not existing is NOT an error. A brand-new workspace has
+      // no tags at all until inboxes are added and tagged, which is exactly the
+      // workspace this tool is for — turning the whole run red for it would
+      // make an optional step look like a failed one.
+      rec.manualFollowUps.push(
+        `No "${SENDING_TAG_NAME}" tag in this workspace, so the campaign has no sending accounts — attach them before launching`
       );
     }
     await persist(id);

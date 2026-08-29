@@ -72,7 +72,9 @@ export function Blueprint() {
               </li>
               <li>
                 Sending accounts: the <strong>{SENDING_TAG_NAME}</strong> tag, so
-                the senders follow the tag rather than freezing today&apos;s list
+                the senders follow the tag rather than freezing today&apos;s
+                list. Optional — a workspace with no such tag still gets the
+                whole campaign, just with no accounts attached yet
               </li>
               <li>
                 Balanced 50/50 · Round Robin · plain text · risky emails on ·
