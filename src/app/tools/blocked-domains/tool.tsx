@@ -7,6 +7,7 @@ import {
   setBlockedDomainAutoDelete,
   confirmBlockedDomain,
   dismissBlockedDomain,
+  rearmBlockedDomain,
   deleteBlockedDomainJob,
   ApiClientError,
 } from "@/lib/api-client";
@@ -15,6 +16,7 @@ import { ConnectPrompt } from "@/components/connect-prompt";
 import { EmptyState, Spinner } from "@/components/ui";
 import { AlertIcon, CheckIcon, CopyIcon, FireIcon } from "@/components/icons";
 import { copyToClipboard } from "@/lib/clipboard";
+import { formatNumber } from "@/lib/format";
 import { JobCard } from "./job-card";
 
 /** Polled while anything is in flight; slower otherwise, since Clay drives it. */
@@ -106,6 +108,20 @@ export function BlockedDomainsTool() {
   const jobs = view?.jobs ?? [];
   const awaiting = jobs.filter((j) => j.status === "awaiting_confirmation");
   const rest = jobs.filter((j) => j.status !== "awaiting_confirmation");
+  // Every run is kept, so the log doubles as the record of which domains have
+  // been dealt with. These counts are what makes that scannable.
+  const stats = {
+    total: jobs.length,
+    waiting: awaiting.length,
+    deleted: jobs.filter((j) => j.inboxesDeleted > 0).length,
+    kept: jobs.filter((j) => j.status === "dismissed").length,
+    failed: jobs.filter(
+      (j) =>
+        (j.status === "error" || j.status === "interrupted") &&
+        j.inboxesDeleted === 0
+    ).length,
+    inboxes: jobs.reduce((n, j) => n + j.inboxesDeleted, 0),
+  };
   const readiness = view?.readiness;
   const notReady = readiness
     ? [
@@ -200,6 +216,24 @@ export function BlockedDomainsTool() {
         )}
       </div>
 
+      {stats.total > 0 && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+          <Stat label="Domains handled" value={stats.total} />
+          <Stat
+            label="Waiting for you"
+            value={stats.waiting}
+            tone={stats.waiting > 0 ? "warning" : undefined}
+          />
+          <Stat label="Inboxes deleted" value={stats.inboxes} />
+          <Stat label="Kept" value={stats.kept} />
+          <Stat
+            label="Failed"
+            value={stats.failed}
+            tone={stats.failed > 0 ? "danger" : undefined}
+          />
+        </div>
+      )}
+
       {error && (
         <div className="flex items-start gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
           <AlertIcon size={16} className="mt-0.5 shrink-0" />
@@ -219,6 +253,7 @@ export function BlockedDomainsTool() {
               busy={busyId === job.id}
               onConfirm={(id) => withBusy(id, () => confirmBlockedDomain(id))}
               onDismiss={(id) => withBusy(id, () => dismissBlockedDomain(id))}
+              onRearm={(id) => withBusy(id, () => rearmBlockedDomain(id))}
               onRemove={(id) => withBusy(id, () => deleteBlockedDomainJob(id))}
             />
           ))}
@@ -227,7 +262,15 @@ export function BlockedDomainsTool() {
 
       {rest.length > 0 ? (
         <div className="space-y-3">
-          <h2 className="text-sm font-semibold">Log</h2>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-sm font-semibold">
+              History ({formatNumber(rest.length)})
+            </h2>
+            <span className="text-xs text-muted-foreground">
+              Every run is kept. &quot;Allow re-run&quot; lets a domain trigger
+              again without losing its record.
+            </span>
+          </div>
           {rest.map((job) => (
             <JobCard
               key={job.id}
@@ -235,6 +278,7 @@ export function BlockedDomainsTool() {
               busy={busyId === job.id}
               onConfirm={(id) => withBusy(id, () => confirmBlockedDomain(id))}
               onDismiss={(id) => withBusy(id, () => dismissBlockedDomain(id))}
+              onRearm={(id) => withBusy(id, () => rearmBlockedDomain(id))}
               onRemove={(id) => withBusy(id, () => deleteBlockedDomainJob(id))}
             />
           ))}
@@ -255,4 +299,31 @@ function errMessage(err: unknown): string {
   if (err instanceof ApiClientError) return err.message;
   if (err instanceof Error) return err.message;
   return "Something went wrong.";
+}
+
+function Stat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone?: "warning" | "danger";
+}) {
+  return (
+    <div className="pv-card p-3">
+      <div className="truncate text-[11px] text-muted-foreground">{label}</div>
+      <div
+        className={`mt-0.5 text-lg font-semibold tabular-nums ${
+          tone === "danger"
+            ? "text-danger"
+            : tone === "warning"
+              ? "text-warning"
+              : ""
+        }`}
+      >
+        {formatNumber(value)}
+      </div>
+    </div>
+  );
 }

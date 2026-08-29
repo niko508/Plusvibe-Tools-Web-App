@@ -123,6 +123,14 @@ export interface BlockedDomainJob {
   autoDeleted?: boolean;
   /** Who/what released the deletion, once it happened. */
   confirmedAt?: number;
+  /**
+   * Set when someone deliberately allowed this domain to run again.
+   *
+   * The record stays in the log as history — it just stops being the thing
+   * that blocks a new run. Before this existed, re-arming a domain meant
+   * deleting its record, which threw away the very history worth keeping.
+   */
+  rearmedAt?: number;
 
   sheet?: SheetOutcome;
 

@@ -9,7 +9,12 @@ import type {
 import { PHASE_ORDER, PHASE_LABELS } from "@/lib/jobs/blocked-domains-types";
 import { formatNumber } from "@/lib/format";
 import { Spinner, RemoveJobButton } from "@/components/ui";
-import { CheckIcon, AlertIcon, TrashIcon } from "@/components/icons";
+import {
+  CheckIcon,
+  AlertIcon,
+  TrashIcon,
+  RefreshIcon,
+} from "@/components/icons";
 
 const STATUS_META: Record<
   BlockedDomainStatus,
@@ -31,12 +36,14 @@ export function JobCard({
   job,
   onConfirm,
   onDismiss,
+  onRearm,
   onRemove,
   busy,
 }: {
   job: BlockedDomainJob;
   onConfirm: (id: string) => void | Promise<void>;
   onDismiss: (id: string) => void | Promise<void>;
+  onRearm: (id: string) => void | Promise<void>;
   onRemove: (id: string) => void | Promise<void>;
   busy: boolean;
 }) {
@@ -105,6 +112,14 @@ export function JobCard({
           </span>
           {job.autoDeleted && (
             <span className="pv-chip shrink-0">auto-deleted</span>
+          )}
+          {job.rearmedAt && (
+            <span
+              className="pv-chip shrink-0"
+              title="This domain was allowed to run again; this record is kept as history"
+            >
+              re-armed
+            </span>
           )}
           {job.duplicateHits > 0 && (
             <span
@@ -229,7 +244,7 @@ export function JobCard({
       )}
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        {awaiting ? (
+        {awaiting && (
           <>
             <button
               type="button"
@@ -250,18 +265,29 @@ export function JobCard({
               Keep them
             </button>
           </>
-        ) : (
-          !active && (
-            <>
-              <RemoveJobButton onRemove={() => onRemove(job.id)} />
-              {/* Removing the record is also what re-arms the domain: a domain
-                  is handled once ever, so the log entry IS the guard. */}
-              <span className="text-xs text-muted-foreground">
-                Removing this lets {job.domain} trigger again
-              </span>
-            </>
-          )
         )}
+
+        {/* Re-arming keeps the run in the history and only lifts the
+            once-per-domain guard. Deleting the record is the separate,
+            destructive option. */}
+        {!active && !awaiting && !job.rearmedAt && (
+          <button
+            type="button"
+            className="pv-btn-ghost disabled:opacity-50"
+            disabled={busy}
+            onClick={() => onRearm(job.id)}
+            title={`Let ${job.domain} trigger again. This run stays in the history.`}
+          >
+            <RefreshIcon size={16} />
+            Allow re-run
+          </button>
+        )}
+
+        {/* Available on every card, including one waiting for confirmation —
+            a job that can't be confirmed or dismissed would otherwise be
+            stuck there forever. */}
+        {!active && <RemoveJobButton onRemove={() => onRemove(job.id)} />}
+
         <button
           type="button"
           className="pv-btn-ghost"

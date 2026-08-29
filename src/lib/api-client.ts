@@ -756,6 +756,14 @@ export function dismissBlockedDomain(jobId: string, signal?: AbortSignal) {
   });
 }
 
+export function rearmBlockedDomain(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/blocked-domains/rearm", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
 export function deleteBlockedDomainJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/blocked-domains/delete", {
     method: "POST",

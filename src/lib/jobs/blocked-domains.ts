@@ -200,8 +200,10 @@ export async function intake(args: {
   }
 
   const now = Date.now();
+  // A re-armed record stays in the log but no longer blocks: history and the
+  // once-per-domain guard are separate things.
   const existing = [...records.values()]
-    .filter((r) => r.domain === domain)
+    .filter((r) => r.domain === domain && !r.rearmedAt)
     .sort((a, b) => b.createdAt - a.createdAt)[0];
 
   if (existing) {
@@ -684,7 +686,28 @@ export async function dismissJob(id: string): Promise<boolean> {
   return true;
 }
 
-/** Removes a finished record from the log. */
+/**
+ * Lets a domain be handled again, without losing what happened last time.
+ *
+ * Only for records that have finished. Re-arming something still in flight or
+ * awaiting confirmation would let a second run start alongside the first.
+ */
+export async function rearmJob(id: string): Promise<boolean> {
+  await loadOnce();
+  const rec = records.get(id);
+  if (!rec) return false;
+  const inFlight =
+    rec.status === "working" ||
+    rec.status === "deleting" ||
+    rec.status === "awaiting_confirmation";
+  if (inFlight || rec.rearmedAt) return false;
+  rec.rearmedAt = Date.now();
+  rec.updatedAt = rec.rearmedAt;
+  await persist(id);
+  return true;
+}
+
+/** Removes a record from the log entirely. */
 export async function deleteJob(id: string): Promise<boolean> {
   await loadOnce();
   const rec = records.get(id);
