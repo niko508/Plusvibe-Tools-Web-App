@@ -5,7 +5,11 @@ import "server-only";
 // key is resolved per request: a caller-supplied key (forwarded from the UI)
 // takes precedence, falling back to the PLUSVIBE_API_KEY env var when set.
 
-const BASE_URL = "https://api.plusvibe.ai/api/v1";
+// Overridable so the unattended automations can be exercised end to end
+// against a stand-in API. Unset in production, which is the real endpoint.
+const BASE_URL =
+  process.env.PLUSVIBE_BASE_URL?.trim().replace(/\/+$/, "") ||
+  "https://api.plusvibe.ai/api/v1";
 
 // Header the UI uses to forward the user's key to our proxy routes.
 export const CLIENT_KEY_HEADER = "x-pv-key";

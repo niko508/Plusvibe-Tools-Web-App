@@ -242,3 +242,39 @@ export function columnLetter(index: number): string {
   }
   return out;
 }
+
+/**
+ * Appends a row to the end of a tab.
+ *
+ * Uses Sheets' own append, which finds the first empty row itself — reading the
+ * grid and writing to `length + 1` would race any other writer and silently
+ * overwrite whatever landed in between. `INSERT_ROWS` keeps it from consuming
+ * a row that already has data below the table.
+ */
+export async function appendRow(
+  spreadsheetId: string,
+  tab: string,
+  values: string[]
+): Promise<void> {
+  const range = encodeURIComponent(quoteTab(tab));
+  await sheetsFetch(
+    `/${spreadsheetId}/values/${range}:append` +
+      `?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+    { method: "POST", body: { values: [values] } }
+  );
+}
+
+/**
+ * The spreadsheet the unattended automations write to.
+ *
+ * The interactive tools take the sheet URL from the browser, but a webhook has
+ * no browser — so the id comes from the environment. Accepts a full URL as well
+ * as a bare id, since it's easy to paste the wrong one into Railway.
+ */
+export function envSpreadsheetId(): string | null {
+  const raw = process.env.SPREADSHEET_ID?.trim();
+  if (!raw) return null;
+  const fromUrl = /\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/.exec(raw);
+  const id = fromUrl ? fromUrl[1] : raw;
+  return /^[a-zA-Z0-9-_]{20,}$/.test(id) ? id : null;
+}

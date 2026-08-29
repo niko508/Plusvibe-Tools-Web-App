@@ -10,7 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "check": "node scripts/check-opt-out-spintax.mjs && node scripts/check-campaign-types.mjs && node scripts/check-follow-ups.mjs && node scripts/check-webhooks.mjs && node scripts/check-tenant-source.mjs && node scripts/check-first-campaign.mjs"
+    "check": "node scripts/check-opt-out-spintax.mjs && node scripts/check-campaign-types.mjs && node scripts/check-follow-ups.mjs && node scripts/check-webhooks.mjs && node scripts/check-tenant-source.mjs && node scripts/check-first-campaign.mjs && node scripts/check-blocked-domains.mjs"
   },
   "dependencies": {
     "next": "14.2.35",

@@ -32,6 +32,7 @@ import type {
   FirstCampaignJob,
   FirstCampaignStartPayload,
 } from "@/lib/jobs/first-campaign-types";
+import type { BlockedDomainsView } from "@/lib/jobs/blocked-domains-types";
 
 export type { WarmupSettings } from "@/lib/jobs/remove-50-types";
 
@@ -715,6 +716,48 @@ export function abortFirstCampaign(jobId: string, signal?: AbortSignal) {
 
 export function deleteFirstCampaignJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/first-campaign/delete", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
+// --- Blocked Domains ---------------------------------------------------------
+
+export function fetchBlockedDomains(signal?: AbortSignal) {
+  return request<BlockedDomainsView>("/api/jobs/blocked-domains/list", {
+    signal,
+  });
+}
+
+export function setBlockedDomainAutoDelete(
+  autoDelete: boolean,
+  signal?: AbortSignal
+) {
+  return request<{ settings: { autoDelete: boolean } }>(
+    "/api/jobs/blocked-domains/settings",
+    { method: "PUT", body: { autoDelete }, signal }
+  );
+}
+
+export function confirmBlockedDomain(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/blocked-domains/confirm", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
+export function dismissBlockedDomain(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/blocked-domains/dismiss", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
+export function deleteBlockedDomainJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/blocked-domains/delete", {
     method: "POST",
     body: { jobId },
     signal,

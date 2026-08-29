@@ -106,6 +106,16 @@ export interface Tool {
 
 export const TOOLS: Tool[] = [
   {
+    slug: "blocked-domains",
+    name: "Blocked Domains",
+    tagline: "Kill a blocked sending domain the moment Clay spots it",
+    description:
+      "Clay calls this app when a bounce reason shows one of your sending domains is blocked. Its inboxes stop sending and warming immediately, then wait for you to confirm the deletion — after which the domain goes Not Active in the Domains sheet and its tenant is queued for cancellation.",
+    status: "active",
+    color: "orange",
+    Icon: FireIcon,
+  },
+  {
     slug: "first-campaign",
     name: "New Workspace 1st Campaign",
     tagline: "Build a new client's first campaign end to end",
