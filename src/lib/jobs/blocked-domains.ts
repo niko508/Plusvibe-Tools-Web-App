@@ -337,19 +337,27 @@ async function runLocateAndQuarantine(id: string) {
     rec.updatedAt = Date.now();
     await persist(id);
 
+    // --- Phase 3: the sheet ----------------------------------------------
+    // Written immediately, not on confirmation. The domain is blocked and its
+    // inboxes are already stopped, so "Not Active" is simply true — and the
+    // tenant needs cancelling either way. Only the irreversible deletion is
+    // worth making someone press a button for.
+    await runSheet(rec);
+    rec.updatedAt = Date.now();
+    await persist(id);
+
     // --- Hand off to deletion, or wait ------------------------------------
     const { autoDelete } = await loadSettings();
     if (autoDelete) {
       rec.autoDeleted = true;
       rec.confirmedAt = Date.now();
       await persist(id);
-      await runSheetThenDelete(id);
+      await runDelete(id);
     } else {
       rec.status = "awaiting_confirmation";
-      // The sheet is the next thing that runs, so that's where the "waiting"
-      // marker belongs.
-      rec.phase = "sheet";
-      rec.phaseStates.sheet = "waiting";
+      // Only the deletion waits now — the sheet is already written.
+      rec.phase = "deleting";
+      rec.phaseStates.deleting = "waiting";
       rec.updatedAt = Date.now();
       await persist(id);
     }
@@ -469,18 +477,14 @@ async function locate(
 }
 
 /**
- * After confirmation: write the sheet, then delete the inboxes.
+ * Deletes the inboxes, once someone has said so (or auto-delete is on).
  *
- * Sheet first because both of its writes record a decision that has already
- * been taken, while the deletion is the irreversible act carrying it out. If
- * the deletion dies halfway, the domain still reads Not Active and its tenant
- * is already queued for cancellation — the state someone would go looking for.
- *
- * A sheet failure never blocks the deletion: the deletion was confirmed, and a
- * missing sheet edit is a note to act on rather than a reason to leave a
- * blocked domain's inboxes in place.
+ * The sheet has normally already been written by the time this runs. The guard
+ * below covers a record that was quarantined by an older build, where the
+ * sheet used to wait for confirmation too — without it, confirming such a job
+ * would delete the inboxes and never touch the sheet.
  */
-async function runSheetThenDelete(id: string) {
+async function runDelete(id: string) {
   const rec = records.get(id);
   if (!rec) return;
   const apiKey = serverApiKey();
@@ -493,9 +497,14 @@ async function runSheetThenDelete(id: string) {
   }
 
   rec.status = "deleting";
-  await runSheet(rec);
-  rec.updatedAt = Date.now();
-  await persist(id);
+  if (
+    rec.phaseStates.sheet === "pending" ||
+    rec.phaseStates.sheet === "waiting"
+  ) {
+    await runSheet(rec);
+    rec.updatedAt = Date.now();
+    await persist(id);
+  }
 
   rec.phase = "deleting";
   rec.phaseStates.deleting = "running";
@@ -611,6 +620,10 @@ async function runSheet(rec: BlockedDomainJob) {
     }
 
     // --- the tenant ------------------------------------------------------
+    // Deliberately independent of the status above. A domain that was already
+    // "Not Active" still needs its tenant cancelled — the two columns record
+    // different things, and a domain marked Not Active by hand is exactly the
+    // case where the tenant is most likely to have been forgotten.
     if (!hit.row.tenantEmail) {
       pushError(
         rec,
@@ -662,7 +675,7 @@ export async function confirmJob(id: string): Promise<boolean> {
   if (!rec || rec.status !== "awaiting_confirmation") return false;
   rec.confirmedAt = Date.now();
   await persist(id);
-  void runSheetThenDelete(id);
+  void runDelete(id);
   return true;
 }
 
@@ -676,9 +689,8 @@ export async function dismissJob(id: string): Promise<boolean> {
   if (!rec || rec.status !== "awaiting_confirmation") return false;
   rec.status = "dismissed";
   rec.phase = "finished";
-  // Neither the sheet nor the deletion runs: nothing was decided, so nothing
-  // is recorded. The quarantine stays in place.
-  rec.phaseStates.sheet = "skipped";
+  // The sheet has already been written — the domain is blocked and stopped
+  // regardless of this choice. Only the deletion is declined.
   rec.phaseStates.deleting = "skipped";
   rec.updatedAt = Date.now();
   foundInboxes.delete(id);

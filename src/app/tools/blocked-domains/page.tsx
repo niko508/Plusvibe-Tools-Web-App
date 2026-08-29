@@ -19,10 +19,11 @@ export default function BlockedDomainsPage() {
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground sm:text-base">
             When Clay spots a blocked sending domain in a bounce reason, it
-            calls this app: the domain&apos;s inboxes stop sending and warming
-            immediately, then wait here for you to confirm the deletion. On
-            confirmation it deletes them, sets the domain to Not Active in the
-            Domains sheet, and queues its tenant for cancellation.
+            calls this app. Without waiting for anyone: the domain&apos;s
+            inboxes stop sending and warming, the domain goes Not Active in the
+            Domains sheet, and its tenant is queued on Tenants to Cancel. Only
+            deleting the inboxes waits for you here, because only that
+            can&apos;t be undone.
           </p>
         </div>
         <BlockedDomainsTool />

@@ -178,7 +178,7 @@ export function BlockedDomainsTool() {
             <p className="mt-1 text-xs text-muted-foreground">
               {view?.settings.autoDelete
                 ? "Blocked domains are deleted as they arrive, with no confirmation."
-                : "Sending and warmup stop straight away; deletion waits for you here."}
+                : "Sending, warmup and both sheet updates happen straight away; only the deletion waits for you here."}
             </p>
             <button
               type="button"

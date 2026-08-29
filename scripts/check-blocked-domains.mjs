@@ -145,6 +145,32 @@ ok("a blank tenant is never 'already queued'",
   !sp.tenantAlreadyQueued(CANCEL_GRID, 0, "   "));
 ok("an empty tab queues nothing", !sp.tenantAlreadyQueued([CANCEL_HEADER], 0, "a@b.com"));
 
+// --- Already Not Active -----------------------------------------------------
+// The status and the tenant are separate records. A domain someone already
+// marked Not Active by hand is exactly the case where its tenant is most
+// likely to have been forgotten, so the lookup must not skip it.
+console.log("--- a domain already marked Not Active");
+const ALREADY = [
+  DOMAINS[0],
+  ["deadco.pro", "admin@dead.onmicrosoft.com", "Not Active", "", "", "Dynadot",
+   "Azure", "", "Some Client"],
+];
+const already = sp.findDomainRow(ALREADY, "deadco.pro", cols);
+ok("an already-Not-Active domain is still found", already.row !== null);
+eq("its tenant is still available", already.row.tenantEmail,
+  "admin@dead.onmicrosoft.com");
+eq("the status it already had is reported", already.row.currentStatus, "Not Active");
+// Its source is blank in Domains, which must write a blank cell rather than
+// being skipped — the tenant still has to be queued.
+eq("a blank source still produces a row",
+  sp.buildCancelRow(CANCEL_HEADER, {
+    tenant: already.row.tenantEmail,
+    source: already.row.tenantSource,
+  }),
+  ["admin@dead.onmicrosoft.com", "", "", ""]);
+ok("and it is not already queued",
+  !sp.tenantAlreadyQueued(CANCEL_GRID, 0, already.row.tenantEmail));
+
 // --- Client to workspace ----------------------------------------------------
 console.log("--- client to workspace");
 const WS = [

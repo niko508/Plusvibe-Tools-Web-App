@@ -5,16 +5,15 @@
 //
 //   1 locating     find the domain's workspace and its inboxes
 //   2 quarantining stop the bleeding — campaign daily limit to 0, warmup off
-//   3 (waiting)    someone confirms in the UI, unless auto-delete is on
-//   4 sheet        📋 Domains status → Not Active, then the tenant onto
+//   3 sheet        📋 Domains status → Not Active, then the tenant onto
 //                  🚯 Tenants to Cancel
+//   4 (waiting)    someone confirms in the UI, unless auto-delete is on
 //   5 deleting     delete the inboxes
 //
-// The sheet is written BEFORE the deletion on purpose. Both writes record a
-// decision that has already been made; the deletion is the irreversible act
-// that carries it out. If the run dies partway through deleting, the sheet
-// still says what was decided, and the domain and its tenant are already
-// where someone would look for them.
+// Steps 1-3 all run unattended. The domain is blocked and its inboxes are
+// already stopped, so "Not Active" is just true, and the tenant needs
+// cancelling either way. Only the deletion is irreversible, so only the
+// deletion waits for a person — and declining it does not un-write the sheet.
 //
 // Quarantine happens without confirmation on purpose: a blocked domain is
 // actively burning reputation, and stopping it is reversible. Deletion isn't.

@@ -81,7 +81,6 @@ export function JobCard({
       return done.length > 0 ? `only ${done.join(" + ")} stopped` : "";
     }
     if (phase === "sheet") {
-      if (awaiting) return "waiting for you";
       if (!sheet) return "";
       const bits: string[] = [];
       if (sheet.statusUpdated) bits.push("Not Active");
@@ -89,6 +88,7 @@ export function JobCard({
       else if (sheet.tenantAlreadyQueued) bits.push("tenant already queued");
       return bits.join(" · ");
     }
+    if (awaiting) return "waiting for you";
     return job.inboxesDeleted > 0
       ? `${formatNumber(job.inboxesDeleted)} deleted`
       : "";
