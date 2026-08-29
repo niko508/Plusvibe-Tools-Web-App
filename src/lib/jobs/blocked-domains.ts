@@ -62,8 +62,15 @@ const JOBS_BASE = process.env.JOBS_DIR || path.join(process.cwd(), ".jobs-data")
 const JOBS_DIR = path.join(JOBS_BASE, "blocked-domains");
 const RECORDS_DIR = path.join(JOBS_DIR, "records");
 
-/** How long a finished domain still swallows repeat webhook hits. */
-const DEDUPE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+// Deduplication is PERMANENT, not windowed. An Azure setup can have 50 inboxes
+// on one domain, so a single block produces bounces for weeks — any expiring
+// window eventually lets a second run through, and by then the inboxes are
+// already gone, so it would scan every workspace to find nothing and try to
+// rewrite the sheet.
+//
+// A domain is therefore handled once, ever. Removing its record from the log is
+// what re-arms it, which makes re-running a deliberate act rather than
+// something that happens on its own after enough time passes.
 
 const records = new Map<string, BlockedDomainJob>();
 /** Memory-only: the inboxes found, so confirming doesn't re-scan. */
@@ -198,18 +205,11 @@ export async function intake(args: {
     .sort((a, b) => b.createdAt - a.createdAt)[0];
 
   if (existing) {
-    const unfinished =
-      existing.status === "working" ||
-      existing.status === "deleting" ||
-      existing.status === "awaiting_confirmation";
-    const recent = now - existing.createdAt < DEDUPE_WINDOW_MS;
-    if (unfinished || recent) {
-      existing.duplicateHits += 1;
-      existing.lastDuplicateAt = now;
-      existing.updatedAt = now;
-      await persist(existing.id);
-      return { outcome: "duplicate", job: existing };
-    }
+    existing.duplicateHits += 1;
+    existing.lastDuplicateAt = now;
+    existing.updatedAt = now;
+    await persist(existing.id);
+    return { outcome: "duplicate", job: existing };
   }
 
   const rec: BlockedDomainJob = {

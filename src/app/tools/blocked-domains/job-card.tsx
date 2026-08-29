@@ -102,10 +102,10 @@ export function JobCard({
           {job.duplicateHits > 0 && (
             <span
               className="pv-chip shrink-0"
-              title="Later bounce rows for the same domain, which were ignored"
+              title={`${job.duplicateHits} later bounce row(s) for this domain hit the webhook and were told it had already run`}
             >
               +{job.duplicateHits} repeat
-              {job.duplicateHits === 1 ? "" : "s"}
+              {job.duplicateHits === 1 ? "" : "s"} ignored
             </span>
           )}
         </div>
@@ -215,7 +215,16 @@ export function JobCard({
             </button>
           </>
         ) : (
-          !active && <RemoveJobButton onRemove={() => onRemove(job.id)} />
+          !active && (
+            <>
+              <RemoveJobButton onRemove={() => onRemove(job.id)} />
+              {/* Removing the record is also what re-arms the domain: a domain
+                  is handled once ever, so the log entry IS the guard. */}
+              <span className="text-xs text-muted-foreground">
+                Removing this lets {job.domain} trigger again
+              </span>
+            </>
+          )
         )}
         <button
           type="button"

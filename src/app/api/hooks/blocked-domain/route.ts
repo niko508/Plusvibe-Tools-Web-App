@@ -15,6 +15,41 @@ export const dynamic = "force-dynamic";
 
 const HEADER = "x-webhook-secret";
 
+/**
+ * Plain-English summary of what already happened to a repeated domain.
+ *
+ * Driven by what the run actually DID, not by its overall status. A run that
+ * deleted every inbox but failed to write the sheet ends as "error", and
+ * telling Clay to re-run that domain would be wrong — the inboxes are gone; it
+ * is the sheet that needs a look.
+ */
+function describeExisting(job: {
+  domain: string;
+  status: string;
+  inboxesDeleted: number;
+  inboxesFound: number;
+}): string {
+  const when = `Already run for ${job.domain}`;
+  if (job.status === "working" || job.status === "deleting") {
+    return `${when} — still in progress. Nothing to do.`;
+  }
+  if (job.status === "awaiting_confirmation") {
+    return `${when} — its ${job.inboxesFound} inbox(es) are stopped and waiting for confirmation in the app. Nothing to do.`;
+  }
+  if (job.inboxesDeleted > 0) {
+    const caveat =
+      job.status === "error"
+        ? " The run reported a problem afterwards, so check the sheet."
+        : "";
+    return `${when} — ${job.inboxesDeleted} inbox(es) already deleted. Nothing to do.${caveat}`;
+  }
+  if (job.status === "dismissed") {
+    return `${when} — someone chose to keep the inboxes. Nothing to do.`;
+  }
+  // Nothing was deleted, so re-running is the sensible suggestion.
+  return `${when} — the earlier run ended as "${job.status}" without deleting anything. Remove it in the app to run again.`;
+}
+
 /** Constant-time compare, so a wrong secret can't be found a byte at a time. */
 function secretMatches(provided: string, expected: string): boolean {
   const a = Buffer.from(provided);
@@ -65,14 +100,21 @@ export async function POST(request: Request) {
   if (result.outcome === "invalid") {
     return NextResponse.json({ status: "invalid", error: result.reason }, { status: 400 });
   }
-  // A duplicate is a success as far as Clay is concerned — one blocked domain
-  // produces many bounce rows, and retrying is not an error to surface there.
+  // A duplicate is a success as far as Clay is concerned — a domain with 50
+  // inboxes bounces for weeks, and every one of those rows firing is expected,
+  // not an error to surface there. The message says what already happened, so
+  // the response column in Clay explains itself without opening the app.
   if (result.outcome === "duplicate") {
+    const j = result.job;
     return NextResponse.json({
-      status: "duplicate",
-      domain: result.job.domain,
-      jobId: result.job.id,
-      message: "Already handled or in progress.",
+      status: "already_handled",
+      domain: j.domain,
+      jobId: j.id,
+      firstSeen: new Date(j.createdAt).toISOString(),
+      previousStatus: j.status,
+      inboxesDeleted: j.inboxesDeleted,
+      repeatHits: j.duplicateHits,
+      message: describeExisting(j),
     });
   }
   // 202: the work runs in the background, so Clay isn't held open through a

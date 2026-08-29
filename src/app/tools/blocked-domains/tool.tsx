@@ -135,8 +135,11 @@ export function BlockedDomainsTool() {
               <span className="font-mono">
                 {"{ \"domain\": \"...\" }"}
               </span>
-              . Repeat rows for the same domain are ignored, so it&apos;s safe to
-              fire on every bounce.
+              . A domain is only ever handled <strong>once</strong> — every
+              later bounce row for it gets an{" "}
+              <span className="font-mono">already_handled</span> reply and
+              nothing runs — so it&apos;s safe to fire on every bounce, even
+              with 50 inboxes on one domain bouncing for weeks.
             </p>
             <div className="mt-2 flex items-center gap-2">
               <code className="flex-1 truncate rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-xs">

@@ -3,7 +3,7 @@ import { Header } from "@/components/header";
 import { BlockedDomainsTool } from "./tool";
 
 export const metadata: Metadata = {
-  title: "Blocked Domains · Plusvibe Tools",
+  title: "Blocked Domains (Automation) · Plusvibe Tools",
   description:
     "Clay flags a blocked sending domain, sending and warmup stop immediately, and you confirm the inbox deletion here.",
 };
@@ -15,7 +15,7 @@ export default function BlockedDomainsPage() {
       <main className="mx-auto max-w-6xl px-4 pb-24 sm:px-6">
         <div className="py-8">
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-            Blocked Domains
+            Blocked Domains (Automation)
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground sm:text-base">
             When Clay spots a blocked sending domain in a bounce reason, it
