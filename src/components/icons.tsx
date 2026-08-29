@@ -208,3 +208,12 @@ export function LayersIcon({ className, size }: IconProps) {
     </svg>
   );
 }
+
+export function TagIcon({ className, size }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <path d="M12.6 2.6a2 2 0 0 0-1.42-.6H4a2 2 0 0 0-2 2v7.18a2 2 0 0 0 .6 1.42l8.2 8.2a2 2 0 0 0 2.82 0l7.18-7.18a2 2 0 0 0 0-2.82Z" />
+      <circle cx="6.5" cy="6.5" r="1.5" />
+    </svg>
+  );
+}

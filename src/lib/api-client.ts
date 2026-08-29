@@ -2,6 +2,7 @@
 
 import { getApiKey } from "@/lib/api-key";
 import type { WebhookConfig } from "@/lib/webhooks/config";
+import type { Sentiment } from "@/lib/lead-labels/custom-label";
 import type { FollowUpTemplate } from "@/lib/follow-ups/templates";
 import type {
   CampaignTypesJob,
@@ -635,6 +636,45 @@ export function fetchLeadLabels(workspaceIds: string[], signal?: AbortSignal) {
     workspacesRequested: number;
     failed: string[];
   }>(`/api/bulk-actions/lead-labels?${qs.toString()}`, { signal });
+}
+
+export interface BulkLabelResult {
+  workspaceId: string;
+  workspaceName: string;
+  outcome: "created" | "already" | "conflict" | "error";
+  existingName?: string;
+  matchedBy?: "exact" | "similar";
+  key?: string;
+  reason?: string;
+}
+
+export interface BulkLabelResponse {
+  dryRun: boolean;
+  name: string;
+  sentiment: Sentiment;
+  results: BulkLabelResult[];
+  totals: {
+    created: number;
+    already: number;
+    conflict: number;
+    errors: number;
+  };
+}
+
+export function addLeadLabelToWorkspaces(
+  params: {
+    workspaces: { id: string; name: string }[];
+    name: string;
+    sentiment: Sentiment;
+    dryRun?: boolean;
+  },
+  signal?: AbortSignal
+) {
+  return request<BulkLabelResponse>("/api/bulk-actions/lead-labels", {
+    method: "POST",
+    body: params,
+    signal,
+  });
 }
 
 // --- Add Signatures presets --------------------------------------------------

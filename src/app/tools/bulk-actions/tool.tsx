@@ -15,10 +15,12 @@ import {
   RefreshIcon,
   ZapIcon,
   MailIcon,
+  TagIcon,
   TrashIcon,
 } from "@/components/icons";
 import { TOOL_COLORS, type ToolColor } from "@/lib/tools";
 import { AddWebhook } from "./add-webhook";
+import { AddLabel } from "./add-label";
 
 // The container for actions that run across many workspaces at once.
 //
@@ -42,6 +44,15 @@ const ACTIONS: BulkAction[] = [
       "Create the same webhook in every selected workspace, skipping any that already point at the same URL.",
     color: "indigo",
     Icon: ZapIcon,
+    ready: true,
+  },
+  {
+    id: "add-label",
+    name: "Add Custom Label",
+    description:
+      "Create the same custom lead label — emoji and all — in every selected workspace, skipping any that already have it.",
+    color: "amber",
+    Icon: TagIcon,
     ready: true,
   },
   {
@@ -230,6 +241,14 @@ export function BulkActionsTool() {
 
           {action === "add-webhook" && (
             <AddWebhook
+              workspaces={workspaces}
+              selected={selected}
+              loading={loading}
+            />
+          )}
+
+          {action === "add-label" && (
+            <AddLabel
               workspaces={workspaces}
               selected={selected}
               loading={loading}

@@ -10,33 +10,13 @@
 // Pure module: no API calls, so the matching rules are unit-testable.
 
 import type { SpecLabel } from "@/lib/first-campaign/blueprint";
+import { normalizeLabelName } from "@/lib/lead-labels/normalize";
+import type { WorkspaceLabel } from "@/lib/lead-labels/normalize";
 
-/** One label as the workspace reports it. */
-export interface WorkspaceLabel {
-  key: string;
-  name: string;
-  isSystem?: boolean;
-}
-
-/**
- * Comparable form of a label name.
- *
- * Emoji, punctuation and case are all cosmetic here — "🤩 positive reply 1",
- * "Positive Reply 1" and "positive-reply-1" are the same label to a human, and
- * a workspace set up by hand will have drifted in exactly those ways. Anything
- * that isn't a letter or a digit becomes a single space.
- *
- * The words themselves are kept intact, so the distinct labels in the blueprint
- * ("meeting booked" vs "meeting booked - cell phone call") never collapse into
- * each other.
- */
-export function normalizeLabelName(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim()
-    .replace(/\s+/g, " ");
-}
+// The name-comparison rule is shared with the bulk "Add Custom Label" action,
+// so it lives in one place and is re-exported here for the existing callers.
+export { normalizeLabelName };
+export type { WorkspaceLabel };
 
 export interface LabelResolution {
   /** The blueprint's label. */
