@@ -377,11 +377,12 @@ eq("only the stale name is reported",
 ok("the reported text is actually in the copy",
   mcn.includes("Your Name and Alix Rudin"));
 
-// Every weekday table must render text on ALL SEVEN days. Without an else
-// branch a Saturday render collapses "Does {…} work?" to "Does  work?" — the
-// send schedules are Mon-Fri so a real send can't hit it, but Preview Email
-// renders on demand, any day.
-console.log("--- weekday tables render on every day");
+// The tables must render cleanly on the days that can actually send, Mon-Fri.
+// The weekend is deliberately uncovered: the schedules never send then, and no
+// fallback wording is wanted, so a weekend preview showing "Does  work?" is
+// intended. These checks pin that down in both directions, so neither the
+// weekday branches nor the deliberate weekend gap can drift unnoticed.
+console.log("--- weekday tables, Mon-Fri and the deliberate weekend gap");
 /**
  * Minimal Liquid evaluator for the one construct these tables use.
  *
@@ -434,30 +435,38 @@ for (const [label, body] of [
   ["No Show step 1", ns1],
   ["No Show step 2", ns2],
 ]) {
-  for (let day = 1; day <= 7; day++) {
+  for (let day = 1; day <= 5; day++) {
     const out = renderWeekday(body, day);
     const gap = /\b(on|Does|availability|do)\s{2,}|\s{2,}(work|between)/.test(out);
     ok(`${label} renders on ISO day ${day}`, !gap,
       JSON.stringify(out.split("\n\n").find((l) => /\s{2,}/.test(l)) ?? ""));
   }
 }
-// Saturday specifically — the day the broken preview was taken on.
-ok("Saturday gives No Show step 1 a real phrase",
-  renderWeekday(ns1, 6).includes("Does early next week work?"),
-  renderWeekday(ns1, 6).split("\n\n")[2]);
-ok("Sunday too",
-  renderWeekday(ns1, 7).includes("Does early next week work?"));
+// The weekend, asserted as INTENDED rather than fixed. The two "near" tables
+// have no else by design; step 2's far table was supplied with one.
+for (const day of [6, 7]) {
+  eq(`No Show step 1 leaves the phrase out on ISO day ${day}`,
+    renderWeekday(ns1, day).split("\n\n")[2], "Does  work?");
+  ok(`the shared step 2 still renders on ISO day ${day}`,
+    renderWeekday(s2, day).includes("early next week"),
+    renderWeekday(s2, day).split("\n\n")[1]);
+}
+ok("no else branch was added to the near tables",
+  !pr1s1.includes("{% else %}early next week") &&
+  !ns1.includes("{% else %}early next week"));
+ok("the far table keeps the else it was supplied with",
+  s2.includes("{% else %}early next week"));
 
 // The weekday branch tables. All three now carry an else branch.
 for (const [label, body, branches, hasElse] of [
   ["reply step 1", pr1s1, ["this Wednesday and Thursday", "this Thursday and Friday",
-    "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], true],
+    "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], false],
   ["reply step 2", s2, ["this Thursday or Friday", "this Friday or next Monday",
     "next Monday or Tuesday", "next Tuesday or Wednesday", "next Wednesday or Thursday"], true],
   ["No Show step 1", ns1, ["this Wednesday or Thursday", "this Thursday or Friday",
-    "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], true],
+    "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], false],
   ["No Show step 2", ns2, ["this Wednesday or Thursday", "this Thursday or Friday",
-    "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], true],
+    "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], false],
 ]) {
   ok(`${label} has all five weekday branches`,
     branches.every((b) => body.includes(b)),

@@ -17,12 +17,13 @@ const GREETING =
 /**
  * Two working days out from today, named rather than dated.
  *
- * Liquid's `date: '%u'` gives the ISO weekday (1 = Monday), so 6 and 7 are the
- * weekend. Every table here ends in an `{% else %}` for that reason: without
- * one, a Saturday render produces "Does  work?" with the phrase missing
- * entirely. The send schedules are Mon–Fri, so a real send can't hit it — but
- * Plusvibe's Preview Email renders on demand, any day of the week, and a
- * preview that looks broken is worth avoiding on its own.
+ * Liquid's `date: '%u'` gives the ISO weekday (1 = Monday). Branches 6 and 7
+ * are absent BY DESIGN — the schedules only send Mon–Fri, so the weekend
+ * cannot be reached in a real send, and no fallback wording is wanted.
+ *
+ * The visible consequence: Plusvibe's Preview Email renders on demand, so
+ * previewing at a weekend shows the phrase missing ("Does  work?"). That is
+ * expected, not a bug. Do not add an `{% else %}` here.
  */
 const AVAILABILITY_NEAR =
   "{% assign today_number = 'now' | date: '%u' | plus: 0 %}" +
@@ -31,7 +32,6 @@ const AVAILABILITY_NEAR =
   "{% elsif today_number == 3 %}this Friday or next Monday" +
   "{% elsif today_number == 4 %}next Monday or Tuesday" +
   "{% elsif today_number == 5 %}next Tuesday or Wednesday" +
-  "{% else %}early next week" +
   "{% endif %}";
 
 /**
@@ -46,10 +46,14 @@ const AVAILABILITY_NEAR_OR =
   "{% elsif today_number == 3 %}this Friday or next Monday" +
   "{% elsif today_number == 4 %}next Monday or Tuesday" +
   "{% elsif today_number == 5 %}next Tuesday or Wednesday" +
-  "{% else %}early next week" +
   "{% endif %}";
 
-/** The later slots offered in step 2. This one has an `else`, so it always renders. */
+/**
+ * The later slots offered in step 2.
+ *
+ * This one DOES carry an `{% else %}` — that is how it was supplied, and the
+ * asymmetry with the two "near" tables above is intentional.
+ */
 const AVAILABILITY_FAR =
   "{% assign today_number = 'now' | date: '%u' | plus: 0 %}" +
   "{% if today_number == 1 %}this Thursday or Friday" +
