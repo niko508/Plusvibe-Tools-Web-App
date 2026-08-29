@@ -341,11 +341,13 @@ async function runLocateAndQuarantine(id: string) {
       rec.autoDeleted = true;
       rec.confirmedAt = Date.now();
       await persist(id);
-      await runDeleteAndSheet(id);
+      await runSheetThenDelete(id);
     } else {
       rec.status = "awaiting_confirmation";
-      rec.phase = "deleting";
-      rec.phaseStates.deleting = "waiting";
+      // The sheet is the next thing that runs, so that's where the "waiting"
+      // marker belongs.
+      rec.phase = "sheet";
+      rec.phaseStates.sheet = "waiting";
       rec.updatedAt = Date.now();
       await persist(id);
     }
@@ -464,8 +466,19 @@ async function locate(
   };
 }
 
-/** Phases 3 and 4: delete the inboxes, then update the sheet. */
-async function runDeleteAndSheet(id: string) {
+/**
+ * After confirmation: write the sheet, then delete the inboxes.
+ *
+ * Sheet first because both of its writes record a decision that has already
+ * been taken, while the deletion is the irreversible act carrying it out. If
+ * the deletion dies halfway, the domain still reads Not Active and its tenant
+ * is already queued for cancellation — the state someone would go looking for.
+ *
+ * A sheet failure never blocks the deletion: the deletion was confirmed, and a
+ * missing sheet edit is a note to act on rather than a reason to leave a
+ * blocked domain's inboxes in place.
+ */
+async function runSheetThenDelete(id: string) {
   const rec = records.get(id);
   if (!rec) return;
   const apiKey = serverApiKey();
@@ -478,6 +491,10 @@ async function runDeleteAndSheet(id: string) {
   }
 
   rec.status = "deleting";
+  await runSheet(rec);
+  rec.updatedAt = Date.now();
+  await persist(id);
+
   rec.phase = "deleting";
   rec.phaseStates.deleting = "running";
   rec.updatedAt = Date.now();
@@ -514,10 +531,7 @@ async function runDeleteAndSheet(id: string) {
   foundInboxes.delete(id);
   rec.phaseStates.deleting =
     rec.inboxesDeleted === inboxes.length ? "done" : "error";
-  rec.updatedAt = Date.now();
-  await persist(id);
 
-  await runSheet(rec);
   finish(rec);
   await persist(id);
 }
@@ -646,7 +660,7 @@ export async function confirmJob(id: string): Promise<boolean> {
   if (!rec || rec.status !== "awaiting_confirmation") return false;
   rec.confirmedAt = Date.now();
   await persist(id);
-  void runDeleteAndSheet(id);
+  void runSheetThenDelete(id);
   return true;
 }
 
@@ -660,8 +674,10 @@ export async function dismissJob(id: string): Promise<boolean> {
   if (!rec || rec.status !== "awaiting_confirmation") return false;
   rec.status = "dismissed";
   rec.phase = "finished";
-  rec.phaseStates.deleting = "skipped";
+  // Neither the sheet nor the deletion runs: nothing was decided, so nothing
+  // is recorded. The quarantine stays in place.
   rec.phaseStates.sheet = "skipped";
+  rec.phaseStates.deleting = "skipped";
   rec.updatedAt = Date.now();
   foundInboxes.delete(id);
   await persist(id);

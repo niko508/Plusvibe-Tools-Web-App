@@ -6,8 +6,15 @@
 //   1 locating     find the domain's workspace and its inboxes
 //   2 quarantining stop the bleeding — campaign daily limit to 0, warmup off
 //   3 (waiting)    someone confirms in the UI, unless auto-delete is on
-//   4 deleting     delete the inboxes
-//   5 sheet        📋 Domains status → Not Active, tenant → 🚯 Tenants to Cancel
+//   4 sheet        📋 Domains status → Not Active, then the tenant onto
+//                  🚯 Tenants to Cancel
+//   5 deleting     delete the inboxes
+//
+// The sheet is written BEFORE the deletion on purpose. Both writes record a
+// decision that has already been made; the deletion is the irreversible act
+// that carries it out. If the run dies partway through deleting, the sheet
+// still says what was decided, and the domain and its tenant are already
+// where someone would look for them.
 //
 // Quarantine happens without confirmation on purpose: a blocked domain is
 // actively burning reputation, and stopping it is reversible. Deletion isn't.
@@ -37,15 +44,15 @@ export type BlockedDomainPhase =
 export const PHASE_ORDER: Exclude<BlockedDomainPhase, "finished">[] = [
   "locating",
   "quarantining",
-  "deleting",
   "sheet",
+  "deleting",
 ];
 
 export const PHASE_LABELS: Record<BlockedDomainPhase, string> = {
   locating: "Finding the inboxes",
   quarantining: "Stopping sending & warmup",
-  deleting: "Deleting inboxes",
   sheet: "Updating the sheet",
+  deleting: "Deleting inboxes",
   finished: "Finished",
 };
 

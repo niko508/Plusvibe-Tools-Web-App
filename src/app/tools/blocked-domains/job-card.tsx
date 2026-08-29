@@ -73,18 +73,18 @@ export function JobCard({
       ].filter(Boolean);
       return done.length > 0 ? `only ${done.join(" + ")} stopped` : "";
     }
-    if (phase === "deleting") {
+    if (phase === "sheet") {
       if (awaiting) return "waiting for you";
-      return job.inboxesDeleted > 0
-        ? `${formatNumber(job.inboxesDeleted)} deleted`
-        : "";
+      if (!sheet) return "";
+      const bits: string[] = [];
+      if (sheet.statusUpdated) bits.push("Not Active");
+      if (sheet.tenantQueued) bits.push("tenant queued");
+      else if (sheet.tenantAlreadyQueued) bits.push("tenant already queued");
+      return bits.join(" · ");
     }
-    if (!sheet) return "";
-    const bits: string[] = [];
-    if (sheet.statusUpdated) bits.push("Not Active");
-    if (sheet.tenantQueued) bits.push("tenant queued");
-    else if (sheet.tenantAlreadyQueued) bits.push("tenant already queued");
-    return bits.join(" · ");
+    return job.inboxesDeleted > 0
+      ? `${formatNumber(job.inboxesDeleted)} deleted`
+      : "";
   }
 
   return (
