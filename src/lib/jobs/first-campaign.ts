@@ -402,15 +402,23 @@ async function runJob(id: string) {
     // The "Active" tag stands in for the sending accounts, so the campaign's
     // senders track the tag rather than freezing today's list into it.
     check();
-    await acquireSlot();
-    const tagId = await findTagId(apiKey, workspaceId, SENDING_TAG_NAME);
+    // A tag problem must not abandon a campaign that has just been created —
+    // the run continues without sending accounts and says so, rather than
+    // leaving an empty shell behind and stopping before the sub-sequences.
+    let tagId: string | null = null;
+    try {
+      await acquireSlot();
+      tagId = await findTagId(apiKey, workspaceId, SENDING_TAG_NAME);
+    } catch (err) {
+      pushError(rec, `Could not read this workspace's tags: ${msg(err)}`);
+    }
     if (tagId) {
       rec.parent.tagId = tagId;
     } else {
       rec.parent.tagMissing = true;
       pushError(
         rec,
-        `No "${SENDING_TAG_NAME}" tag in this workspace, so the campaign was created with no sending accounts. Add the tag (or pick accounts) before launching.`
+        `No "${SENDING_TAG_NAME}" tag attached, so the campaign has no sending accounts. Add the tag (or pick accounts) before launching.`
       );
     }
     await persist(id);

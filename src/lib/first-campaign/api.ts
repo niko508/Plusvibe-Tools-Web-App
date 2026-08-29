@@ -11,6 +11,7 @@ import {
   plusvibePatch,
   PlusvibeError,
 } from "@/lib/plusvibe-server";
+import { listTags, findTagByName } from "@/lib/plusvibe-tags";
 import type { WorkspaceLabel } from "@/lib/first-campaign/labels";
 
 /** Plusvibe ids are 24-hex; anything else is a bug on our side, not theirs. */
@@ -222,18 +223,6 @@ export async function findTagId(
   workspaceId: string,
   tagName: string
 ): Promise<string | null> {
-  const data = await plusvibeGet<unknown>({
-    apiKey,
-    path: "/tags/list",
-    query: { workspace_id: workspaceId, limit: "1000" },
-  });
-  const raw = Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
-  const wanted = tagName.trim().toLowerCase();
-  for (const t of raw) {
-    const name = String(t.name ?? "").trim().toLowerCase();
-    if (name !== wanted) continue;
-    const id = String(t.id ?? t._id ?? "").trim();
-    if (ID_RE.test(id)) return id;
-  }
-  return null;
+  const tags = await listTags(apiKey, workspaceId);
+  return findTagByName(tags, tagName)?.id ?? null;
 }

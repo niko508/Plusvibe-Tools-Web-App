@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { plusvibeGet, resolveApiKey } from "@/lib/plusvibe-server";
+import { resolveApiKey } from "@/lib/plusvibe-server";
+import { listTags } from "@/lib/plusvibe-tags";
 import { errorResponse } from "@/lib/api-response";
 
 export const dynamic = "force-dynamic";
@@ -17,16 +18,9 @@ export async function GET(request: Request) {
         { status: 400 }
       );
     }
-    const data = await plusvibeGet<unknown>({
-      apiKey,
-      path: "/tags/list",
-      query: { workspace_id, limit: "1000" },
-    });
-    const raw = Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
-    const tags = raw.map((t) => ({
-      id: String(t.id ?? t._id ?? ""),
-      name: String(t.name ?? ""),
-    }));
+    // Paged: /tags/list rejects a limit above 100 outright, so the old
+    // limit=1000 returned a 400 rather than every tag.
+    const tags = await listTags(apiKey, workspace_id);
     return NextResponse.json({ tags });
   } catch (err) {
     return errorResponse(err);
