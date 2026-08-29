@@ -377,18 +377,87 @@ eq("only the stale name is reported",
 ok("the reported text is actually in the copy",
   mcn.includes("Your Name and Alix Rudin"));
 
-// The weekday branch tables. The two "near" ones have no `else`, which is only
-// safe because the schedules never send at the weekend; the far one always
-// renders.
+// Every weekday table must render text on ALL SEVEN days. Without an else
+// branch a Saturday render collapses "Does {…} work?" to "Does  work?" — the
+// send schedules are Mon-Fri so a real send can't hit it, but Preview Email
+// renders on demand, any day.
+console.log("--- weekday tables render on every day");
+/**
+ * Minimal Liquid evaluator for the one construct these tables use.
+ *
+ * Scanned with indexOf rather than one big regex: the assign contains
+ * `date: '%u'`, and a `%`-excluding character class silently fails to match
+ * it — which made an earlier version of this helper return the body
+ * unchanged, so every "renders fine" assertion passed without substituting
+ * anything.
+ */
+function renderWeekday(body, isoDay) {
+  let out = "";
+  let rest = body;
+  for (;;) {
+    const start = rest.indexOf("{% assign today_number");
+    if (start === -1) return out + rest;
+    const endTag = "{% endif %}";
+    const end = rest.indexOf(endTag, start);
+    if (end === -1) return out + rest;
+    const block = rest.slice(start, end + endTag.length);
+
+    const branches = [...block.matchAll(/\{% (?:els)?if today_number == (\d) %\}([^{]*)/g)]
+      .map((m) => [Number(m[1]), m[2]]);
+    const hit = branches.find(([d]) => d === isoDay);
+    const els = /\{% else %\}([^{]*)/.exec(block);
+    const value = hit ? hit[1] : els ? els[1] : "";
+
+    out += rest.slice(0, start) + value;
+    rest = rest.slice(end + endTag.length);
+  }
+}
+
+// The helper has to actually substitute, or every assertion below is vacuous.
+// It only resolves the weekday tables — the greeting's own {% if %} is left
+// alone, so this checks for today_number specifically rather than any liquid.
+ok("the evaluator resolves the weekday table",
+  !renderWeekday(ns1, 3).includes("today_number"),
+  renderWeekday(ns1, 3).slice(0, 100));
+ok("and leaves the greeting alone",
+  renderWeekday(ns1, 3).includes("{% if first_name != blank %}"));
+eq("and picks the right weekday branch",
+  renderWeekday("x {% assign today_number = 'now' | date: '%u' | plus: 0 %}" +
+    "{% if today_number == 1 %}MON{% elsif today_number == 3 %}WED" +
+    "{% else %}ELSE{% endif %} y", 3),
+  "x WED y");
+
+for (const [label, body] of [
+  ["Positive Reply 1 step 1", pr1s1],
+  ["Positive Reply 2 step 1", pr2s1],
+  ["shared step 2", s2],
+  ["No Show step 1", ns1],
+  ["No Show step 2", ns2],
+]) {
+  for (let day = 1; day <= 7; day++) {
+    const out = renderWeekday(body, day);
+    const gap = /\b(on|Does|availability|do)\s{2,}|\s{2,}(work|between)/.test(out);
+    ok(`${label} renders on ISO day ${day}`, !gap,
+      JSON.stringify(out.split("\n\n").find((l) => /\s{2,}/.test(l)) ?? ""));
+  }
+}
+// Saturday specifically — the day the broken preview was taken on.
+ok("Saturday gives No Show step 1 a real phrase",
+  renderWeekday(ns1, 6).includes("Does early next week work?"),
+  renderWeekday(ns1, 6).split("\n\n")[2]);
+ok("Sunday too",
+  renderWeekday(ns1, 7).includes("Does early next week work?"));
+
+// The weekday branch tables. All three now carry an else branch.
 for (const [label, body, branches, hasElse] of [
   ["reply step 1", pr1s1, ["this Wednesday and Thursday", "this Thursday and Friday",
-    "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], false],
+    "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], true],
   ["reply step 2", s2, ["this Thursday or Friday", "this Friday or next Monday",
     "next Monday or Tuesday", "next Tuesday or Wednesday", "next Wednesday or Thursday"], true],
   ["No Show step 1", ns1, ["this Wednesday or Thursday", "this Thursday or Friday",
-    "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], false],
+    "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], true],
   ["No Show step 2", ns2, ["this Wednesday or Thursday", "this Thursday or Friday",
-    "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], false],
+    "this Friday or next Monday", "next Monday or Tuesday", "next Tuesday or Wednesday"], true],
 ]) {
   ok(`${label} has all five weekday branches`,
     branches.every((b) => body.includes(b)),

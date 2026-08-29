@@ -17,10 +17,12 @@ const GREETING =
 /**
  * Two working days out from today, named rather than dated.
  *
- * Liquid's `date: '%u'` gives the ISO weekday (1 = Monday). There's no branch
- * for 6 or 7, so an email that somehow sends at the weekend renders the
- * sentence with a gap — the schedules keep sending inside Mon–Fri, which is
- * what makes that safe.
+ * Liquid's `date: '%u'` gives the ISO weekday (1 = Monday), so 6 and 7 are the
+ * weekend. Every table here ends in an `{% else %}` for that reason: without
+ * one, a Saturday render produces "Does  work?" with the phrase missing
+ * entirely. The send schedules are Mon–Fri, so a real send can't hit it — but
+ * Plusvibe's Preview Email renders on demand, any day of the week, and a
+ * preview that looks broken is worth avoiding on its own.
  */
 const AVAILABILITY_NEAR =
   "{% assign today_number = 'now' | date: '%u' | plus: 0 %}" +
@@ -29,6 +31,7 @@ const AVAILABILITY_NEAR =
   "{% elsif today_number == 3 %}this Friday or next Monday" +
   "{% elsif today_number == 4 %}next Monday or Tuesday" +
   "{% elsif today_number == 5 %}next Tuesday or Wednesday" +
+  "{% else %}early next week" +
   "{% endif %}";
 
 /**
@@ -43,6 +46,7 @@ const AVAILABILITY_NEAR_OR =
   "{% elsif today_number == 3 %}this Friday or next Monday" +
   "{% elsif today_number == 4 %}next Monday or Tuesday" +
   "{% elsif today_number == 5 %}next Tuesday or Wednesday" +
+  "{% else %}early next week" +
   "{% endif %}";
 
 /** The later slots offered in step 2. This one has an `else`, so it always renders. */
