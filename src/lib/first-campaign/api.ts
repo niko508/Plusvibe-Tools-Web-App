@@ -77,27 +77,28 @@ export async function createSubsequence(
 /**
  * PATCHes a campaign or sub-sequence.
  *
- * The `schedules` shape is the one place the API docs contradict themselves:
- * the schema declares it an object, while the worked example in the same
- * document sends an array of one. Rather than guess, the object form is sent
- * first and an array retried on a 400 — the request is a partial update of the
- * same fields either way, so repeating it is harmless. Which form worked is
- * returned so the job can record it.
+ * `schedules` is an ARRAY. The schema declares it an object, but the worked
+ * example in the same document sends an array of one — and the live API
+ * settled it by reporting errors as `schedules>0>start_date`, which is an
+ * index into an array. The array is sent first for that reason; the object
+ * form is kept as a fallback in case a future version tightens the other way.
+ * Which one the server took is returned so the job can record it.
  */
 export async function updateCampaign(
   apiKey: string,
   body: Record<string, unknown>
 ): Promise<{ scheduleForm?: "object" | "array" }> {
-  const hasSchedule =
-    body.schedules !== undefined && !Array.isArray(body.schedules);
+  const schedule = body.schedules;
+  const hasSchedule = schedule !== undefined && !Array.isArray(schedule);
+  const asArray = hasSchedule ? { ...body, schedules: [schedule] } : body;
 
   try {
     await plusvibePatch({
       apiKey,
       path: "/campaign/update/campaign",
-      body,
+      body: asArray,
     });
-    return hasSchedule ? { scheduleForm: "object" } : {};
+    return hasSchedule ? { scheduleForm: "array" } : {};
   } catch (err) {
     const isBadRequest = err instanceof PlusvibeError && err.status === 400;
     if (!isBadRequest || !hasSchedule) throw err;
@@ -105,9 +106,9 @@ export async function updateCampaign(
     await plusvibePatch({
       apiKey,
       path: "/campaign/update/campaign",
-      body: { ...body, schedules: [body.schedules] },
+      body,
     });
-    return { scheduleForm: "array" };
+    return { scheduleForm: "object" };
   }
 }
 

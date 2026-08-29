@@ -240,12 +240,28 @@ const parent = bp.buildParentUpdate({
   workspaceId: "w".repeat(24),
   campaignId: "c".repeat(24),
   emailAccounts: ["t".repeat(24)],
+  startDate: "2026-08-29",
 });
 eq("parent carries the ids", [parent.workspace_id, parent.campaign_id],
   ["w".repeat(24), "c".repeat(24)]);
 eq("parent carries one step", parent.sequences.length, 1);
 eq("parent carries the tag as an email account", parent.email_accounts, ["t".repeat(24)]);
 eq("parent carries the schedule", parent.schedules.timing, { from: "07:30", to: "17:30" });
+// The live API requires start_date even though the docs call it optional.
+eq("parent schedule carries a start date", parent.schedules.start_date, "2026-08-29");
+ok("an omitted start date defaults to today in the campaign timezone",
+  /^\d{4}-\d{2}-\d{2}$/.test(
+    bp.buildParentUpdate({ workspaceId: "w", campaignId: "c", emailAccounts: [] })
+      .schedules.start_date
+  ));
+eq("today is formatted YYYY-MM-DD",
+  bp.todayInTimezone("America/New_York", new Date("2026-08-29T18:00:00Z")),
+  "2026-08-29");
+// Near midnight UTC the New York date is still the previous day; using the
+// campaign's own timezone is what keeps "start immediately" from slipping.
+eq("the campaign timezone decides the date, not UTC",
+  bp.todayInTimezone("America/New_York", new Date("2026-08-30T02:00:00Z")),
+  "2026-08-29");
 eq("parent carries the settings", parent.send_as_txt, "yes");
 // With no tag resolved the field must be absent, not empty: an empty array
 // would clear whatever sending accounts the campaign has.
@@ -274,8 +290,8 @@ for (const [name, first, unit, gap, steps] of [
   ["Evergreen Follow Up", 2, "days", 3, 2],
   ["Positive Reply 2", 2, "days", 3, 2],
   ["No Show", 2, "days", 2, 2],
-  ["Meeting Confirmation - Normal", 120, "minutes", 0, 1],
-  ["Meeting Confirmation - Prospect's Calendar", 120, "minutes", 0, 1],
+  ["Meeting Confirmation - Normal", 120, "minutes", 1, 1],
+  ["Meeting Confirmation - Prospect's Calendar", 120, "minutes", 1, 1],
 ]) {
   const c = byName(name).content;
   eq(`${name} cadence`,
@@ -283,8 +299,11 @@ for (const [name, first, unit, gap, steps] of [
     [first, unit, gap, steps]);
 }
 // Nothing follows the last step, so its wait never elapses.
-ok("every last step waits 0",
-  bp.SUBSEQUENCES.every((s) => s.content.steps.at(-1).waitDays === 0));
+// The API rejects wait_time 0 even on a final step that never elapses.
+ok("every last step waits at least 1",
+  bp.SUBSEQUENCES.every((s) => s.content.steps.at(-1).waitDays >= 1));
+ok("no step anywhere waits 0",
+  bp.SUBSEQUENCES.every((s) => s.content.steps.every((x) => x.waitDays >= 1)));
 
 // Positive Reply 1 and Evergreen send the same two emails; only the cadence
 // differs. If someone edits one copy and not the other, this catches it.
@@ -404,9 +423,12 @@ eq("a minutes-based delay keeps its unit",
 eq("a one-step subsequence sends one step", subMinutes.sequences.length, 1);
 eq("content patch carries two steps", subFull.sequences.length, 2);
 eq("steps are numbered from 1", subFull.sequences.map((x) => x.step), [1, 2]);
-eq("step waits", subFull.sequences.map((x) => x.wait_time), [2, 0]);
+eq("step waits", subFull.sequences.map((x) => x.wait_time), [2, 1]);
 eq("content patch keeps its own window", subFull.schedules.timing,
   { from: "09:30", to: "15:30" });
+ok("a subsequence schedule also carries a start date",
+  /^\d{4}-\d{2}-\d{2}$/.test(subFull.schedules.start_date),
+  String(subFull.schedules.start_date));
 // Empty subject on EVERY step: that's what makes it a reply on the lead's
 // existing thread rather than a new one.
 ok("every step has an empty subject",

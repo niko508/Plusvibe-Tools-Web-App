@@ -47,6 +47,13 @@ export const STEP_ONE_BODY = [
  */
 export const STEP_ONE_WAIT_TIME = 1;
 
+/**
+ * The wait after the final step of a sub-sequence.
+ *
+ * Never elapses, but the API rejects 0, so it is 1 rather than 0.
+ */
+export const LAST_STEP_WAIT = 1;
+
 export function buildStepOne(): Record<string, unknown> {
   return {
     step: 1,
@@ -72,6 +79,40 @@ export interface Schedule {
   days: Record<string, boolean>;
   timezone: string;
   timing: { from: string; to: string };
+  /**
+   * Added at send time by buildSchedule.
+   *
+   * The docs list start_date as optional, and the campaign screen says
+   * "leave it empty to start immediately" — but the live API rejects a
+   * schedule without it ("schedules[0].start_date is required"), and the
+   * documented pattern has no empty-string branch, so it needs a real date.
+   */
+  start_date?: string;
+}
+
+/**
+ * Today's date in a timezone, as YYYY-MM-DD.
+ *
+ * en-CA formats as YYYY-MM-DD, which is exactly the shape the API wants.
+ * Using the campaign's own timezone matters near midnight: the server's idea
+ * of "today" can be tomorrow in New York, which would postpone the campaign
+ * by a day.
+ */
+export function todayInTimezone(tz: string = TIMEZONE, now = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+}
+
+/** A schedule with its start date filled in — "start immediately" is today. */
+export function buildSchedule(base: Schedule, startDate?: string): Schedule {
+  return {
+    ...base,
+    start_date: startDate ?? todayInTimezone(base.timezone),
+  };
 }
 
 /** Days are keyed "1" = Monday … "7" = Sunday. Only the sending days appear. */
@@ -171,8 +212,11 @@ export interface SpecLabel {
 
 export interface SubsequenceStep {
   /**
-   * Days to wait AFTER this step. The last step's value never elapses, so it
-   * is 0 — nothing follows it.
+   * Days to wait AFTER this step.
+   *
+   * The last step's value never elapses — nothing follows it — but the API
+   * still rejects 0 ("wait_time must be greater than or equal to 1"), despite
+   * the docs giving a minimum of 0. So it carries a harmless 1.
    */
   waitDays: number;
   /** Plain text; converted to the editor's HTML shape on the way out. */
@@ -226,7 +270,7 @@ export const SUBSEQUENCES: SubsequenceSpec[] = [
       firstWaitUnit: "days",
       steps: [
         { waitDays: 2, body: BUMP_STEP_ONE },
-        { waitDays: 0, body: NUDGE_STEP_TWO },
+        { waitDays: LAST_STEP_WAIT, body: NUDGE_STEP_TWO },
       ],
     },
   },
@@ -239,7 +283,7 @@ export const SUBSEQUENCES: SubsequenceSpec[] = [
       firstWaitUnit: "days",
       steps: [
         { waitDays: 3, body: BUMP_STEP_ONE },
-        { waitDays: 0, body: NUDGE_STEP_TWO },
+        { waitDays: LAST_STEP_WAIT, body: NUDGE_STEP_TWO },
       ],
     },
   },
@@ -253,7 +297,7 @@ export const SUBSEQUENCES: SubsequenceSpec[] = [
     content: {
       firstWait: 120,
       firstWaitUnit: "minutes",
-      steps: [{ waitDays: 0, body: MEETING_CONFIRMATION_NORMAL }],
+      steps: [{ waitDays: LAST_STEP_WAIT, body: MEETING_CONFIRMATION_NORMAL }],
       manualEdits: MEETING_CONFIRMATION_NORMAL_EDITS,
     },
   },
@@ -265,7 +309,7 @@ export const SUBSEQUENCES: SubsequenceSpec[] = [
       firstWaitUnit: "days",
       steps: [
         { waitDays: 3, body: ANSWER_STEP_ONE },
-        { waitDays: 0, body: NUDGE_STEP_TWO },
+        { waitDays: LAST_STEP_WAIT, body: NUDGE_STEP_TWO },
       ],
     },
   },
@@ -277,7 +321,7 @@ export const SUBSEQUENCES: SubsequenceSpec[] = [
       firstWaitUnit: "days",
       steps: [
         { waitDays: 2, body: NO_SHOW_STEP_ONE },
-        { waitDays: 0, body: NO_SHOW_STEP_TWO },
+        { waitDays: LAST_STEP_WAIT, body: NO_SHOW_STEP_TWO },
       ],
     },
   },
@@ -292,7 +336,7 @@ export const SUBSEQUENCES: SubsequenceSpec[] = [
     content: {
       firstWait: 120,
       firstWaitUnit: "minutes",
-      steps: [{ waitDays: 0, body: MEETING_CONFIRMATION_PROSPECT }],
+      steps: [{ waitDays: LAST_STEP_WAIT, body: MEETING_CONFIRMATION_PROSPECT }],
     },
   },
 ];
@@ -337,12 +381,14 @@ export function buildParentUpdate(args: {
   workspaceId: string;
   campaignId: string;
   emailAccounts: string[];
+  /** Defaults to today in the campaign's timezone. */
+  startDate?: string;
 }): Record<string, unknown> {
   return {
     workspace_id: args.workspaceId,
     campaign_id: args.campaignId,
     sequences: [buildStepOne()],
-    schedules: PARENT_SCHEDULE,
+    schedules: buildSchedule(PARENT_SCHEDULE, args.startDate),
     ...(args.emailAccounts.length
       ? { email_accounts: args.emailAccounts }
       : {}),
@@ -368,11 +414,12 @@ export function buildSubsequenceUpdate(args: {
   workspaceId: string;
   campaignId: string;
   content?: SubsequenceContent;
+  startDate?: string;
 }): Record<string, unknown> {
   const base: Record<string, unknown> = {
     workspace_id: args.workspaceId,
     campaign_id: args.campaignId,
-    schedules: SUBSEQUENCE_SCHEDULE,
+    schedules: buildSchedule(SUBSEQUENCE_SCHEDULE, args.startDate),
     ignore_mailbox_limit: 1,
   };
   if (!args.content) return base;
