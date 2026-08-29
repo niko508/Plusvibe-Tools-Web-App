@@ -188,6 +188,52 @@ ok("a drifted spelling still matches",
 ok("a system label is never matched to a spec label",
   !partial.matched.some((m) => m.existing.key === "INTERESTED"));
 
+// The one that bit for real: Plusvibe ships a built-in "Meeting Booked", and
+// the blueprint wants the workspace's own "🤑 meeting booked". They normalize
+// identically, so without the system filter the trigger gets wired to a label
+// nobody applies and simply never fires.
+console.log("--- system vs custom labels that collide");
+const collide = lb.planLabels(
+  [{ name: "🤑 meeting booked", sentiment: "POSITIVE" }],
+  [
+    { key: "MEETING_BOOKED", name: "Meeting Booked", isSystem: true },
+    { key: "_MEETING_BOOKED", name: "🤑 meeting booked", isSystem: false },
+  ]
+);
+eq("the custom label wins over the system one",
+  collide.matched[0].existing.key, "_MEETING_BOOKED");
+// Order must not decide it either.
+eq("still wins when the system label is listed second",
+  lb.planLabels([{ name: "🤑 meeting booked", sentiment: "POSITIVE" }], [
+    { key: "_MEETING_BOOKED", name: "🤑 meeting booked", isSystem: false },
+    { key: "MEETING_BOOKED", name: "Meeting Booked", isSystem: true },
+  ]).matched[0].existing.key, "_MEETING_BOOKED");
+// With ONLY the system label present, the custom one is created rather than
+// the system one being hijacked.
+const systemOnly = lb.planLabels(
+  [{ name: "🤑 meeting booked", sentiment: "POSITIVE" }],
+  [{ key: "MEETING_BOOKED", name: "Meeting Booked", isSystem: true }]
+);
+eq("a system-only workspace creates the custom label", systemOnly.missing.length, 1);
+eq("and matches nothing", systemOnly.matched.length, 0);
+// The longer custom labels must not be captured by the shorter one.
+const three = lb.planLabels(
+  [
+    { name: "🤑 meeting booked", sentiment: "POSITIVE" },
+    { name: "🤑 meeting booked - cell phone call", sentiment: "POSITIVE" },
+    { name: "🤑 meeting booked - prospect's calendar link", sentiment: "POSITIVE" },
+  ],
+  [
+    { key: "MEETING_BOOKED", name: "Meeting Booked", isSystem: true },
+    { key: "K1", name: "🤑 meeting booked", isSystem: false },
+    { key: "K2", name: "🤑 meeting booked - cell phone call", isSystem: false },
+    { key: "K3", name: "🤑 meeting booked - prospect's calendar link", isSystem: false },
+  ]
+);
+eq("all three meeting-booked labels resolve distinctly",
+  three.matched.map((m) => m.existing.key), ["K1", "K2", "K3"]);
+eq("none of them fall back to the system label", three.missing.length, 0);
+
 // A label with no usable key is treated as missing rather than producing an
 // event with an empty val, which would create a trigger that never fires.
 const keyless = lb.planLabels(

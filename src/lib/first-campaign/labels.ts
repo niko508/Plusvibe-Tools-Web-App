@@ -64,19 +64,34 @@ export function planLabels(
   spec: SpecLabel[],
   workspaceLabels: WorkspaceLabel[]
 ): LabelPlan {
+  // System labels are never candidates. Plusvibe ships a built-in "Meeting
+  // Booked", and the blueprint wants the workspace's own "🤑 meeting booked" —
+  // which normalize identically once the emoji and case are stripped. Matching
+  // the system one wires the sub-sequence to a label nobody applies, and the
+  // trigger then simply never fires. Every label in the blueprint is a custom
+  // one by definition, so excluding system labels is both safe and correct.
+  const custom = workspaceLabels.filter((l) => !l.isSystem && l.key);
+
+  const byExact = new Map<string, WorkspaceLabel>();
   const byNormalized = new Map<string, WorkspaceLabel>();
-  for (const label of workspaceLabels) {
+  for (const label of custom) {
+    const exact = label.name.trim().toLowerCase();
+    if (exact && !byExact.has(exact)) byExact.set(exact, label);
     const norm = normalizeLabelName(label.name);
-    if (!norm) continue;
     // First one wins, so a later near-duplicate can't shadow the real label.
-    if (!byNormalized.has(norm)) byNormalized.set(norm, label);
+    if (norm && !byNormalized.has(norm)) byNormalized.set(norm, label);
   }
 
   const matched: LabelResolution[] = [];
   const missing: SpecLabel[] = [];
   for (const s of spec) {
-    const existing = byNormalized.get(normalizeLabelName(s.name));
-    if (existing && existing.key) matched.push({ spec: s, existing });
+    // An exact name match wins over a normalized one, so a workspace holding
+    // both "🤑 meeting booked" and some other label that merely normalizes the
+    // same way still resolves to the one actually asked for.
+    const existing =
+      byExact.get(s.name.trim().toLowerCase()) ??
+      byNormalized.get(normalizeLabelName(s.name));
+    if (existing) matched.push({ spec: s, existing });
     else missing.push(s);
   }
   return { matched, missing };
