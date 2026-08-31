@@ -29,7 +29,13 @@ import {
   RefreshIcon,
 } from "@/components/icons";
 import { buildSignature, generateBlocks, nameFormsFor } from "./generate";
-import type { ApplyRow, PersonGroup, SignatureFields } from "./types";
+import {
+  UNTAGGED,
+  countByTag,
+  groupInboxes,
+  type InboxLike,
+} from "./filter";
+import type { ApplyRow, SignatureFields } from "./types";
 
 const COMPANY_SLOTS = 3;
 const PHONE_SLOTS = 5;
@@ -80,10 +86,13 @@ export function AddSignaturesTool() {
   );
 
   const [loadingInboxes, setLoadingInboxes] = useState(false);
-  const [groups, setGroups] = useState<PersonGroup[]>([]);
-  const [inboxTotal, setInboxTotal] = useState(0);
-  const [skippedNoName, setSkippedNoName] = useState(0);
-  const [excludedMaster, setExcludedMaster] = useState(0);
+  // The workspace's inboxes as loaded, unfiltered. The tag filter is applied
+  // over these rather than by re-fetching, so switching tags is instant and the
+  // per-tag counts below are the real ones.
+  const [inboxes, setInboxes] = useState<InboxLike[]>([]);
+  const [masterTagIds, setMasterTagIds] = useState<Set<string>>(new Set());
+  const [tags, setTags] = useState<{ id: string; name: string }[]>([]);
+  const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
   const [loadedForWs, setLoadedForWs] = useState<string | null>(null);
   const [toast, setToast] = useState<
     { kind: "success" | "error"; message: string } | null
@@ -192,40 +201,18 @@ export function AddSignaturesTool() {
         fetchTags({ workspace_id: workspaceId }).catch(() => ({ tags: [] })),
       ]);
       const accounts = accountsRes.accounts ?? [];
-      // Tag IDs named "Master Inbox" — those inboxes are always excluded.
-      const masterTagIds = new Set(
-        (tagsRes.tags ?? [])
+      const allTags = tagsRes.tags ?? [];
+      // Tag IDs named "Master Inbox" — those inboxes are always excluded, and
+      // the tag is not offered as a filter since it can never select anything.
+      const masters = new Set(
+        allTags
           .filter((t) => t.name.trim().toLowerCase() === "master inbox")
           .map((t) => t.id)
       );
 
-      const byPerson = new Map<string, PersonGroup>();
-      let skipped = 0;
-      let excluded = 0;
-      for (const a of accounts) {
-        if (a.tags?.some((id) => masterTagIds.has(id))) {
-          excluded += 1;
-          continue;
-        }
-        const first = (a.first_name ?? "").trim();
-        const last = (a.last_name ?? "").trim();
-        if (!first) {
-          skipped += 1;
-          continue;
-        }
-        const key = `${first} ${last}`.trim().toLowerCase();
-        let g = byPerson.get(key);
-        if (!g) {
-          g = { key, first, last, ids: [], emails: [] };
-          byPerson.set(key, g);
-        }
-        if (a.id) g.ids.push(a.id);
-        if (a.email) g.emails.push(a.email);
-      }
-      setGroups(Array.from(byPerson.values()));
-      setInboxTotal(accounts.length);
-      setSkippedNoName(skipped);
-      setExcludedMaster(excluded);
+      setInboxes(accounts);
+      setMasterTagIds(masters);
+      setTags(allTags.filter((t) => !masters.has(t.id)));
       setLoadedForWs(workspaceId);
     } catch (err) {
       setError(errMessage(err));
@@ -235,10 +222,34 @@ export function AddSignaturesTool() {
   }
 
   // --- Derived preview -----------------------------------------------------
-  const namedInboxes = useMemo(
-    () => groups.reduce((s, g) => s + g.ids.length, 0),
-    [groups]
+  // Re-derived whenever the tag filter changes, so the counts, the preview and
+  // the Apply button always describe the same set of inboxes.
+  const result = useMemo(
+    () => groupInboxes(inboxes, { masterTagIds, tagFilter }),
+    [inboxes, masterTagIds, tagFilter]
   );
+  const groups = result.groups;
+  const namedInboxes = result.matched;
+  const skippedNoName = result.skippedNoName;
+  const excludedMaster = result.excludedMaster;
+
+  const counts = useMemo(
+    () => countByTag(inboxes, masterTagIds),
+    [inboxes, masterTagIds]
+  );
+
+  function toggleTag(id: string) {
+    setTagFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    // The previous run's rows describe a different set of inboxes now.
+    setApplyRows([]);
+    setApplied(false);
+  }
+
   const hasTitle = titles.some((t) => t.trim());
   const hasCompany = companies.some((c) => c.trim());
   const canApply =
@@ -392,7 +403,11 @@ export function AddSignaturesTool() {
               disabled={workspacesLoading || workspaces.length === 0}
               onChange={(e) => {
                 setWorkspaceId(e.target.value);
-                setGroups([]);
+                setInboxes([]);
+                setTags([]);
+                // Tag ids are workspace-specific, so carrying a selection over
+                // would filter the next workspace by ids it has never heard of.
+                setTagFilter(new Set());
                 setLoadedForWs(null);
                 setApplyRows([]);
                 setApplied(false);
@@ -489,12 +504,118 @@ export function AddSignaturesTool() {
           </div>
         )}
 
+        {/* Tag filter — the whole workspace unless you narrow it */}
+        {loadedForWs === workspaceId && inboxes.length > 0 && (
+          <div className="border-t border-border pt-4">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                Filter by tag{" "}
+                <span className="text-muted-foreground/70">
+                  {tagFilter.size === 0
+                    ? "(all inboxes)"
+                    : `(${formatNumber(tagFilter.size)} selected · any of them)`}
+                </span>
+              </span>
+              {tagFilter.size > 0 && (
+                <button
+                  type="button"
+                  className="pv-btn-ghost text-xs"
+                  onClick={() => {
+                    setTagFilter(new Set());
+                    setApplyRows([]);
+                    setApplied(false);
+                  }}
+                >
+                  Clear filter
+                </button>
+              )}
+            </div>
+            {tags.length === 0 && counts.untagged === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                This workspace has no tags, so every inbox is included.
+              </p>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTagFilter(new Set());
+                      setApplyRows([]);
+                      setApplied(false);
+                    }}
+                    className={`pv-chip ${
+                      tagFilter.size === 0 ? "pv-chip-active" : "hover:text-foreground"
+                    }`}
+                  >
+                    All inboxes
+                    <span className="tabular-nums opacity-70">
+                      {formatNumber(counts.eligible)}
+                    </span>
+                  </button>
+                  {tags.map((t) => {
+                    const n = counts.byTag.get(t.id) ?? 0;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => toggleTag(t.id)}
+                        disabled={n === 0}
+                        className={`pv-chip ${
+                          tagFilter.has(t.id)
+                            ? "pv-chip-active"
+                            : n === 0
+                              ? "opacity-40"
+                              : "hover:text-foreground"
+                        }`}
+                        title={n === 0 ? "No inboxes carry this tag" : undefined}
+                      >
+                        {t.name}
+                        <span className="tabular-nums opacity-70">
+                          {formatNumber(n)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {counts.untagged > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => toggleTag(UNTAGGED)}
+                      className={`pv-chip ${
+                        tagFilter.has(UNTAGGED)
+                          ? "pv-chip-active"
+                          : "hover:text-foreground"
+                      }`}
+                    >
+                      No tags
+                      <span className="tabular-nums opacity-70">
+                        {formatNumber(counts.untagged)}
+                      </span>
+                    </button>
+                  )}
+                </div>
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  Each number is what that tag would actually update — Master
+                  Inboxes and inboxes with no first name are already left out.
+                  Picking more than one tag includes an inbox carrying{" "}
+                  <strong className="font-medium">any</strong> of them, so the
+                  numbers can overlap rather than add up.
+                </p>
+              </>
+            )}
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
           <p className="text-xs text-muted-foreground">
-            {loadedForWs === workspaceId && groups.length > 0
+            {loadedForWs === workspaceId && inboxes.length > 0
               ? `${formatNumber(namedInboxes)} inboxes · ${formatNumber(
                   groups.length
                 )} people${
+                  result.filteredOut
+                    ? ` · ${formatNumber(result.filteredOut)} filtered out by tag`
+                    : ""
+                }${
                   excludedMaster
                     ? ` · ${formatNumber(excludedMaster)} Master Inbox excluded`
                     : ""
@@ -571,6 +692,21 @@ export function AddSignaturesTool() {
         </div>
       )}
 
+      {/* A filter that matches nothing would otherwise just make the Apply card
+          vanish, which reads as something being broken. */}
+      {loadedForWs === workspaceId &&
+        inboxes.length > 0 &&
+        groups.length === 0 && (
+          <div className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+            <AlertIcon size={16} className="mt-0.5 shrink-0" />
+            <span>
+              {tagFilter.size > 0
+                ? "No inboxes match the selected tags. Clear the filter or pick a different tag."
+                : "No inboxes in this workspace carry a first name, so none can be personalized."}
+            </span>
+          </div>
+        )}
+
       {/* Apply */}
       {loadedForWs === workspaceId && groups.length > 0 && (
         <div className="pv-card border-accent/30 p-4 sm:p-5">
@@ -580,6 +716,17 @@ export function AddSignaturesTool() {
               <strong className="text-foreground">
                 {formatNumber(namedInboxes)} inboxes
               </strong>
+              {tagFilter.size > 0 ? (
+                <>
+                  {" "}
+                  tagged{" "}
+                  <strong className="text-foreground">
+                    {selectedTagNames(tags, tagFilter).join(" or ")}
+                  </strong>
+                </>
+              ) : (
+                <> — the whole workspace</>
+              )}
               . This overwrites their current signature.
             </p>
             <div className="flex items-center gap-2">
@@ -664,6 +811,16 @@ export function AddSignaturesTool() {
 // ---------------------------------------------------------------------------
 // Small pieces
 // ---------------------------------------------------------------------------
+
+/** Names for the selected tag ids, so the Apply card can say what it's hitting. */
+function selectedTagNames(
+  tags: { id: string; name: string }[],
+  filter: ReadonlySet<string>
+): string[] {
+  const names = tags.filter((t) => filter.has(t.id)).map((t) => t.name);
+  if (filter.has(UNTAGGED)) names.push("no tags");
+  return names;
+}
 
 function Toast({
   toast,
