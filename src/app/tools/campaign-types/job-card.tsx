@@ -18,6 +18,7 @@ const STATUS_META: Record<
   CampaignTypesStatus,
   { label: string; className: string }
 > = {
+  queued: { label: "Queued", className: "bg-muted text-muted-foreground" },
   running: { label: "Running", className: "bg-accent/10 text-accent" },
   done: { label: "Done", className: "bg-success/10 text-success" },
   aborted: { label: "Stopped", className: "bg-muted text-muted-foreground" },
@@ -37,6 +38,7 @@ export function JobCard({
   const [open, setOpen] = useState(false);
   const status = STATUS_META[job.status] ?? STATUS_META.error;
   const running = job.status === "running";
+  const queued = job.status === "queued";
 
   // A record persisted by an older build can be missing whole sections. The
   // server migrates what it loads, but normalising here too means a shape this
@@ -62,6 +64,11 @@ export function JobCard({
             className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${status.className}`}
           >
             {running && <Spinner size={10} />} {status.label}
+            {queued && job.queuePosition
+              ? job.queuePosition === 1
+                ? " · next"
+                : ` · ${ordinal(job.queuePosition)} in line`
+              : ""}
           </span>
           <span className="truncate text-sm font-medium">{job.label}</span>
         </div>
@@ -160,21 +167,29 @@ export function JobCard({
         </div>
       )}
 
+      {queued && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Waiting for the job ahead to finish. Nothing has been created for this
+          one yet — jobs run one at a time so the campaigns come out in order.
+        </p>
+      )}
+
       {job.status === "interrupted" && (
         <p className="mt-2 text-xs text-warning">
-          Interrupted by a server restart. Leads already moved are in their new
-          campaigns — start again to finish the rest.
+          {job.startedAt
+            ? "Interrupted by a server restart. Leads already moved are in their new campaigns — start again to finish the rest."
+            : "Still queued when the server restarted, so it never began. Nothing was created — start it again."}
         </p>
       )}
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        {running ? (
+        {running || queued ? (
           <button
             type="button"
             className="pv-btn-ghost"
             onClick={() => onAbort(job.id)}
           >
-            Stop task
+            {queued ? "Cancel" : "Stop task"}
           </button>
         ) : (
           <RemoveJobButton onRemove={() => onRemove(job.id)} />
@@ -389,6 +404,15 @@ function Detail({
 /** Trims a long campaign name down to something that fits a metric tile. */
 function shortName(name: string): string {
   return name.length > 28 ? `${name.slice(0, 27)}…` : name;
+}
+
+/** "2nd", "3rd" — the queue never gets long enough for the teens to matter. */
+function ordinal(n: number): string {
+  const suffix =
+    n % 100 >= 11 && n % 100 <= 13
+      ? "th"
+      : { 1: "st", 2: "nd", 3: "rd" }[n % 10] ?? "th";
+  return `${n}${suffix}`;
 }
 
 function relativeTime(ts: number): string {

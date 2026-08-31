@@ -13,6 +13,7 @@ import {
   ApiClientError,
 } from "@/lib/api-client";
 import { useApiKey } from "@/lib/use-api-key";
+import { formatNumber } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { Spinner, EmptyState } from "@/components/ui";
 import {
@@ -81,7 +82,11 @@ export function CampaignTypesTool() {
     }
   }, [ready, hasKey, loadWorkspaces, refreshJobs]);
 
-  const anyRunning = jobs.some((j) => j.status === "running");
+  // Queued jobs need polling too — nothing else tells the page when one of them
+  // reaches the front and starts.
+  const anyRunning = jobs.some(
+    (j) => j.status === "running" || j.status === "queued"
+  );
   useEffect(() => {
     if (!anyRunning) return;
     const t = setInterval(() => void refreshJobs(), POLL_MS);
@@ -138,7 +143,16 @@ export function CampaignTypesTool() {
   const reusedCount = rows.filter((r) => r.reused).length;
 
   const activeJob = jobs.find((j) => j.status === "running") ?? null;
-  const canStart = !!source && !activeJob && !starting;
+  const queuedCount = jobs.filter((j) => j.status === "queued").length;
+  // Already-pending work no longer blocks Start — it queues behind it. The one
+  // thing that is still refused is the same source campaign twice over, which
+  // the server rejects and the button disables here so it isn't even offered.
+  const alreadyPending = jobs.some(
+    (j) =>
+      (j.status === "running" || j.status === "queued") &&
+      j.sourceCampaignId === sourceId
+  );
+  const canStart = !!source && !alreadyPending && !starting;
 
   // --- Actions -------------------------------------------------------------
   async function handleStart() {
@@ -155,7 +169,11 @@ export function CampaignTypesTool() {
         names,
         activate,
       });
-      setToast("Job started — you can close this tab");
+      setToast(
+        activeJob || queuedCount > 0
+          ? "Added to the queue — it starts when the ones ahead finish"
+          : "Job started — you can close this tab"
+      );
       setTimeout(() => setToast(null), 5000);
       await refreshJobs();
     } catch (err) {
@@ -308,14 +326,27 @@ export function CampaignTypesTool() {
             onClick={handleStart}
           >
             {starting ? <Spinner /> : <LayersIcon size={16} />}
-            Start
+            {activeJob || queuedCount > 0 ? "Add to queue" : "Start"}
           </button>
-          {activeJob && (
-            <span className="text-xs text-muted-foreground">
-              A job is already running — it has to finish before another can
-              start.
+          {alreadyPending ? (
+            <span className="text-xs text-warning">
+              This campaign is already {activeJob?.sourceCampaignId === sourceId
+                ? "being processed"
+                : "in the queue"}
+              .
             </span>
-          )}
+          ) : activeJob ? (
+            <span className="text-xs text-muted-foreground">
+              A job is running
+              {queuedCount > 0
+                ? ` and ${formatNumber(queuedCount)} more ${
+                    queuedCount === 1 ? "is" : "are"
+                  } queued`
+                : ""}
+              . This one waits its turn — jobs run one at a time, in the order
+              you start them, so the campaigns come out in order.
+            </span>
+          ) : null}
         </div>
       </div>
 

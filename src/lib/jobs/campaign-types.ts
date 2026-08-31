@@ -42,8 +42,15 @@ import { MAX_STORED_ERRORS } from "@/lib/jobs/campaign-types-types";
 // Runs in the Node process so the work survives the tab closing, and persists
 // to disk so a job can be read back later. The API key is memory-only.
 //
-// ONE JOB AT A TIME per API key: the phases create campaigns and move leads out
-// of a live one, and two overlapping runs would duplicate both.
+// ONE JOB AT A TIME per API key, with the rest QUEUED behind it. The phases
+// create campaigns and move leads out of a live one, so two overlapping runs
+// would duplicate both and interleave the campaigns they produce. Starting a
+// second job while one is going therefore queues it rather than refusing it —
+// the run order is the order you pressed Start in.
+//
+// The queue is per API key and covers every workspace, not one lane each. Two
+// workspaces running at once is safe in principle, but both would be drawing on
+// the same Plusvibe rate limit, so they are taken in turn.
 
 const JOBS_BASE = process.env.JOBS_DIR || path.join(process.cwd(), ".jobs-data");
 const JOBS_DIR = path.join(JOBS_BASE, "campaign-types");
@@ -60,7 +67,12 @@ interface JobMeta {
 
 const records = new Map<string, CampaignTypesJob>();
 const meta = new Map<string, JobMeta>();
+/** Ids waiting to run, oldest first, across every API key. */
+const queue: string[] = [];
 let loaded = false;
+
+/** Stops one runaway page from stacking up an unbounded backlog. */
+const MAX_QUEUED = 25;
 
 // --- Persistence -----------------------------------------------------------
 
@@ -93,14 +105,16 @@ async function persist(id: string) {
 }
 
 function flushRunningSync() {
-  if (![...records.values()].some((r) => r.status === "running")) return;
+  const live = (r: CampaignTypesJob) =>
+    r.status === "running" || r.status === "queued";
+  if (![...records.values()].some(live)) return;
   try {
     mkdirSync(JOBS_DIR, { recursive: true });
   } catch {
     return;
   }
   for (const [id, rec] of records) {
-    if (rec.status !== "running") continue;
+    if (!live(rec)) continue;
     const m = meta.get(id);
     if (!m) continue;
     rec.status = "interrupted";
@@ -247,7 +261,11 @@ async function loadOnce() {
         };
         const fingerprint = parsed.fingerprint ?? "";
         delete (parsed as { fingerprint?: string }).fingerprint;
-        if (parsed.status === "running") {
+        // A queued job is as dead as a running one across a restart: the API
+        // key it needs lived only in memory, so it can never come off the
+        // queue. It's marked interrupted rather than left to sit as "queued"
+        // forever behind a queue that no longer exists.
+        if (parsed.status === "running" || parsed.status === "queued") {
           parsed.status = "interrupted";
           parsed.updatedAt = parsed.updatedAt || Date.now();
         }
@@ -264,24 +282,82 @@ async function loadOnce() {
 
 // --- Creation --------------------------------------------------------------
 
-export class ActiveJobError extends Error {
-  constructor(readonly activeJobId: string) {
-    super(
-      "A Create All Campaign Types job is already running. Wait for it to finish (or stop it) before starting another — two runs over the same campaign would duplicate it twice and move the same leads twice."
-    );
-    this.name = "ActiveJobError";
+/** Raised when a job can't even be queued. */
+export class QueueRejectedError extends Error {
+  constructor(message: string, readonly existingJobId?: string) {
+    super(message);
+    this.name = "QueueRejectedError";
   }
+}
+
+function runningIdFor(fp: string): string | null {
+  for (const [id, m] of meta) {
+    if (m.fingerprint !== fp) continue;
+    if (records.get(id)?.status === "running") return id;
+  }
+  return null;
 }
 
 export async function activeJob(apiKey: string): Promise<CampaignTypesJob | null> {
   await loadOnce();
-  const fp = fingerprintKey(apiKey);
-  for (const [id, m] of meta) {
-    if (m.fingerprint !== fp) continue;
-    const rec = records.get(id);
-    if (rec?.status === "running") return rec;
+  const id = runningIdFor(fingerprintKey(apiKey));
+  return id ? (records.get(id) ?? null) : null;
+}
+
+function removeFromQueue(id: string) {
+  const i = queue.indexOf(id);
+  if (i !== -1) queue.splice(i, 1);
+}
+
+/**
+ * Position of a queued job, 1 = next to run.
+ *
+ * Counted within the API key's own jobs, so someone else's backlog never shows
+ * up in your "3rd in line".
+ */
+function positionOf(id: string, fp: string): number | undefined {
+  let n = 0;
+  for (const qid of queue) {
+    if (meta.get(qid)?.fingerprint !== fp) continue;
+    n += 1;
+    if (qid === id) return n;
   }
-  return null;
+  return undefined;
+}
+
+/**
+ * Starts the next queued job for this API key, if nothing of theirs is running.
+ *
+ * Called after every start and at the end of every run, so the queue drains on
+ * its own. Entries that were cancelled or deleted while waiting are skipped —
+ * they're still in the array, just no longer runnable.
+ */
+function pump(fp: string) {
+  if (runningIdFor(fp)) return;
+
+  while (true) {
+    const idx = queue.findIndex((id) => meta.get(id)?.fingerprint === fp);
+    if (idx === -1) return;
+    const id = queue.splice(idx, 1)[0];
+
+    const rec = records.get(id);
+    const m = meta.get(id);
+    // Deleted, cancelled, or missing its key — not runnable, take the next.
+    if (!rec || !m || rec.status !== "queued" || m.aborted || !m.apiKey) {
+      continue;
+    }
+
+    rec.status = "running";
+    rec.phase = "sorting";
+    rec.phaseStates.sorting = "running";
+    rec.startedAt = Date.now();
+    rec.updatedAt = rec.startedAt;
+    void persist(id);
+    // Draining continues from here: whatever happens to this run, the next one
+    // is offered its turn.
+    void runJob(id).finally(() => pump(fp));
+    return;
+  }
 }
 
 const CREATED_ROLES: CreatedRole[] = ["blue", "optOut", "blueOptOut"];
@@ -292,9 +368,34 @@ export async function createJob(
   payload: CampaignTypesStartPayload
 ): Promise<string> {
   await loadOnce();
+  const fp = fingerprintKey(apiKey);
 
-  const running = await activeJob(apiKey);
-  if (running) throw new ActiveJobError(running.id);
+  // Queueing the SAME source campaign twice is almost always a double-click or
+  // a forgotten earlier press. The second run would find the three copies
+  // already there and adopt them, so it wouldn't corrupt anything — but it
+  // would sort and move the same leads again for no reason, and read as a
+  // second batch in the list. Re-running after one finishes is still allowed;
+  // this only blocks a duplicate that hasn't had its turn yet.
+  for (const [otherId, m] of meta) {
+    if (m.fingerprint !== fp) continue;
+    const other = records.get(otherId);
+    if (!other) continue;
+    if (other.status !== "queued" && other.status !== "running") continue;
+    if (other.sourceCampaignId !== payload.sourceCampaignId) continue;
+    throw new QueueRejectedError(
+      other.status === "running"
+        ? `"${other.sourceCampaignName}" is being processed right now. Wait for it to finish before running it again.`
+        : `"${other.sourceCampaignName}" is already waiting in the queue.`,
+      otherId
+    );
+  }
+
+  const waiting = queue.filter((id) => meta.get(id)?.fingerprint === fp).length;
+  if (waiting >= MAX_QUEUED) {
+    throw new QueueRejectedError(
+      `The queue is full (${MAX_QUEUED} waiting). Let some finish before adding more.`
+    );
+  }
 
   const id = randomUUID();
   const now = Date.now();
@@ -330,16 +431,20 @@ export async function createJob(
   const record: CampaignTypesJob = {
     id,
     label: payload.sourceCampaignName,
-    status: "running",
+    // Always queued to begin with, even when nothing else is going: pump()
+    // starts it in the same tick, so there is one path into a run rather than
+    // two that could drift apart.
+    status: "queued",
     phase: "sorting",
     phaseStates: {
-      sorting: "running",
+      sorting: "pending",
       duplicating: "pending",
       moving: "pending",
       activating: payload.activate === false ? "skipped" : "pending",
     },
     createdAt: now,
     updatedAt: now,
+    workspaceId: payload.workspaceId,
     workspaceName: payload.workspaceName,
     sourceCampaignId: payload.sourceCampaignId,
     sourceCampaignName: payload.sourceCampaignName,
@@ -359,10 +464,11 @@ export async function createJob(
   };
 
   records.set(id, record);
-  meta.set(id, { fingerprint: fingerprintKey(apiKey), apiKey, payload, aborted: false });
+  meta.set(id, { fingerprint: fp, apiKey, payload, aborted: false });
+  queue.push(id);
 
   await persist(id);
-  void runJob(id);
+  pump(fp);
   return id;
 }
 
@@ -712,15 +818,27 @@ async function runJob(id: string) {
 
 // --- Query / control -------------------------------------------------------
 
+/**
+ * Adds the live queue position, which isn't stored on the record.
+ *
+ * Returned as a copy so the transient number never reaches the persisted file,
+ * where it would be stale the moment anything ahead of it finished.
+ */
+function withPosition(rec: CampaignTypesJob, fp: string): CampaignTypesJob {
+  if (rec.status !== "queued") return rec;
+  return { ...rec, queuePosition: positionOf(rec.id, fp) };
+}
+
 export async function getJob(
   apiKey: string,
   id: string
 ): Promise<CampaignTypesJob | null> {
   await loadOnce();
+  const fp = fingerprintKey(apiKey);
   const rec = records.get(id);
   const m = meta.get(id);
-  if (!rec || !m || m.fingerprint !== fingerprintKey(apiKey)) return null;
-  return rec;
+  if (!rec || !m || m.fingerprint !== fp) return null;
+  return withPosition(rec, fp);
 }
 
 export async function listJobs(apiKey: string): Promise<CampaignTypesJob[]> {
@@ -730,7 +848,7 @@ export async function listJobs(apiKey: string): Promise<CampaignTypesJob[]> {
   for (const [id, m] of meta) {
     if (m.fingerprint !== fp) continue;
     const rec = records.get(id);
-    if (rec) out.push(rec);
+    if (rec) out.push(withPosition(rec, fp));
   }
   out.sort((a, b) => b.createdAt - a.createdAt);
   return out;
@@ -742,6 +860,18 @@ export async function abortJob(apiKey: string, id: string): Promise<boolean> {
   const m = meta.get(id);
   if (!rec || !m || m.fingerprint !== fingerprintKey(apiKey)) return false;
   m.aborted = true;
+  // A queued job has no runner watching the aborted flag, so it is finished off
+  // here. Nothing has been created for it, so this is a clean cancel rather
+  // than a half-done run.
+  if (rec.status === "queued") {
+    removeFromQueue(id);
+    rec.status = "aborted";
+    rec.phase = "finished";
+    rec.updatedAt = Date.now();
+    m.apiKey = undefined;
+    m.payload = undefined;
+    await persist(id);
+  }
   return true;
 }
 
@@ -751,6 +881,7 @@ export async function deleteJob(apiKey: string, id: string): Promise<boolean> {
   const m = meta.get(id);
   if (!rec || !m || m.fingerprint !== fingerprintKey(apiKey)) return false;
   m.aborted = true;
+  removeFromQueue(id);
   records.delete(id);
   meta.delete(id);
   try {

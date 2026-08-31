@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
-import { createJob, ActiveJobError } from "@/lib/jobs/campaign-types";
+import { createJob, QueueRejectedError } from "@/lib/jobs/campaign-types";
 import type { CampaignTypesStartPayload } from "@/lib/jobs/campaign-types-types";
 import { normalizeName } from "@/lib/campaign-types/match";
 
@@ -69,9 +69,11 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ jobId });
   } catch (err) {
-    if (err instanceof ActiveJobError) {
+    // Starting while a job runs is normal now — it queues. A 409 here means the
+    // job could not even be queued (a duplicate, or a full queue).
+    if (err instanceof QueueRejectedError) {
       return NextResponse.json(
-        { error: err.message, activeJobId: err.activeJobId },
+        { error: err.message, existingJobId: err.existingJobId },
         { status: 409 }
       );
     }

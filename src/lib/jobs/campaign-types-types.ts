@@ -13,6 +13,8 @@
 export const MAX_STORED_ERRORS = 50;
 
 export type CampaignTypesStatus =
+  /** Accepted and waiting its turn — nothing has been created for it yet. */
+  | "queued"
   | "running"
   | "done"
   | "aborted"
@@ -119,7 +121,15 @@ export interface CampaignTypesJob {
   phaseStates: Record<Exclude<CampaignTypesPhase, "finished">, PhaseState>;
   createdAt: number;
   updatedAt: number;
+  /** When the job left the queue and actually began. Unset while queued. */
+  startedAt?: number;
+  /**
+   * 1 = next to run. Set only while queued, and computed per request rather
+   * than stored — it changes as the jobs ahead finish.
+   */
+  queuePosition?: number;
 
+  workspaceId?: string;
   workspaceName: string;
   sourceCampaignId: string;
   sourceCampaignName: string;
