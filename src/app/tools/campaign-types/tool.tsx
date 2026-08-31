@@ -23,7 +23,7 @@ import {
   CheckIcon,
 } from "@/components/icons";
 import { deriveNames } from "@/lib/campaign-types/names";
-import { normalizeName } from "@/lib/campaign-types/match";
+import { isArchived, normalizeName } from "@/lib/campaign-types/match";
 import { JobCard } from "./job-card";
 
 const POLL_MS = 2000;
@@ -124,23 +124,38 @@ export function CampaignTypesTool() {
   // Names already taken in this workspace. The job adopts an existing campaign
   // rather than making a second one under the same name, so a re-run after an
   // interruption is safe — this shows that before it happens.
+  //
+  // Archived ones are skipped, matching what the run does: their name is free
+  // again, so the preview must not promise a reuse the run won't make.
   const existing = useMemo(() => {
     const map = new Map<string, CampaignSummary>();
     for (const c of parents) {
+      if (isArchived(c)) continue;
       const key = normalizeName(c.name);
       if (!map.has(key)) map.set(key, c);
     }
     return map;
   }, [parents]);
 
+  // A name whose only holder is archived: the run makes a fresh campaign under
+  // it, which is worth saying plainly rather than showing nothing.
+  const archivedNames = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of parents) if (isArchived(c)) set.add(normalizeName(c.name));
+    for (const key of existing.keys()) set.delete(key);
+    return set;
+  }, [parents, existing]);
+
   const rows = names
     ? (["blue", "optOut", "blueOptOut"] as const).map((role) => ({
         role,
         name: names[role],
         reused: existing.get(normalizeName(names[role])) ?? null,
+        replacesArchived: archivedNames.has(normalizeName(names[role])),
       }))
     : [];
   const reusedCount = rows.filter((r) => r.reused).length;
+  const archivedCount = rows.filter((r) => r.replacesArchived).length;
 
   const activeJob = jobs.find((j) => j.status === "running") ?? null;
   const queuedCount = jobs.filter((j) => j.status === "queued").length;
@@ -279,11 +294,24 @@ export function CampaignTypesTool() {
                         : "bg-success/10 text-success"
                     }`}
                   >
-                    {r.reused ? "already exists — will be reused" : "will be created"}
+                    {r.reused
+                      ? "already exists — will be reused"
+                      : r.replacesArchived
+                        ? "replaces an archived one — will be created"
+                        : "will be created"}
                   </span>
                 </div>
               ))}
             </div>
+            {archivedCount > 0 && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                {archivedCount === 1 ? "One of these names is" : "Some of these names are"}{" "}
+                held only by an archived campaign. Archived campaigns can&apos;t
+                take leads, so {archivedCount === 1 ? "a fresh one is" : "fresh ones are"}{" "}
+                created under the same name and the archived{" "}
+                {archivedCount === 1 ? "one is" : "ones are"} left alone.
+              </p>
+            )}
             {reusedCount > 0 && (
               <p className="mt-3 text-xs text-muted-foreground">
                 {reusedCount === 1 ? "A campaign" : `${reusedCount} campaigns`}{" "}

@@ -22,6 +22,47 @@ export interface CampaignLike {
   id: string;
   name: string;
   campaignType?: string;
+  /** Plusvibe's status, e.g. ACTIVE / DRAFTED / PAUSED / ARCHIVED. */
+  status?: string;
+}
+
+/**
+ * Archived campaigns can't take leads — `/lead/add` refuses with "Campaign is
+ * archived" — and Plusvibe hides them in its own UI while still returning them
+ * from /campaign/list-all. So a name belonging to one is, for our purposes, a
+ * free name.
+ */
+export function isArchived(campaign: { status?: string }): boolean {
+  return (campaign.status ?? "").trim().toUpperCase() === "ARCHIVED";
+}
+
+/**
+ * Names already taken in the workspace, mapped to the campaign that holds them.
+ *
+ * This is what makes a repeated or resumed run safe: a name already here is
+ * adopted rather than duplicated a second time.
+ *
+ * Archived campaigns are deliberately left out. Adopting one looks like a
+ * successful reuse and then fails at the first lead — the run gets as far as
+ * creating and editing the copies, reports "3 / 3 campaigns · 1 reused", and
+ * dies on "Campaign is archived" with nothing moved. Treating the name as free
+ * makes a new campaign under it instead, which is what archiving the old one
+ * was for.
+ *
+ * A live campaign always wins over an archived one with the same name, since
+ * the archived ones never enter the map at all.
+ */
+export function buildReuseIndex(
+  campaigns: CampaignLike[]
+): Map<string, string> {
+  const byName = new Map<string, string>();
+  for (const c of campaigns) {
+    if (c.campaignType === "subseq") continue;
+    if (isArchived(c)) continue;
+    const key = normalizeName(c.name);
+    if (key && c.id && !byName.has(key)) byName.set(key, c.id);
+  }
+  return byName;
 }
 
 export interface RoleMatch {

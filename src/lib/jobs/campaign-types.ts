@@ -16,7 +16,7 @@ import { resolveLeadEsps } from "@/lib/campaign-types/resolve-esp";
 import { planSplit } from "@/lib/campaign-types/split";
 import { applyOptOutToCampaign } from "@/lib/campaign-types/apply-opt-out";
 import { duplicateCampaign, launchCampaign } from "@/lib/campaign-types/duplicate";
-import { normalizeName } from "@/lib/campaign-types/match";
+import { buildReuseIndex, normalizeName } from "@/lib/campaign-types/match";
 import type {
   ActivationTarget,
   CampaignRole,
@@ -563,13 +563,12 @@ async function runJob(id: string) {
     // Existing names in the workspace, so a resumed or repeated run adopts the
     // copies it already made instead of creating a second set under the same
     // names. Duplication is not idempotent on its own.
-    const existingByName = new Map<string, string>();
+    //
+    // Archived campaigns are excluded — see buildReuseIndex. Adopting one is
+    // silently fatal: it reports as a reuse and then can't take a single lead.
+    let existingByName = new Map<string, string>();
     try {
-      for (const c of await listCampaigns(apiKey, workspaceId)) {
-        if (c.campaignType === "subseq") continue;
-        const key = normalizeName(c.name);
-        if (!existingByName.has(key)) existingByName.set(key, c.id);
-      }
+      existingByName = buildReuseIndex(await listCampaigns(apiKey, workspaceId));
     } catch (err) {
       // Without the list we can't tell a resumed run from a fresh one, and
       // duplicating blind could leave a second set of campaigns behind.
