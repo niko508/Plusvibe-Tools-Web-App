@@ -677,6 +677,45 @@ export function addLeadLabelToWorkspaces(
   });
 }
 
+export interface BulkFieldResult {
+  workspaceId: string;
+  workspaceName: string;
+  outcome: "created" | "already" | "conflict" | "error";
+  existingName?: string;
+  existingDefault?: string;
+  reason?: string;
+}
+
+export interface BulkFieldResponse {
+  dryRun: boolean;
+  name: string;
+  normalizedName: string;
+  defaultValue?: string;
+  results: BulkFieldResult[];
+  totals: {
+    created: number;
+    already: number;
+    conflict: number;
+    errors: number;
+  };
+}
+
+export function addFieldToWorkspaces(
+  params: {
+    workspaces: { id: string; name: string }[];
+    name: string;
+    defaultValue?: string;
+    dryRun?: boolean;
+  },
+  signal?: AbortSignal
+) {
+  return request<BulkFieldResponse>("/api/bulk-actions/additional-fields", {
+    method: "POST",
+    body: params,
+    signal,
+  });
+}
+
 // --- Add Signatures presets --------------------------------------------------
 
 export interface SignaturePreset {

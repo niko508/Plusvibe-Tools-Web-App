@@ -17,10 +17,12 @@ import {
   MailIcon,
   TagIcon,
   TrashIcon,
+  LayersIcon,
 } from "@/components/icons";
 import { TOOL_COLORS, type ToolColor } from "@/lib/tools";
 import { AddWebhook } from "./add-webhook";
 import { AddLabel } from "./add-label";
+import { AddField } from "./add-field";
 
 // The container for actions that run across many workspaces at once.
 //
@@ -53,6 +55,15 @@ const ACTIONS: BulkAction[] = [
       "Create the same custom lead label — emoji and all — in every selected workspace, skipping any that already have it.",
     color: "amber",
     Icon: TagIcon,
+    ready: true,
+  },
+  {
+    id: "add-field",
+    name: "Add Additional Field",
+    description:
+      "Create the same custom lead field — with an optional default — in every selected workspace, skipping any that already have it.",
+    color: "cyan",
+    Icon: LayersIcon,
     ready: true,
   },
   {
@@ -249,6 +260,14 @@ export function BulkActionsTool() {
 
           {action === "add-label" && (
             <AddLabel
+              workspaces={workspaces}
+              selected={selected}
+              loading={loading}
+            />
+          )}
+
+          {action === "add-field" && (
+            <AddField
               workspaces={workspaces}
               selected={selected}
               loading={loading}
