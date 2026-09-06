@@ -18,10 +18,12 @@ export default function CopySectionsPage() {
             Change Email Copy Sections
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground sm:text-base">
-            Pick a campaign and a step, then change one thing across all of its
-            variations at once — find and replace a sentence or a variable, or
-            swap out the subject line, the opening paragraph or the sign-off.
-            Preview shows every variation before anything is written.
+            Change one thing across many variations at once — find and replace
+            a sentence or a variable, or swap out the subject line, the opening
+            paragraph or the sign-off. Work on one campaign and step with a
+            per-variation preview, or run a find &amp; replace across the
+            campaigns you tick, or across every workspace, as a background job
+            that shows what would change before you confirm.
           </p>
         </div>
         <CopySectionsTool />
