@@ -4,6 +4,7 @@ import { getApiKey } from "@/lib/api-key";
 import type { WebhookConfig } from "@/lib/webhooks/config";
 import type { Sentiment } from "@/lib/lead-labels/custom-label";
 import type { CopyEdit } from "@/lib/copy-sections/edit";
+import type { TagInput, TagSpec } from "@/lib/tags/bulk-tags";
 import type { CopyReplaceJob, CopyReplaceStartPayload } from "@/lib/jobs/copy-replace-types";
 import type { FollowUpTemplate } from "@/lib/follow-ups/templates";
 import type {
@@ -145,6 +146,37 @@ export function fetchCampaigns(
     `/api/plusvibe/campaigns?${qs.toString()}`,
     { signal }
   );
+}
+
+// --- Add Tags -----------------------------------------------------------------
+
+export interface BulkTagResult {
+  workspaceId: string;
+  workspaceName: string;
+  tag: string;
+  outcome: "created" | "already" | "error";
+  existingName?: string;
+  tagId?: string;
+  reason?: string;
+}
+
+export interface BulkTagsResponse {
+  dryRun: boolean;
+  tags: TagSpec[];
+  duplicatesDropped: number;
+  results: BulkTagResult[];
+  totals: { created: number; already: number; errors: number };
+}
+
+export function addTagsToWorkspaces(
+  params: {
+    workspaces: { id: string; name: string }[];
+    tags: TagInput[];
+    dryRun?: boolean;
+  },
+  signal?: AbortSignal
+) {
+  return request<BulkTagsResponse>("/api/bulk-actions/tags", { method: "POST", body: params, signal });
 }
 
 // --- Bulk Find & Replace Copy ------------------------------------------------

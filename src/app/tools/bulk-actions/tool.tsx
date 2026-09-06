@@ -25,6 +25,7 @@ import { AddWebhook } from "./add-webhook";
 import { AddLabel } from "./add-label";
 import { AddField } from "./add-field";
 import { PauseCampaigns } from "./pause-campaigns";
+import { AddTags } from "./add-tags";
 import { WorkspacePicker } from "@/components/workspace-picker";
 
 // The container for actions that run across many workspaces at once.
@@ -67,6 +68,15 @@ const ACTIONS: BulkAction[] = [
       "Create the same custom lead field — with an optional default — in every selected workspace, skipping any that already have it.",
     color: "cyan",
     Icon: LayersIcon,
+    ready: true,
+  },
+  {
+    id: "add-tags",
+    name: "Add Tags",
+    description:
+      "Create one or more tags — name, colour, optional description — in every selected workspace, skipping any it already has.",
+    color: "emerald",
+    Icon: TagIcon,
     ready: true,
   },
   {
@@ -182,6 +192,10 @@ export function BulkActionsTool() {
               selected={selected}
               loading={loading}
             />
+          )}
+
+          {action === "add-tags" && (
+            <AddTags workspaces={workspaces} selected={selected} loading={loading} />
           )}
 
           {action === "pause-campaigns" && (
