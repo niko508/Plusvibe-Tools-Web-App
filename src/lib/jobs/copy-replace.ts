@@ -155,9 +155,13 @@ export async function createJob(apiKey: string, payload: CopyReplaceStartPayload
   const id = randomUUID();
   const now = Date.now();
   const names = payload.workspaces.map((w) => w.name.trim()).filter(Boolean);
+  const picked = payload.workspaces.length === 1 ? payload.workspaces[0].campaignIds : undefined;
+  const scope = picked
+    ? `${picked.length} campaign${picked.length === 1 ? "" : "s"} in ${names[0] ?? "1 workspace"}`
+    : `${names.length} workspace${names.length === 1 ? "" : "s"}`;
   const record: CopyReplaceJob = {
     id,
-    label: `"${payload.edit.find}" → "${payload.edit.replace}" · ${names.length} workspace${names.length === 1 ? "" : "s"}`,
+    label: `"${payload.edit.find}" → "${payload.edit.replace}" · ${scope}`,
     status: "scanning",
     createdAt: now,
     updatedAt: now,
@@ -167,6 +171,7 @@ export async function createJob(apiKey: string, payload: CopyReplaceStartPayload
       workspaceId: w.id,
       workspaceName: w.name,
       state: "pending" as const,
+      campaignIds: w.campaignIds && w.campaignIds.length > 0 ? w.campaignIds : undefined,
       campaigns: [],
       skippedOutOfScope: 0,
     })),
@@ -231,8 +236,12 @@ async function runScan(id: string) {
         continue;
       }
 
-      const inScope = list.filter((c) => IN_SCOPE.has(c.status.toUpperCase()));
-      ws.skippedOutOfScope = list.length - inScope.length;
+      // A hand-picked list narrows to exactly those campaigns; the status rule
+      // still applies, so one archived since it was picked is left alone.
+      const picked = ws.campaignIds ? new Set(ws.campaignIds) : null;
+      const candidates = picked ? list.filter((c) => picked.has(c.id)) : list;
+      const inScope = candidates.filter((c) => IN_SCOPE.has(c.status.toUpperCase()));
+      ws.skippedOutOfScope = candidates.length - inScope.length;
       ws.campaigns = inScope.map((c) => ({
         campaignId: c.id,
         campaignName: c.name,

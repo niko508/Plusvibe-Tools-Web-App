@@ -15,12 +15,18 @@ export async function POST(request: Request) {
   try {
     const apiKey = resolveApiKey(request);
     const body = (await request.json()) as {
-      workspaces?: { id?: string; name?: string }[];
+      workspaces?: { id?: string; name?: string; campaignIds?: unknown }[];
       edit?: unknown;
       includeSubsequences?: boolean;
     };
     const workspaces = (body.workspaces ?? [])
-      .map((w) => ({ id: String(w?.id ?? ""), name: String(w?.name ?? "") }))
+      .map((w) => ({
+        id: String(w?.id ?? ""),
+        name: String(w?.name ?? ""),
+        campaignIds: Array.isArray(w?.campaignIds)
+          ? w.campaignIds.map(String).filter(Boolean).slice(0, 1000)
+          : undefined,
+      }))
       .filter((w) => w.id);
     if (workspaces.length === 0) {
       return NextResponse.json({ error: "Pick at least one workspace." }, { status: 400 });

@@ -23,6 +23,8 @@ import {
   PenIcon,
   RefreshIcon,
 } from "@/components/icons";
+import { WorkspacePicker } from "@/components/workspace-picker";
+import { BulkReplace } from "./bulk";
 
 // One edit, every variation of one step. The preview is the whole point: it
 // shows exactly which variations change and which don't (and why), before a
@@ -62,6 +64,11 @@ export function CopySectionsTool() {
   const [detail, setDetail] = useState<CampaignDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [step, setStep] = useState<number | null>(null);
+
+  const [scope, setScope] = useState<"one" | "some" | "all">("one");
+  const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
+  // "some": campaigns ticked within the single selected workspace.
+  const [pickedCampaigns, setPickedCampaigns] = useState<Set<string>>(new Set());
 
   const [mode, setMode] = useState<Mode>("replace");
   const [find, setFind] = useState("");
@@ -113,6 +120,7 @@ export function CopySectionsTool() {
     setCampaignsLoading(true);
     setCampaigns(null);
     setCampaignId("");
+    setPickedCampaigns(new Set());
     setDetail(null);
     setStep(null);
     setPreview(null);
@@ -245,6 +253,139 @@ export function CopySectionsTool() {
 
   return (
     <div className="space-y-5">
+      {/* Scope: one campaign and step, or everything. The bulk scope is a
+          background job with a scan-then-confirm stop; the single scope is
+          preview-then-apply on the spot. Same matching engine underneath. */}
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => setScope("one")}
+          className={`rounded-xl border px-3 py-2 text-sm ${scope === "one" ? "border-accent bg-accent/10 font-medium" : "border-border hover:bg-muted/50"}`}
+        >
+          One campaign, one step
+        </button>
+        <button
+          type="button"
+          onClick={() => setScope("some")}
+          className={`rounded-xl border px-3 py-2 text-sm ${scope === "some" ? "border-accent bg-accent/10 font-medium" : "border-border hover:bg-muted/50"}`}
+        >
+          One workspace, pick campaigns
+        </button>
+        <button
+          type="button"
+          onClick={() => setScope("all")}
+          className={`rounded-xl border px-3 py-2 text-sm ${scope === "all" ? "border-accent bg-accent/10 font-medium" : "border-border hover:bg-muted/50"}`}
+        >
+          All workspaces &amp; campaigns
+        </button>
+      </div>
+
+      {scope === "some" && (
+        <>
+          <div className="pv-card space-y-4 p-4 sm:p-5">
+            <div className="max-w-md">
+              <label className="mb-1.5 block text-sm font-medium">Workspace</label>
+              <Select value={workspaceId} disabled={workspacesLoading || workspaces.length === 0} onChange={setWorkspaceId}>
+                {workspacesLoading && <option>Loading…</option>}
+                {!workspacesLoading &&
+                  workspaces.map((w) => (
+                    <option key={w._id} value={w._id}>
+                      {w.name}
+                    </option>
+                  ))}
+              </Select>
+            </div>
+            <div>
+              <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-sm font-medium">
+                  Campaigns{" "}
+                  <span className="font-normal text-muted-foreground">
+                    · {formatNumber(pickedCampaigns.size)} of {formatNumber(visible.length)} ticked
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  className="pv-btn-ghost text-xs"
+                  disabled={visible.length === 0}
+                  onClick={() =>
+                    setPickedCampaigns(
+                      visible.every((c) => pickedCampaigns.has(c.id)) ? new Set() : new Set(visible.map((c) => c.id))
+                    )
+                  }
+                >
+                  {visible.length > 0 && visible.every((c) => pickedCampaigns.has(c.id)) ? "Clear all" : "Select all"}
+                </button>
+              </div>
+              {campaignsLoading ? (
+                <div className="h-20 animate-pulse rounded-xl bg-muted" />
+              ) : visible.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No active or paused campaigns in this workspace.</p>
+              ) : (
+                <div className="pv-scroll max-h-64 overflow-y-auto rounded-xl border border-border">
+                  <div className="grid gap-px sm:grid-cols-2">
+                    {visible.map((c) => (
+                      <label key={c.id} className="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs transition hover:bg-muted/50">
+                        <input
+                          type="checkbox"
+                          checked={pickedCampaigns.has(c.id)}
+                          onChange={() =>
+                            setPickedCampaigns((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(c.id)) next.delete(c.id);
+                              else next.add(c.id);
+                              return next;
+                            })
+                          }
+                        />
+                        <span className="truncate" title={c.name}>
+                          {c.name}
+                        </span>
+                        <span className="ml-auto shrink-0 text-muted-foreground">{BUCKET_LABEL[statusBucket(c.status)]}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                Active and paused campaigns only
+                {campaigns && campaigns.length > visible.length
+                  ? ` · ${formatNumber(campaigns.length - visible.length)} draft, completed or archived not shown`
+                  : ""}
+              </p>
+            </div>
+          </div>
+          <BulkReplace
+            workspaces={workspaces}
+            selected={new Set(workspaceId ? [workspaceId] : [])}
+            loading={workspacesLoading}
+            initialFind={mode === "replace" ? find : undefined}
+            initialReplace={mode === "replace" ? replace : undefined}
+            campaignFilter={{ workspaceId, campaignIds: [...pickedCampaigns] }}
+          />
+        </>
+      )}
+
+      {scope === "all" && (
+        <>
+          <WorkspacePicker
+            workspaces={workspaces}
+            selected={bulkSelected}
+            onChange={setBulkSelected}
+            loading={workspacesLoading}
+            onReload={loadWorkspaces}
+          />
+          <BulkReplace
+            workspaces={workspaces}
+            selected={bulkSelected}
+            loading={workspacesLoading}
+            initialFind={mode === "replace" ? find : undefined}
+            initialReplace={mode === "replace" ? replace : undefined}
+          />
+        </>
+      )}
+
+      {scope === "one" && (
+      <>
       {/* Workspace + campaign */}
       <div className="pv-card space-y-4 p-4 sm:p-5">
         <div className="flex flex-col gap-4 sm:flex-row">
@@ -290,6 +431,7 @@ export function CopySectionsTool() {
           </button>
         </div>
       </div>
+
 
       {error && (
         <div className="flex items-start gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
@@ -495,6 +637,8 @@ export function CopySectionsTool() {
       )}
 
       {shown && <ResultCard r={shown} stale={previewStale && !result} />}
+      </>
+      )}
 
       {toast && (
         <div className="fixed bottom-5 right-5 z-50 animate-fade-in">

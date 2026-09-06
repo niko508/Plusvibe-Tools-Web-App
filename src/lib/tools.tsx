@@ -158,9 +158,9 @@ export const TOOLS: Tool[] = [
   {
     slug: "copy-sections",
     name: "Change Email Copy Sections",
-    tagline: "Change one thing across every variation of a step",
+    tagline: "Change one thing across every variation — one step, or every campaign",
     description:
-      "Pick a campaign and a step, then find and replace a sentence or a variable, or swap out the subject line, the opening paragraph or the sign-off — across all of the step's variations at once, with a preview of every variation before anything is written.",
+      "Find and replace a sentence or a variable, or swap out the subject line, the opening paragraph or the sign-off, across every variation of a step — with a preview of each before anything is written. Or scan every campaign in every workspace you pick and apply the same find & replace everywhere after confirming.",
     status: "active",
     color: "amber",
     Icon: PenIcon,

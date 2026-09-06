@@ -27,17 +27,29 @@ import { AlertIcon, CheckIcon, PenIcon, RefreshIcon } from "@/components/icons";
 
 const POLL_MS = 2500;
 
-export function CopyReplace({
+export function BulkReplace({
   workspaces,
   selected,
   loading,
+  initialFind,
+  initialReplace,
+  campaignFilter,
 }: {
   workspaces: Workspace[];
   selected: Set<string>;
   loading: boolean;
+  /** Carried over from the single-campaign scope, so nothing is retyped. */
+  initialFind?: string;
+  initialReplace?: string;
+  /**
+   * Narrows the one selected workspace to these campaigns. Used by the
+   * "one workspace, pick campaigns" scope; absent means every in-scope
+   * campaign in each selected workspace.
+   */
+  campaignFilter?: { workspaceId: string; campaignIds: string[] };
 }) {
-  const [find, setFind] = useState("");
-  const [replace, setReplace] = useState("");
+  const [find, setFind] = useState(initialFind ?? "");
+  const [replace, setReplace] = useState(initialReplace ?? "");
   const [target, setTarget] = useState<ReplaceTarget>("both");
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [includeSubs, setIncludeSubs] = useState(false);
@@ -55,7 +67,14 @@ export function CopyReplace({
   const edit = { kind: "replace-text" as const, find, replace, target, caseSensitive };
   const problems = validateEdit(edit, 2);
   const active = jobs.find((j) => j.status === "scanning" || j.status === "applying" || j.status === "awaiting_confirmation") ?? null;
-  const canStart = chosen.length > 0 && problems.length === 0 && !busy && !active;
+  // With a campaign filter, the targets are the picked campaigns of that one
+  // workspace; without, every selected workspace whole.
+  const filtered = campaignFilter && chosen.length === 1 && chosen[0].id === campaignFilter.workspaceId;
+  const targets = filtered
+    ? [{ ...chosen[0], campaignIds: campaignFilter.campaignIds }]
+    : chosen;
+  const nothingPicked = filtered && campaignFilter.campaignIds.length === 0;
+  const canStart = targets.length > 0 && !nothingPicked && problems.length === 0 && !busy && !active;
 
   const refresh = useCallback(async () => {
     try {
@@ -85,7 +104,7 @@ export function CopyReplace({
     setBusy(true);
     setError(null);
     try {
-      await startCopyReplace({ workspaces: chosen, edit, includeSubsequences: includeSubs });
+      await startCopyReplace({ workspaces: targets, edit, includeSubsequences: includeSubs });
       setToast("Scanning… nothing is written until you confirm.");
       await refresh();
     } catch (err) {
@@ -131,14 +150,17 @@ export function CopyReplace({
             <input type="checkbox" className="h-3.5 w-3.5 accent-accent" checked={caseSensitive} onChange={(e) => setCaseSensitive(e.target.checked)} />
             Match case
           </label>
-          <label className="flex items-center gap-1.5 text-muted-foreground">
-            <input type="checkbox" className="h-3.5 w-3.5 accent-accent" checked={includeSubs} onChange={(e) => setIncludeSubs(e.target.checked)} />
-            Include sub-sequences
-          </label>
+          {!campaignFilter && (
+            <label className="flex items-center gap-1.5 text-muted-foreground">
+              <input type="checkbox" className="h-3.5 w-3.5 accent-accent" checked={includeSubs} onChange={(e) => setIncludeSubs(e.target.checked)} />
+              Include sub-sequences
+            </label>
+          )}
         </div>
         <p className="text-xs text-muted-foreground">
-          Every <span className="text-foreground">active or paused</span> campaign in each selected workspace, every step.
-          Drafts, completed and archived campaigns are left alone. The scan reads everything first and shows what would
+          {filtered
+            ? "The campaigns you ticked, every step."
+            : "Every active or paused campaign in each selected workspace, every step. Drafts, completed and archived campaigns are left alone."} The scan reads everything first and shows what would
           change; nothing is written until you confirm. A campaign someone edits between the scan and the apply is skipped
           rather than overwritten.
         </p>
@@ -157,7 +179,9 @@ export function CopyReplace({
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" className="pv-btn-primary disabled:opacity-50" disabled={!canStart} onClick={start}>
             {busy ? <Spinner /> : <RefreshIcon size={16} />}
-            Scan {formatNumber(chosen.length)} workspace{chosen.length === 1 ? "" : "s"}
+            {filtered
+              ? `Scan ${formatNumber(campaignFilter.campaignIds.length)} campaign${campaignFilter.campaignIds.length === 1 ? "" : "s"}`
+              : `Scan ${formatNumber(chosen.length)} workspace${chosen.length === 1 ? "" : "s"}`}
           </button>
           {active && (
             <span className="text-xs text-muted-foreground">
@@ -168,6 +192,9 @@ export function CopyReplace({
           )}
           {chosen.length === 0 && !loading && !active && (
             <span className="text-xs text-muted-foreground">Pick some workspaces above first.</span>
+          )}
+          {nothingPicked && !active && (
+            <span className="text-xs text-muted-foreground">Tick at least one campaign above.</span>
           )}
         </div>
       </div>

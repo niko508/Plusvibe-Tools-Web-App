@@ -56,6 +56,11 @@ export interface WorkspaceOutcome {
   workspaceId: string;
   workspaceName: string;
   state: "pending" | "scanning" | "done" | "error";
+  /**
+   * Only these campaigns, when the person picked them by hand. Absent means
+   * every in-scope campaign in the workspace.
+   */
+  campaignIds?: string[];
   campaigns: CampaignOutcome[];
   /** Campaigns in the workspace that were out of scope (status / type). */
   skippedOutOfScope: number;
@@ -90,7 +95,7 @@ export interface CopyReplaceJob {
 }
 
 export interface CopyReplaceStartPayload {
-  workspaces: { id: string; name: string }[];
+  workspaces: { id: string; name: string; campaignIds?: string[] }[];
   edit: CopyEdit;
   includeSubsequences?: boolean;
 }
