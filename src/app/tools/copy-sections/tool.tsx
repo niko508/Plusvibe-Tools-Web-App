@@ -57,7 +57,6 @@ export function CopySectionsTool() {
 
   const [campaigns, setCampaigns] = useState<CampaignSummary[] | null>(null);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
-  const [showAll, setShowAll] = useState(false);
   const [campaignId, setCampaignId] = useState("");
 
   const [detail, setDetail] = useState<CampaignDetail | null>(null);
@@ -118,7 +117,7 @@ export function CopySectionsTool() {
     setStep(null);
     setPreview(null);
     setResult(null);
-    fetchCampaigns({ workspace_id: workspaceId, campaign_type: "all" })
+    fetchCampaigns({ workspace_id: workspaceId })
       .then((res) => {
         if (!cancelled) setCampaigns(res.campaigns ?? []);
       })
@@ -133,37 +132,17 @@ export function CopySectionsTool() {
     };
   }, [workspaceId]);
 
-  // Sub-sequences listed under their parent, so the picker reads as a tree.
-  const ordered = useMemo(() => {
-    const all = campaigns ?? [];
-    const parents = all.filter((c) => c.campaignType !== "subseq");
-    const subs = all.filter((c) => c.campaignType === "subseq");
-    const out: { c: CampaignSummary; sub: boolean }[] = [];
-    const byParent = new Map<string, CampaignSummary[]>();
-    for (const s of subs) {
-      const list = byParent.get(s.parentCampId ?? "") ?? [];
-      list.push(s);
-      byParent.set(s.parentCampId ?? "", list);
-    }
-    for (const p of parents) {
-      out.push({ c: p, sub: false });
-      for (const s of byParent.get(p.id) ?? []) out.push({ c: s, sub: true });
-      byParent.delete(p.id);
-    }
-    // Orphans (parent hidden or missing) still show, un-nested.
-    for (const list of byParent.values()) for (const s of list) out.push({ c: s, sub: true });
-    return out;
-  }, [campaigns]);
-
+  // Parent campaigns that are active or paused — the ones whose copy gets
+  // edited in practice. Sub-sequences, drafts, completed and archived are left
+  // out of the picker entirely.
   const visible = useMemo(
     () =>
-      showAll
-        ? ordered
-        : ordered.filter(({ c }) => {
-            const b = statusBucket(c.status);
-            return b === "active" || b === "draft" || b === "paused";
-          }),
-    [ordered, showAll]
+      (campaigns ?? []).filter((c) => {
+        if (c.campaignType === "subseq") return false;
+        const b = statusBucket(c.status);
+        return b === "active" || b === "paused";
+      }),
+    [campaigns]
   );
 
   // --- Campaign detail ---------------------------------------------------------
@@ -290,21 +269,21 @@ export function CopySectionsTool() {
               <option value="">
                 {campaignsLoading ? "Loading campaigns…" : visible.length === 0 ? "No campaigns" : "Select a campaign…"}
               </option>
-              {visible.map(({ c, sub }) => (
+              {visible.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {sub ? "↳ " : ""}
                   {c.name} — {BUCKET_LABEL[statusBucket(c.status)]}
-                  {sub ? " · sub-sequence" : ""}
                 </option>
               ))}
             </Select>
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <input type="checkbox" className="h-3.5 w-3.5 accent-accent" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
-            Show completed and archived campaigns too
-          </label>
+          <span className="text-xs text-muted-foreground">
+            Active and paused campaigns only
+            {campaigns && campaigns.length > visible.length
+              ? ` · ${formatNumber(campaigns.length - visible.length)} draft, completed or archived not shown`
+              : ""}
+          </span>
           <button type="button" className="pv-btn-ghost text-xs" onClick={loadDetail} disabled={!campaignId || detailLoading}>
             {detailLoading ? <Spinner size={14} /> : <RefreshIcon size={14} />}
             Reload campaign
