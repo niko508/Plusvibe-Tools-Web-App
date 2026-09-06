@@ -123,7 +123,31 @@ export async function listCampaigns(
   workspace_id: string,
   opts: { campaignType?: "all" | "parent" | "subseq" } = {}
 ): Promise<CampaignSummary[]> {
-  const out: CampaignSummary[] = [];
+  return (await listCampaignsRaw(apiKey, workspace_id, opts)).map((c) => summarize(c));
+}
+
+/** The summary shape from a raw campaign object. */
+export function summarize(c: RawCampaign): CampaignSummary {
+  return {
+    id: str(c.id ?? c._id),
+    name: str(c.camp_name ?? c.name) || "(untitled)",
+    status: str(c.status).toUpperCase(),
+    campaignType: str(c.campaign_type) || undefined,
+    parentCampId: str(c.parent_camp_id) || undefined,
+    sequenceSteps: num(c.sequence_steps, normalizeSequences(c.sequences).length),
+  };
+}
+
+/**
+ * The same listing, but the raw objects — for callers that need the settings
+ * fields the summary leaves out. Campaigns without an id are dropped.
+ */
+export async function listCampaignsRaw(
+  apiKey: string,
+  workspace_id: string,
+  opts: { campaignType?: "all" | "parent" | "subseq"; status?: string } = {}
+): Promise<RawCampaign[]> {
+  const out: RawCampaign[] = [];
   for (let page = 0; page < MAX_PAGES; page++) {
     if (page > 0) await sleep(220); // stay under the 5 req/s budget
     const data = await plusvibeGet<unknown>({
@@ -132,23 +156,13 @@ export async function listCampaigns(
       query: {
         workspace_id,
         campaign_type: opts.campaignType ?? "parent",
+        status: opts.status,
         skip: String(page * PAGE_LIMIT),
         limit: String(PAGE_LIMIT),
       },
     });
     const batch = asArray(data) as RawCampaign[];
-    for (const c of batch) {
-      const id = str(c.id ?? c._id);
-      if (!id) continue;
-      out.push({
-        id,
-        name: str(c.camp_name ?? c.name) || "(untitled)",
-        status: str(c.status).toUpperCase(),
-        campaignType: str(c.campaign_type) || undefined,
-        parentCampId: str(c.parent_camp_id) || undefined,
-        sequenceSteps: num(c.sequence_steps, normalizeSequences(c.sequences).length),
-      });
-    }
+    for (const c of batch) if (str(c.id ?? c._id)) out.push(c);
     if (batch.length < PAGE_LIMIT) break;
   }
   return out;

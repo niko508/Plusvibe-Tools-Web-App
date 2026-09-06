@@ -7,6 +7,7 @@ import type { CopyEdit } from "@/lib/copy-sections/edit";
 import type { TagInput, TagSpec } from "@/lib/tags/bulk-tags";
 import type { CopyReplaceJob, CopyReplaceStartPayload } from "@/lib/jobs/copy-replace-types";
 import type { InboxTagsJob, InboxTagsStartPayload } from "@/lib/jobs/inbox-tags-types";
+import type { CampaignSettingsJob, CampaignSettingsStartPayload } from "@/lib/jobs/campaign-settings-types";
 import type { CatalogTag } from "@/lib/inbox-tags/plan";
 import type { FollowUpTemplate } from "@/lib/follow-ups/templates";
 import type {
@@ -225,6 +226,21 @@ export function abortInboxTagsJob(jobId: string, signal?: AbortSignal) {
 }
 export function deleteInboxTagsJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/inbox-tags/delete", { method: "POST", body: { jobId }, signal });
+}
+
+// --- Change Campaign Settings ------------------------------------------------
+
+export function startCampaignSettings(payload: CampaignSettingsStartPayload, signal?: AbortSignal) {
+  return request<{ jobId: string }>("/api/jobs/campaign-settings/start", { method: "POST", body: payload, signal });
+}
+export function listCampaignSettingsJobs(signal?: AbortSignal) {
+  return request<{ jobs: CampaignSettingsJob[] }>("/api/jobs/campaign-settings/list", { signal });
+}
+export function abortCampaignSettingsJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/campaign-settings/abort", { method: "POST", body: { jobId }, signal });
+}
+export function deleteCampaignSettingsJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/campaign-settings/delete", { method: "POST", body: { jobId }, signal });
 }
 
 // --- Change Email Copy Sections ---------------------------------------------

@@ -27,6 +27,7 @@ import { AddField } from "./add-field";
 import { PauseCampaigns } from "./pause-campaigns";
 import { AddTags } from "./add-tags";
 import { InboxTags } from "./inbox-tags";
+import { CampaignSettings } from "./campaign-settings";
 import { WorkspacePicker } from "@/components/workspace-picker";
 
 // The container for actions that run across many workspaces at once.
@@ -87,6 +88,15 @@ const ACTIONS: BulkAction[] = [
       "Add a tag to every inbox, or just the Google or Microsoft ones, across the selected workspaces. Existing tags are kept. Runs in the background.",
     color: "sky",
     Icon: MailIcon,
+    ready: true,
+  },
+  {
+    id: "campaign-settings",
+    name: "Change Campaign Settings",
+    description:
+      "Set ESP matching, stop-on-reply, tracking and other settings on every active campaign in the selected workspaces. Runs in the background.",
+    color: "violet",
+    Icon: LayersIcon,
     ready: true,
   },
   {
@@ -210,6 +220,10 @@ export function BulkActionsTool() {
 
           {action === "inbox-tags" && (
             <InboxTags workspaces={workspaces} selected={selected} loading={loading} />
+          )}
+
+          {action === "campaign-settings" && (
+            <CampaignSettings workspaces={workspaces} selected={selected} loading={loading} />
           )}
 
           {action === "pause-campaigns" && (
