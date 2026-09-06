@@ -21,7 +21,12 @@ export async function GET(request: Request) {
         { status: 400 }
       );
     }
-    const campaigns = await listCampaigns(apiKey, workspace_id);
+    // Parents by default. `campaign_type=all` includes sub-sequences, for tools
+    // that edit their copy too.
+    const type = searchParams.get("campaign_type");
+    const campaigns = await listCampaigns(apiKey, workspace_id, {
+      campaignType: type === "all" || type === "subseq" ? type : "parent",
+    });
     return NextResponse.json({ campaigns });
   } catch (err) {
     return errorResponse(err);

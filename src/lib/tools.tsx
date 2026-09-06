@@ -156,6 +156,16 @@ export const TOOLS: Tool[] = [
     Icon: LayersIcon,
   },
   {
+    slug: "copy-sections",
+    name: "Change Email Copy Sections",
+    tagline: "Change one thing across every variation of a step",
+    description:
+      "Pick a campaign and a step, then find and replace a sentence or a variable, or swap out the subject line, the opening paragraph or the sign-off — across all of the step's variations at once, with a preview of every variation before anything is written.",
+    status: "active",
+    color: "amber",
+    Icon: PenIcon,
+  },
+  {
     slug: "campaign-types",
     name: "Create All Campaign Types",
     tagline: "Split a campaign across its Microsoft and Opt Out copies",

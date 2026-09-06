@@ -3,6 +3,7 @@
 import { getApiKey } from "@/lib/api-key";
 import type { WebhookConfig } from "@/lib/webhooks/config";
 import type { Sentiment } from "@/lib/lead-labels/custom-label";
+import type { CopyEdit } from "@/lib/copy-sections/edit";
 import type { FollowUpTemplate } from "@/lib/follow-ups/templates";
 import type {
   CampaignTypesJob,
@@ -134,14 +135,62 @@ export function fetchAccountsPage(
 // --- Campaigns / sequence variations ---------------------------------------
 
 export function fetchCampaigns(
-  params: { workspace_id: string },
+  params: { workspace_id: string; campaign_type?: "all" | "parent" | "subseq" },
   signal?: AbortSignal
 ) {
   const qs = new URLSearchParams({ workspace_id: params.workspace_id });
+  if (params.campaign_type) qs.set("campaign_type", params.campaign_type);
   return request<{ campaigns: CampaignSummary[] }>(
     `/api/plusvibe/campaigns?${qs.toString()}`,
     { signal }
   );
+}
+
+// --- Change Email Copy Sections ---------------------------------------------
+
+export interface CopySectionResult {
+  variation: string;
+  changed: boolean;
+  reason?: string;
+  subjectBefore: string;
+  subjectAfter: string;
+  bodyBefore: string;
+  bodyAfter: string;
+  textBefore: string;
+  textAfter: string;
+  subjectMatches: number;
+  bodyMatches: number;
+}
+
+export interface CopySectionsResponse {
+  step: number;
+  campaignName: string;
+  total: number;
+  changed: number;
+  droppedDeleted: number;
+  results: CopySectionResult[];
+  dryRun: boolean;
+  written: boolean;
+  verified: boolean;
+  unverified: string[];
+}
+
+export function editCopySections(
+  params: {
+    workspace_id: string;
+    campaign_id: string;
+    step: number;
+    edit: CopyEdit;
+    dryRun?: boolean;
+    expectedVariationCount?: number;
+  },
+  signal?: AbortSignal
+) {
+  return request<CopySectionsResponse>("/api/plusvibe/copy-sections", {
+    method: "POST",
+    body: params,
+    signal,
+  });
 }
 
 export function fetchCampaign(
