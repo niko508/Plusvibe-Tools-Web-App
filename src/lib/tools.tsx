@@ -235,26 +235,6 @@ export const TOOLS: Tool[] = [
     color: "rose",
     Icon: TrashIcon,
   },
-  {
-    slug: "mailbox-health",
-    name: "Mailbox Health Audit",
-    tagline: "Spot warmup and bounce issues across all mailboxes at once",
-    description:
-      "Scan every mailbox in a workspace for warmup health, bounce rates and disconnects, and flag the accounts that need attention.",
-    status: "soon",
-    color: "teal",
-    Icon: MailIcon,
-  },
-  {
-    slug: "bulk-actions",
-    name: "Bulk Mailbox Actions",
-    tagline: "Update limits, warmup and tags across many mailboxes",
-    description:
-      "Apply daily-limit, warmup and tagging changes to hundreds of mailboxes in one pass instead of editing them one by one.",
-    status: "soon",
-    color: "indigo",
-    Icon: SparklesIcon,
-  },
 ];
 
 export function getTool(slug: string): Tool | undefined {
