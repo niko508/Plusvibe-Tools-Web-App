@@ -4,6 +4,7 @@ import { getApiKey } from "@/lib/api-key";
 import type { WebhookConfig } from "@/lib/webhooks/config";
 import type { Sentiment } from "@/lib/lead-labels/custom-label";
 import type { CopyEdit } from "@/lib/copy-sections/edit";
+import type { CopyReplaceJob, CopyReplaceStartPayload } from "@/lib/jobs/copy-replace-types";
 import type { FollowUpTemplate } from "@/lib/follow-ups/templates";
 import type {
   CampaignTypesJob,
@@ -144,6 +145,27 @@ export function fetchCampaigns(
     `/api/plusvibe/campaigns?${qs.toString()}`,
     { signal }
   );
+}
+
+// --- Bulk Find & Replace Copy ------------------------------------------------
+
+export function startCopyReplace(payload: CopyReplaceStartPayload, signal?: AbortSignal) {
+  return request<{ jobId: string }>("/api/jobs/copy-replace/start", { method: "POST", body: payload, signal });
+}
+export function listCopyReplaceJobs(signal?: AbortSignal) {
+  return request<{ jobs: CopyReplaceJob[] }>("/api/jobs/copy-replace/list", { signal });
+}
+export function confirmCopyReplace(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/copy-replace/confirm", { method: "POST", body: { jobId }, signal });
+}
+export function cancelCopyReplace(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/copy-replace/cancel", { method: "POST", body: { jobId }, signal });
+}
+export function abortCopyReplace(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/copy-replace/abort", { method: "POST", body: { jobId }, signal });
+}
+export function deleteCopyReplaceJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/copy-replace/delete", { method: "POST", body: { jobId }, signal });
 }
 
 // --- Change Email Copy Sections ---------------------------------------------

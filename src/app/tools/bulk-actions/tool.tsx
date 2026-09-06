@@ -19,12 +19,14 @@ import {
   TrashIcon,
   LayersIcon,
   PauseIcon,
+  PenIcon,
 } from "@/components/icons";
 import { TOOL_COLORS, type ToolColor } from "@/lib/tools";
 import { AddWebhook } from "./add-webhook";
 import { AddLabel } from "./add-label";
 import { AddField } from "./add-field";
 import { PauseCampaigns } from "./pause-campaigns";
+import { CopyReplace } from "./copy-replace";
 
 // The container for actions that run across many workspaces at once.
 //
@@ -75,6 +77,15 @@ const ACTIONS: BulkAction[] = [
       "Pause every active campaign — sub-sequences included — in the selected workspaces, then continue exactly those campaigns at a date you pick, or by hand.",
     color: "orange",
     Icon: PauseIcon,
+    ready: true,
+  },
+  {
+    id: "copy-replace",
+    name: "Bulk Find & Replace Copy",
+    description:
+      "Find and replace a sentence or a variable across every campaign and every step in the selected workspaces — scan first, see exactly what would change, then confirm.",
+    color: "violet",
+    Icon: PenIcon,
     ready: true,
   },
   {
@@ -287,6 +298,14 @@ export function BulkActionsTool() {
 
           {action === "pause-campaigns" && (
             <PauseCampaigns
+              workspaces={workspaces}
+              selected={selected}
+              loading={loading}
+            />
+          )}
+
+          {action === "copy-replace" && (
+            <CopyReplace
               workspaces={workspaces}
               selected={selected}
               loading={loading}
