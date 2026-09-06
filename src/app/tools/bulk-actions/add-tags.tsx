@@ -12,6 +12,7 @@ import { addTagsToWorkspaces, ApiClientError, type BulkTagsResponse } from "@/li
 import { formatNumber } from "@/lib/format";
 import { Spinner } from "@/components/ui";
 import { AlertIcon, RefreshIcon, TagIcon, TrashIcon } from "@/components/icons";
+import { AutoDomainTags } from "./auto-domain-tags";
 
 // Creates one or more tags in every selected workspace. A workspace that
 // already has a tag of that name (case-insensitively, like Plusvibe) is
@@ -200,6 +201,8 @@ export function AddTags({
       </div>
 
       {result && <ResultCard result={result} stale={stale} />}
+
+      <AutoDomainTags workspaces={workspaces} selected={selected} loading={loading} />
     </div>
   );
 }

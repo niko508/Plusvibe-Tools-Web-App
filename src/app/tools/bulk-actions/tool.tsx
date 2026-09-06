@@ -76,7 +76,7 @@ const ACTIONS: BulkAction[] = [
     id: "add-tags",
     name: "Add Tags",
     description:
-      "Create one or more tags — name, colour, optional description — in every selected workspace, skipping any it already has.",
+      "Create tags in every selected workspace, and auto-tag inboxes by their domain's TLD and platform from the Domains sheet.",
     color: "emerald",
     Icon: TagIcon,
     ready: true,

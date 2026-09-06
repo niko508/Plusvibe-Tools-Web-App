@@ -8,6 +8,7 @@ import type { TagInput, TagSpec } from "@/lib/tags/bulk-tags";
 import type { CopyReplaceJob, CopyReplaceStartPayload } from "@/lib/jobs/copy-replace-types";
 import type { InboxTagsJob, InboxTagsStartPayload } from "@/lib/jobs/inbox-tags-types";
 import type { CampaignSettingsJob, CampaignSettingsStartPayload } from "@/lib/jobs/campaign-settings-types";
+import type { DomainTagsJob, DomainTagsStartPayload } from "@/lib/jobs/domain-tags-types";
 import type { CatalogTag } from "@/lib/inbox-tags/plan";
 import type { FollowUpTemplate } from "@/lib/follow-ups/templates";
 import type {
@@ -226,6 +227,21 @@ export function abortInboxTagsJob(jobId: string, signal?: AbortSignal) {
 }
 export function deleteInboxTagsJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/inbox-tags/delete", { method: "POST", body: { jobId }, signal });
+}
+
+// --- Auto-tag by Domain -----------------------------------------------------
+
+export function startDomainTags(payload: DomainTagsStartPayload, signal?: AbortSignal) {
+  return request<{ jobId: string }>("/api/jobs/domain-tags/start", { method: "POST", body: payload, signal });
+}
+export function listDomainTagsJobs(signal?: AbortSignal) {
+  return request<{ jobs: DomainTagsJob[] }>("/api/jobs/domain-tags/list", { signal });
+}
+export function abortDomainTagsJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/domain-tags/abort", { method: "POST", body: { jobId }, signal });
+}
+export function deleteDomainTagsJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/domain-tags/delete", { method: "POST", body: { jobId }, signal });
 }
 
 // --- Change Campaign Settings ------------------------------------------------

@@ -36,11 +36,44 @@ export function extractSheetId(input: string): string | null {
   return null;
 }
 
+// Overridable so a stand-in can serve the CSV in tests; production never sets it.
+const DOCS_BASE = process.env.GOOGLE_DOCS_BASE_URL || "https://docs.google.com";
+
 function gvizUrl(id: string, tab: string): string {
   // Host is always docs.google.com and the id is validated — no SSRF surface.
-  return `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(
+  return `${DOCS_BASE}/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(
     tab
   )}`;
+}
+
+/**
+ * A tab as a grid of strings via the public CSV export. Needs the sheet to be
+ * readable by anyone with the link; a private sheet comes back as a sign-in
+ * page, which is reported as such.
+ */
+export async function fetchSheetGrid(input: string, tab: string): Promise<string[][]> {
+  const id = extractSheetId(input);
+  if (!id) {
+    throw new SheetError("Couldn't read a Google Sheets link. Paste the full share URL.", 400);
+  }
+  const cleanTab = (tab || "").trim() || "Sheet1";
+  let res: Response;
+  try {
+    res = await fetch(gvizUrl(id, cleanTab), { cache: "no-store" });
+  } catch (err) {
+    throw new SheetError(`Couldn't reach Google Sheets: ${(err as Error).message}`, 502);
+  }
+  if (!res.ok) {
+    throw new SheetError(
+      `Google Sheets returned ${res.status}. Make sure the sheet is shared as "anyone with the link can view".`,
+      res.status === 404 ? 404 : 502
+    );
+  }
+  const text = await res.text();
+  if (/^\s*</.test(text) || text.toLowerCase().includes("<html")) {
+    throw new SheetError('This sheet isn\'t publicly readable. Share it as "anyone with the link can view".', 403);
+  }
+  return parseCsv(text);
 }
 
 // Minimal RFC-4180-ish CSV parser: handles quoted fields, escaped "" quotes,
