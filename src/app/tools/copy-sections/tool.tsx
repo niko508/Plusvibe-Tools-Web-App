@@ -448,25 +448,43 @@ export function CopySectionsTool() {
                     </div>
                   )}
 
+                  {/* One primary action at a time. Until there is a current
+                      preview, that action is Preview — Apply only appears once
+                      the person has seen what it will do, because it overwrites
+                      the step's copy with no undo. */}
                   <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-                    <button type="button" className="pv-btn-ghost disabled:opacity-50" disabled={!canPreview} onClick={runPreview}>
-                      {busy && !preview ? <Spinner /> : <RefreshIcon size={16} />}
-                      Preview
-                    </button>
-                    <button type="button" className="pv-btn-primary disabled:opacity-50" disabled={!canApply} onClick={apply}>
-                      {busy && preview ? <Spinner /> : <PenIcon size={16} />}
-                      {preview && !previewStale
-                        ? `Apply to ${formatNumber(preview.changed)} of ${formatNumber(preview.total)} variations`
-                        : "Apply"}
-                    </button>
-                    {preview === null && !busy && (
-                      <span className="text-xs text-muted-foreground">Preview first — Apply is enabled once you have.</span>
-                    )}
-                    {previewStale && (
-                      <span className="flex gap-1.5 text-xs text-warning">
-                        <AlertIcon size={13} className="mt-0.5 shrink-0" />
-                        The edit changed since the preview. Preview again.
-                      </span>
+                    {preview === null || previewStale ? (
+                      <>
+                        <button type="button" className="pv-btn-primary disabled:opacity-50" disabled={!canPreview} onClick={runPreview}>
+                          {busy ? <Spinner /> : <RefreshIcon size={16} />}
+                          Preview {activeStep ? `${formatNumber(activeStep.variations.length)} variations` : ""}
+                        </button>
+                        <span className="text-xs text-muted-foreground">
+                          {previewStale
+                            ? "The edit changed since the last preview — preview again to apply."
+                            : "Shows what would change in every variation. Nothing is written until you apply."}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="pv-btn-primary disabled:opacity-50"
+                          disabled={!canApply}
+                          onClick={apply}
+                          title={preview.changed === 0 ? "Nothing would change" : undefined}
+                        >
+                          {busy ? <Spinner /> : <PenIcon size={16} />}
+                          Apply to {formatNumber(preview.changed)} of {formatNumber(preview.total)} variations
+                        </button>
+                        <button type="button" className="pv-btn-ghost" disabled={busy} onClick={runPreview}>
+                          <RefreshIcon size={16} />
+                          Preview again
+                        </button>
+                        {preview.changed === 0 && (
+                          <span className="text-xs text-muted-foreground">Nothing would change, so there is nothing to apply.</span>
+                        )}
+                      </>
                     )}
                   </div>
                 </>
