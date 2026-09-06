@@ -34,6 +34,11 @@ import type {
   FirstCampaignStartPayload,
 } from "@/lib/jobs/first-campaign-types";
 import type { BlockedDomainsView } from "@/lib/jobs/blocked-domains-types";
+import type {
+  PauseCampaignsStartPayload,
+  PauseCampaignsView,
+  PausePlan,
+} from "@/lib/jobs/pause-campaigns-types";
 
 export type { WarmupSettings } from "@/lib/jobs/remove-50-types";
 
@@ -698,6 +703,66 @@ export interface BulkFieldResponse {
     conflict: number;
     errors: number;
   };
+}
+
+// --- Pause Campaigns --------------------------------------------------------
+
+export function planPauseCampaigns(
+  params: { workspaces: { id: string; name: string }[]; resumeAt?: number },
+  signal?: AbortSignal
+) {
+  return request<PausePlan>("/api/jobs/pause-campaigns/start", {
+    method: "POST",
+    body: { ...params, dryRun: true },
+    signal,
+  });
+}
+
+export function startPauseCampaigns(
+  payload: PauseCampaignsStartPayload,
+  signal?: AbortSignal
+) {
+  return request<{ jobId: string }>("/api/jobs/pause-campaigns/start", {
+    method: "POST",
+    body: payload,
+    signal,
+  });
+}
+
+export function listPauseCampaignsJobs(signal?: AbortSignal) {
+  return request<PauseCampaignsView>("/api/jobs/pause-campaigns/list", { signal });
+}
+
+export function abortPauseCampaigns(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/pause-campaigns/abort", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
+export function deletePauseCampaignsJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/pause-campaigns/delete", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
+export function resumePauseCampaignsNow(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/pause-campaigns/resume", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
+export function cancelPauseCampaignsResume(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/pause-campaigns/cancel-resume", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
 }
 
 export function addFieldToWorkspaces(

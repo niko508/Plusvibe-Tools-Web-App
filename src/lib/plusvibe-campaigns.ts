@@ -111,10 +111,17 @@ export function normalizeSequences(raw: unknown): SequenceStep[] {
     .sort((a, b) => a.step - b.step);
 }
 
-/** Lists every campaign in a workspace, paginating past the 100-per-page cap. */
+/**
+ * Lists campaigns in a workspace, paginating past the 100-per-page cap.
+ *
+ * Parents only by default — that is what every existing caller wants. Pass
+ * `campaignType: "all"` to include sub-sequences, which come back with their
+ * `parentCampId` set.
+ */
 export async function listCampaigns(
   apiKey: string,
-  workspace_id: string
+  workspace_id: string,
+  opts: { campaignType?: "all" | "parent" | "subseq" } = {}
 ): Promise<CampaignSummary[]> {
   const out: CampaignSummary[] = [];
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -124,7 +131,7 @@ export async function listCampaigns(
       path: "/campaign/list-all",
       query: {
         workspace_id,
-        campaign_type: "parent",
+        campaign_type: opts.campaignType ?? "parent",
         skip: String(page * PAGE_LIMIT),
         limit: String(PAGE_LIMIT),
       },
@@ -138,6 +145,7 @@ export async function listCampaigns(
         name: str(c.camp_name ?? c.name) || "(untitled)",
         status: str(c.status).toUpperCase(),
         campaignType: str(c.campaign_type) || undefined,
+        parentCampId: str(c.parent_camp_id) || undefined,
         sequenceSteps: num(c.sequence_steps, normalizeSequences(c.sequences).length),
       });
     }

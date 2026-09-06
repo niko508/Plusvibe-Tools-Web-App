@@ -112,6 +112,8 @@ export interface CampaignSummary {
   name: string;
   status: string;
   campaignType?: string;
+  /** For a sub-sequence, the parent campaign it belongs to. */
+  parentCampId?: string;
   sequenceSteps: number;
 }
 

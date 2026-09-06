@@ -209,6 +209,23 @@ export function LayersIcon({ className, size }: IconProps) {
   );
 }
 
+export function PauseIcon({ className, size }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <rect x="6" y="4" width="4" height="16" rx="1" />
+      <rect x="14" y="4" width="4" height="16" rx="1" />
+    </svg>
+  );
+}
+
+export function PlayIcon({ className, size }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <path d="M6 4v16l14-8-14-8Z" />
+    </svg>
+  );
+}
+
 export function TagIcon({ className, size }: IconProps) {
   return (
     <svg {...base(size, className)}>

@@ -18,11 +18,13 @@ import {
   TagIcon,
   TrashIcon,
   LayersIcon,
+  PauseIcon,
 } from "@/components/icons";
 import { TOOL_COLORS, type ToolColor } from "@/lib/tools";
 import { AddWebhook } from "./add-webhook";
 import { AddLabel } from "./add-label";
 import { AddField } from "./add-field";
+import { PauseCampaigns } from "./pause-campaigns";
 
 // The container for actions that run across many workspaces at once.
 //
@@ -64,6 +66,15 @@ const ACTIONS: BulkAction[] = [
       "Create the same custom lead field — with an optional default — in every selected workspace, skipping any that already have it.",
     color: "cyan",
     Icon: LayersIcon,
+    ready: true,
+  },
+  {
+    id: "pause-campaigns",
+    name: "Pause & Continue Campaigns",
+    description:
+      "Pause every active campaign — sub-sequences included — in the selected workspaces, then continue exactly those campaigns at a date you pick, or by hand.",
+    color: "orange",
+    Icon: PauseIcon,
     ready: true,
   },
   {
@@ -268,6 +279,14 @@ export function BulkActionsTool() {
 
           {action === "add-field" && (
             <AddField
+              workspaces={workspaces}
+              selected={selected}
+              loading={loading}
+            />
+          )}
+
+          {action === "pause-campaigns" && (
+            <PauseCampaigns
               workspaces={workspaces}
               selected={selected}
               loading={loading}
