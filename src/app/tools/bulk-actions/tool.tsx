@@ -26,6 +26,7 @@ import { AddLabel } from "./add-label";
 import { AddField } from "./add-field";
 import { PauseCampaigns } from "./pause-campaigns";
 import { AddTags } from "./add-tags";
+import { InboxTags } from "./inbox-tags";
 import { WorkspacePicker } from "@/components/workspace-picker";
 
 // The container for actions that run across many workspaces at once.
@@ -77,6 +78,15 @@ const ACTIONS: BulkAction[] = [
       "Create one or more tags — name, colour, optional description — in every selected workspace, skipping any it already has.",
     color: "emerald",
     Icon: TagIcon,
+    ready: true,
+  },
+  {
+    id: "inbox-tags",
+    name: "Update Inbox Tags",
+    description:
+      "Add a tag to every inbox, or just the Google or Microsoft ones, across the selected workspaces. Existing tags are kept. Runs in the background.",
+    color: "sky",
+    Icon: MailIcon,
     ready: true,
   },
   {
@@ -196,6 +206,10 @@ export function BulkActionsTool() {
 
           {action === "add-tags" && (
             <AddTags workspaces={workspaces} selected={selected} loading={loading} />
+          )}
+
+          {action === "inbox-tags" && (
+            <InboxTags workspaces={workspaces} selected={selected} loading={loading} />
           )}
 
           {action === "pause-campaigns" && (

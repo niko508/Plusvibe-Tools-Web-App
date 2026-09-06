@@ -10,7 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "check": "node scripts/check-opt-out-spintax.mjs && node scripts/check-campaign-types.mjs && node scripts/check-follow-ups.mjs && node scripts/check-webhooks.mjs && node scripts/check-tenant-source.mjs && node scripts/check-first-campaign.mjs && node scripts/check-blocked-domains.mjs && node scripts/check-custom-label.mjs && node scripts/check-signature-tags.mjs && node scripts/check-reuse-index.mjs && node scripts/check-additional-field.mjs && node scripts/check-pause-campaigns.mjs && node scripts/check-copy-sections.mjs && node scripts/check-bulk-tags.mjs"
+    "check": "node scripts/check-opt-out-spintax.mjs && node scripts/check-campaign-types.mjs && node scripts/check-follow-ups.mjs && node scripts/check-webhooks.mjs && node scripts/check-tenant-source.mjs && node scripts/check-first-campaign.mjs && node scripts/check-blocked-domains.mjs && node scripts/check-custom-label.mjs && node scripts/check-signature-tags.mjs && node scripts/check-reuse-index.mjs && node scripts/check-additional-field.mjs && node scripts/check-pause-campaigns.mjs && node scripts/check-copy-sections.mjs && node scripts/check-bulk-tags.mjs && node scripts/check-inbox-tags.mjs"
   },
   "dependencies": {
     "next": "14.2.35",

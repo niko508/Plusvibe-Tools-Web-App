@@ -6,6 +6,8 @@ import type { Sentiment } from "@/lib/lead-labels/custom-label";
 import type { CopyEdit } from "@/lib/copy-sections/edit";
 import type { TagInput, TagSpec } from "@/lib/tags/bulk-tags";
 import type { CopyReplaceJob, CopyReplaceStartPayload } from "@/lib/jobs/copy-replace-types";
+import type { InboxTagsJob, InboxTagsStartPayload } from "@/lib/jobs/inbox-tags-types";
+import type { CatalogTag } from "@/lib/inbox-tags/plan";
 import type { FollowUpTemplate } from "@/lib/follow-ups/templates";
 import type {
   CampaignTypesJob,
@@ -198,6 +200,31 @@ export function abortCopyReplace(jobId: string, signal?: AbortSignal) {
 }
 export function deleteCopyReplaceJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/copy-replace/delete", { method: "POST", body: { jobId }, signal });
+}
+
+// --- Update Inbox Tags -------------------------------------------------------
+
+export interface TagCatalogResponse {
+  tags: CatalogTag[];
+  read: number;
+  failed: { workspaceId: string; workspaceName: string; reason: string }[];
+}
+
+/** The tags in use across these workspaces, merged by name. */
+export function fetchTagCatalog(workspaces: { id: string; name: string }[], signal?: AbortSignal) {
+  return request<TagCatalogResponse>("/api/bulk-actions/tag-catalog", { method: "POST", body: { workspaces }, signal });
+}
+export function startInboxTags(payload: InboxTagsStartPayload, signal?: AbortSignal) {
+  return request<{ jobId: string }>("/api/jobs/inbox-tags/start", { method: "POST", body: payload, signal });
+}
+export function listInboxTagsJobs(signal?: AbortSignal) {
+  return request<{ jobs: InboxTagsJob[] }>("/api/jobs/inbox-tags/list", { signal });
+}
+export function abortInboxTagsJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/inbox-tags/abort", { method: "POST", body: { jobId }, signal });
+}
+export function deleteInboxTagsJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/inbox-tags/delete", { method: "POST", body: { jobId }, signal });
 }
 
 // --- Change Email Copy Sections ---------------------------------------------

@@ -16,6 +16,8 @@ const MAX_PAGES = 50;
 export interface Tag {
   id: string;
   name: string;
+  /** Hex colour, when the API reports one. */
+  color?: string;
 }
 
 const ID_RE = /^[a-fA-F0-9]{24}$/;
@@ -45,7 +47,8 @@ export async function listTags(
     for (const t of raw) {
       const id = String(t.id ?? t._id ?? "").trim();
       const name = String(t.name ?? "").trim();
-      if (id && name) out.push({ id, name });
+      const color = typeof t.color === "string" && t.color.trim() ? t.color.trim() : undefined;
+      if (id && name) out.push(color ? { id, name, color } : { id, name });
     }
     if (raw.length < PAGE_LIMIT) break;
   }
