@@ -152,13 +152,13 @@ export function fetchCampaigns(
   );
 }
 
-// --- Add Tags -----------------------------------------------------------------
+// --- Add / Remove Tags ---------------------------------------------------------
 
 export interface BulkTagResult {
   workspaceId: string;
   workspaceName: string;
   tag: string;
-  outcome: "created" | "already" | "error";
+  outcome: "created" | "already" | "error" | "removed" | "missing";
   existingName?: string;
   tagId?: string;
   reason?: string;
@@ -166,16 +166,19 @@ export interface BulkTagResult {
 
 export interface BulkTagsResponse {
   dryRun: boolean;
+  mode?: "add" | "remove";
   tags: TagSpec[];
   duplicatesDropped: number;
   results: BulkTagResult[];
-  totals: { created: number; already: number; errors: number };
+  totals: { created: number; already: number; removed?: number; missing?: number; errors: number };
 }
 
+/** Adds tags, or removes them when `mode` says so. */
 export function addTagsToWorkspaces(
   params: {
     workspaces: { id: string; name: string }[];
     tags: TagInput[];
+    mode?: "add" | "remove";
     dryRun?: boolean;
   },
   signal?: AbortSignal

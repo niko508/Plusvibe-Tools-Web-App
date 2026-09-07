@@ -47,7 +47,7 @@ interface RequestOptions {
 }
 
 interface FullRequestOptions extends RequestOptions {
-  method?: "GET" | "POST" | "PUT" | "PATCH";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
 }
 
@@ -157,6 +157,13 @@ export function plusvibePatch<T>(
   options: RequestOptions & { body: unknown }
 ): Promise<T> {
   return plusvibeRequest<T>({ ...options, method: "PATCH" });
+}
+
+/** DELETE with a body — which is how Plusvibe's delete endpoints take their ids. */
+export function plusvibeDelete<T>(
+  options: RequestOptions & { body: unknown }
+): Promise<T> {
+  return plusvibeRequest<T>({ ...options, method: "DELETE" });
 }
 
 function extractErrorMessage(body: unknown): string | undefined {

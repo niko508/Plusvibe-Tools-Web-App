@@ -74,9 +74,9 @@ const ACTIONS: BulkAction[] = [
   },
   {
     id: "add-tags",
-    name: "Add Tags",
+    name: "Add/Remove Tags",
     description:
-      "Create tags in every selected workspace, and auto-tag inboxes by their domain's TLD and platform from the Domains sheet.",
+      "Create or delete tags across the selected workspaces, and auto-tag inboxes by their domain's TLD and platform from the Domains sheet.",
     color: "emerald",
     Icon: TagIcon,
     ready: true,

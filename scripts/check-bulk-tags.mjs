@@ -15,7 +15,7 @@ const eq = (label, got, want) => {
 };
 
 const m = await importTs("@/lib/tags/bulk-tags");
-const { normalizeColor, validateTag, prepareBatch, findExisting, classifyApiError, tagKey } = m;
+const { normalizeColor, validateTag, prepareBatch, prepareRemoveBatch, findExisting, classifyApiError, tagKey } = m;
 
 // --- colours ------------------------------------------------------------------
 eq("6-digit hex is kept, upper-cased", normalizeColor("#ff5733"), "#FF5733");
@@ -54,6 +54,23 @@ eq("a repeated name keeps the first occurrence only", b.duplicates, [2]);
 eq("problem rows are reported by position", [...b.problems.keys()], [3, 4]);
 eq("…with their problems", b.problems.get(4), ["The colour needs to be a hex code like #FF5733 or #F57."]);
 eq("an empty batch has no specs", prepareBatch([]).specs, []);
+
+// --- a batch to remove --------------------------------------------------------------
+// Removal is by name only: no colour to validate, nothing to create.
+const rb = prepareRemoveBatch([
+  { name: " VIP Clients " },
+  { name: "Cold" },
+  { name: "vip clients" },   // repeat of row 0, different case
+  { name: "  " },            // problem row
+  { name: "x".repeat(101) }, // problem row
+]);
+eq("names come out trimmed, in order", rb.names, ["VIP Clients", "Cold"]);
+eq("a repeated name keeps the first occurrence only", rb.duplicates, [2]);
+eq("problem rows are reported by position", [...rb.problems.keys()], [3, 4]);
+eq("…a blank name says so", rb.problems.get(3), ["Give the tag a name."]);
+eq("…an over-long one says so too", rb.problems.get(4).length, 1);
+eq("a colour is neither needed nor validated", prepareRemoveBatch([{ name: "VIP", color: "nonsense" }]).names, ["VIP"]);
+eq("an empty batch has no names", prepareRemoveBatch([]).names, []);
 
 // --- against a workspace ------------------------------------------------------------
 const HAVE = [{ id: "t1", name: "VIP Clients" }, { id: "t2", name: "Active" }];

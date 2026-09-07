@@ -99,7 +99,49 @@ export function prepareBatch(inputs: TagInput[]): BatchResult {
   return { specs, problems, duplicates };
 }
 
-export type TagOutcome = "created" | "already" | "error";
+// --- Removing --------------------------------------------------------------
+//
+// Removal is by NAME, like adding — the ids differ per workspace, so the tool
+// looks each name up where it is being removed. A name the workspace doesn't
+// have is "missing", not an error: removing a tag from twenty workspaces
+// where only twelve have it is the normal case.
+
+export interface RemoveBatch {
+  /** Names to remove, trimmed, first occurrence of each kept. */
+  names: string[];
+  /** Positions dropped because an earlier row names the same tag. */
+  duplicates: number[];
+  /** Problems keyed by the input's position. */
+  problems: Map<number, string[]>;
+}
+
+export function prepareRemoveBatch(inputs: { name: string }[]): RemoveBatch {
+  const names: string[] = [];
+  const duplicates: number[] = [];
+  const problems = new Map<number, string[]>();
+  const seen = new Set<string>();
+  inputs.forEach((t, i) => {
+    const name = t.name.trim();
+    if (name === "") {
+      problems.set(i, ["Give the tag a name."]);
+      return;
+    }
+    if (name.length > MAX_TAG_NAME_LENGTH) {
+      problems.set(i, [`The name is ${name.length} characters; the limit is ${MAX_TAG_NAME_LENGTH}.`]);
+      return;
+    }
+    const key = tagKey(name);
+    if (seen.has(key)) {
+      duplicates.push(i);
+      return;
+    }
+    seen.add(key);
+    names.push(name);
+  });
+  return { names, duplicates, problems };
+}
+
+export type TagOutcome = "created" | "already" | "error" | "removed" | "missing";
 
 /**
  * Whether a workspace already has a tag of this name. Case-insensitive, like
