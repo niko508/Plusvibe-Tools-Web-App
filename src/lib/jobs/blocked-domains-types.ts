@@ -14,20 +14,28 @@
 // An inbox still replying is left alone by every step after the assessment: it
 // is not stopped, and it is not deleted. Only the stopped ones are.
 //
-// The assessment decides whether any of that happens at all. A domain still
-// producing replies over the window is LEFT ENTIRELY ALONE — no inbox stopped,
-// no "Not Active" in the sheet, no tenant queued for cancellation, nothing
-// deleted — and the run is recorded as "kept". Only a domain under the bar is
-// cancelled, and even then its individual inboxes that are still replying keep
-// sending and are not deleted.
+// The assessment applies TWO bars, because they answer different questions:
 //
-// For a domain under the bar, steps 3-4 run unattended: its inboxes are
+//   inbox bar (1%)    a mailbox under it has its daily limit set to 0 and its
+//                     warmup switched off — whatever the domain is doing
+//   domain bar (1.5%) a domain under it is written off: Not Active in the
+//                     sheet and its tenant queued for cancellation. At or
+//                     above it, the sheet and tenant are LEFT ALONE and
+//                     nothing is deleted; the run is recorded as "kept".
+//
+// So a domain still replying keeps its status and its tenant while its weak
+// mailboxes are stopped, and a domain that isn't replying is written off while
+// its individual mailboxes that ARE still replying keep sending and stay out
+// of the deletion.
+//
+// For a domain under its bar, steps 3-4 run unattended: its weak inboxes are
 // already stopped, so "Not Active" is just true, and the tenant needs
 // cancelling either way. Only the deletion is irreversible, so only the
 // deletion waits for a person — and declining it does not un-write the sheet.
 //
-// Quarantine happens without confirmation on purpose: a blocked domain that
-// isn't working is burning reputation, and stopping it is reversible.
+// Quarantine happens without confirmation on purpose: a mailbox that isn't
+// replying from a blocked domain is burning reputation, and stopping it is
+// reversible.
 
 import type {
   DomainPerformance,
@@ -42,8 +50,9 @@ export type BlockedDomainStatus =
   /** Locating and quarantining. */
   | "working"
   /**
-   * The domain is still producing replies, so nothing was touched: no inbox
-   * stopped, no sheet edit, no tenant queued to cancel, nothing deleted.
+   * The domain cleared its bar, so it was not written off: no sheet edit, no
+   * tenant queued to cancel, nothing deleted. Its inboxes under the inbox bar
+   * were still stopped.
    */
   | "kept"
   /** Quarantined, waiting for someone to confirm the deletion. */
@@ -112,8 +121,10 @@ export interface PerformanceOutcome {
   /** The window read, as YYYY-MM-DD. */
   start: string;
   end: string;
-  /** The reply-rate-with-OOO bar, in percent. */
+  /** The per-inbox reply-rate-with-OOO bar, in percent. */
   threshold: number;
+  /** The bar the DOMAIN had to clear to keep its sheet status and tenant. */
+  domainThreshold?: number;
   /** The whole domain's figures over the window, and its verdict. */
   domain?: DomainPerformance;
   /** Which endpoint answered, or that no figures were available. */
@@ -191,7 +202,12 @@ export interface BlockedDomainJob {
 
 export interface BlockedDomainsView {
   jobs: BlockedDomainJob[];
-  settings: { autoDelete: boolean; checkPerformance: boolean; minReplyRateOoo: number };
+  settings: {
+    autoDelete: boolean;
+    checkPerformance: boolean;
+    minReplyRateOoo: number;
+    minDomainReplyRateOoo: number;
+  };
   /** Whether the webhook can actually run unattended. */
   readiness: {
     /** PLUSVIBE_API_KEY is set, so the webhook has a key to work with. */

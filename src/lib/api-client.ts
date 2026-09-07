@@ -1037,7 +1037,12 @@ export function fetchBlockedDomains(signal?: AbortSignal) {
 }
 
 export function setBlockedDomainSettings(
-  patch: { autoDelete?: boolean; checkPerformance?: boolean; minReplyRateOoo?: number },
+  patch: {
+    autoDelete?: boolean;
+    checkPerformance?: boolean;
+    minReplyRateOoo?: number;
+    minDomainReplyRateOoo?: number;
+  },
   signal?: AbortSignal
 ) {
   return request<{ settings: BlockedDomainsView["settings"] }>(

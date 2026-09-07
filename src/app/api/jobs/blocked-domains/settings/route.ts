@@ -6,7 +6,7 @@ import { loadSettings, saveSettings } from "@/lib/blocked-domains/settings";
 export const dynamic = "force-dynamic";
 
 // PUT /api/jobs/blocked-domains/settings
-// Body: { autoDelete?: boolean, checkPerformance?: boolean, minReplyRateOoo?: number }
+// Body: { autoDelete?, checkPerformance?, minReplyRateOoo?, minDomainReplyRateOoo? }
 // Only the fields given are changed.
 export async function PUT(request: Request) {
   try {
@@ -15,6 +15,7 @@ export async function PUT(request: Request) {
       autoDelete?: unknown;
       checkPerformance?: unknown;
       minReplyRateOoo?: unknown;
+      minDomainReplyRateOoo?: unknown;
     };
     const patch: Parameters<typeof saveSettings>[0] = {};
 
@@ -30,15 +31,17 @@ export async function PUT(request: Request) {
       }
       patch.checkPerformance = body.checkPerformance;
     }
-    if (body.minReplyRateOoo !== undefined) {
-      const n = typeof body.minReplyRateOoo === "number" ? body.minReplyRateOoo : Number(body.minReplyRateOoo);
+    for (const key of ["minReplyRateOoo", "minDomainReplyRateOoo"] as const) {
+      const raw = body[key];
+      if (raw === undefined) continue;
+      const n = typeof raw === "number" ? raw : Number(raw);
       if (!Number.isFinite(n) || n < 0 || n > 100) {
         return NextResponse.json(
-          { error: "minReplyRateOoo must be a percentage between 0 and 100" },
+          { error: `${key} must be a percentage between 0 and 100` },
           { status: 400 }
         );
       }
-      patch.minReplyRateOoo = n;
+      patch[key] = n;
     }
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: "Nothing to change." }, { status: 400 });

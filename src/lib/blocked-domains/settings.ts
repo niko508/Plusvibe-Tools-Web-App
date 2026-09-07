@@ -3,6 +3,7 @@ import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
 import {
+  DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO,
   DEFAULT_MIN_REPLY_RATE_OOO,
   normalizeThreshold,
 } from "@/lib/blocked-domains/performance";
@@ -31,8 +32,18 @@ export interface BlockedDomainSettings {
    * domain is stopped, which is what the automation did before.
    */
   checkPerformance: boolean;
-  /** The bar, in percent, on reply rate with OOO. */
+  /**
+   * The INBOX bar, in percent, on reply rate with OOO. An inbox under it has
+   * its daily limit set to 0 and its warmup switched off — whatever the domain
+   * as a whole is doing.
+   */
   minReplyRateOoo: number;
+  /**
+   * The DOMAIN bar. Under it, the domain goes Not Active in the sheet and its
+   * tenant is queued for cancellation; at or above it, the sheet and the
+   * tenant are left alone.
+   */
+  minDomainReplyRateOoo: number;
   updatedAt: number;
 }
 
@@ -40,6 +51,7 @@ export const DEFAULT_SETTINGS: BlockedDomainSettings = {
   autoDelete: false,
   checkPerformance: true,
   minReplyRateOoo: DEFAULT_MIN_REPLY_RATE_OOO,
+  minDomainReplyRateOoo: DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO,
   updatedAt: 0,
 };
 
@@ -55,8 +67,10 @@ export async function loadSettings(): Promise<BlockedDomainSettings> {
       // unless the file explicitly says otherwise — including for the settings
       // files written before it existed.
       checkPerformance: parsed.checkPerformance !== false,
-      minReplyRateOoo: normalizeThreshold(
-        parsed.minReplyRateOoo ?? DEFAULT_MIN_REPLY_RATE_OOO
+      minReplyRateOoo: normalizeThreshold(parsed.minReplyRateOoo, DEFAULT_MIN_REPLY_RATE_OOO),
+      minDomainReplyRateOoo: normalizeThreshold(
+        parsed.minDomainReplyRateOoo,
+        DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO
       ),
       updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
     };
@@ -66,7 +80,12 @@ export async function loadSettings(): Promise<BlockedDomainSettings> {
 }
 
 export async function saveSettings(
-  patch: Partial<Pick<BlockedDomainSettings, "autoDelete" | "checkPerformance" | "minReplyRateOoo">>
+  patch: Partial<
+    Pick<
+      BlockedDomainSettings,
+      "autoDelete" | "checkPerformance" | "minReplyRateOoo" | "minDomainReplyRateOoo"
+    >
+  >
 ): Promise<BlockedDomainSettings> {
   const current = await loadSettings();
   const next: BlockedDomainSettings = {
@@ -74,7 +93,13 @@ export async function saveSettings(
     checkPerformance:
       patch.checkPerformance === undefined ? current.checkPerformance : patch.checkPerformance === true,
     minReplyRateOoo:
-      patch.minReplyRateOoo === undefined ? current.minReplyRateOoo : normalizeThreshold(patch.minReplyRateOoo),
+      patch.minReplyRateOoo === undefined
+        ? current.minReplyRateOoo
+        : normalizeThreshold(patch.minReplyRateOoo, DEFAULT_MIN_REPLY_RATE_OOO),
+    minDomainReplyRateOoo:
+      patch.minDomainReplyRateOoo === undefined
+        ? current.minDomainReplyRateOoo
+        : normalizeThreshold(patch.minDomainReplyRateOoo, DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO),
     updatedAt: Date.now(),
   };
   await fs.mkdir(STORE_DIR, { recursive: true });

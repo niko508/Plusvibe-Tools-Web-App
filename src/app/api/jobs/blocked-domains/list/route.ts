@@ -22,6 +22,7 @@ export async function GET(request: Request) {
         autoDelete: settings.autoDelete,
         checkPerformance: settings.checkPerformance,
         minReplyRateOoo: settings.minReplyRateOoo,
+        minDomainReplyRateOoo: settings.minDomainReplyRateOoo,
       },
       readiness: {
         serverKey: serverApiKey() !== null,

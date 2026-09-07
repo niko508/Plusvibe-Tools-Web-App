@@ -86,6 +86,7 @@ export function BlockedDomainsTool() {
     autoDelete?: boolean;
     checkPerformance?: boolean;
     minReplyRateOoo?: number;
+    minDomainReplyRateOoo?: number;
   }) {
     setSavingToggle(true);
     setError(null);
@@ -209,7 +210,7 @@ export function BlockedDomainsTool() {
             <h2 className="mt-4 text-sm font-semibold">Keep what&apos;s working</h2>
             <p className="mt-1 text-xs text-muted-foreground">
               {view?.settings.checkPerformance
-                ? "The domain's own reply rate over the last 7 days decides everything. Above the bar it is left completely alone — no stop, no sheet edit, no tenant cancelled. Below it, only its under-performing inboxes are stopped."
+                ? "Two bars on reply rate with OOO over the last 7 days. Inboxes under theirs are stopped whatever the domain does; a domain at or above its own keeps its sheet status and its tenant, and nothing is deleted."
                 : "Every blocked domain is cancelled and all its inboxes stopped, whatever the numbers say."}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -227,26 +228,25 @@ export function BlockedDomainsTool() {
                 {savingToggle ? <Spinner size={12} /> : <GaugeIcon size={13} />}
                 {view?.settings.checkPerformance ? "Check is ON" : "Check is OFF"}
               </button>
-              {view?.settings.checkPerformance && (
-                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  Stop under
-                  <input
-                    type="number"
-                    className="pv-input w-20 py-1 text-xs"
-                    min={0}
-                    max={100}
-                    step={0.1}
-                    value={String(view.settings.minReplyRateOoo)}
-                    onChange={(e) => {
-                      const n = Number(e.target.value);
-                      if (Number.isFinite(n) && n >= 0 && n <= 100) void saveSettings({ minReplyRateOoo: n });
-                    }}
-                    aria-label="Reply rate with OOO bar"
-                  />
-                  % reply rate (with OOO)
-                </label>
-              )}
             </div>
+            {view?.settings.checkPerformance && (
+              <div className="mt-2 space-y-1.5">
+                <Bar
+                  label="Stop an inbox under"
+                  hint="daily limit to 0 and warmup off"
+                  value={view.settings.minReplyRateOoo}
+                  ariaLabel="Reply rate with OOO bar"
+                  onSave={(n) => void saveSettings({ minReplyRateOoo: n })}
+                />
+                <Bar
+                  label="Write the domain off under"
+                  hint="Not Active in the sheet, tenant queued to cancel"
+                  value={view.settings.minDomainReplyRateOoo}
+                  ariaLabel="Domain reply rate with OOO bar"
+                  onSave={(n) => void saveSettings({ minDomainReplyRateOoo: n })}
+                />
+              </div>
+            )}
           </div>
         </div>
 
@@ -344,6 +344,56 @@ export function BlockedDomainsTool() {
         )
       )}
     </div>
+  );
+}
+
+/** One editable percentage bar, with what it governs written next to it. */
+function Bar({
+  label,
+  hint,
+  value,
+  ariaLabel,
+  onSave,
+}: {
+  label: string;
+  hint: string;
+  value: number;
+  ariaLabel: string;
+  onSave: (n: number) => void;
+}) {
+  const [text, setText] = useState(String(value));
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Follow the saved value, so a save from elsewhere (or a rejected entry)
+  // shows up here.
+  useEffect(() => setText(String(value)), [value]);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
+  function edit(next: string) {
+    setText(next);
+    if (timer.current) clearTimeout(timer.current);
+    // Only a complete number saves: "2." on the way to "2.5" would otherwise
+    // save 2 and snap the field back mid-typing.
+    if (!/^\d+(\.\d+)?$/.test(next.trim())) return;
+    const n = Number(next);
+    if (n > 100 || n === value) return;
+    timer.current = setTimeout(() => onSave(n), 600);
+  }
+
+  return (
+    <label className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+      {label}
+      <input
+        type="number"
+        className="pv-input w-20 py-1 text-xs"
+        min={0}
+        max={100}
+        step={0.1}
+        value={text}
+        onChange={(e) => edit(e.target.value)}
+        aria-label={ariaLabel}
+      />
+      % <span className="text-muted-foreground/70">— {hint}</span>
+    </label>
   );
 }
 

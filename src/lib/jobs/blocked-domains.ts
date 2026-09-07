@@ -332,79 +332,80 @@ async function runLocateAndQuarantine(id: string) {
     const plan = await assess(apiKey, rec, workspaceId!, inboxes, settings);
     quarantinedInboxes.set(id, plan.stop);
     rec.inboxesKept = plan.keep.length;
-    rec.quarantinedEmails = plan.stop.map((i) => i.email);
+    rec.quarantinedEmails = plan.stop.map((i) => i.email.trim().toLowerCase());
     rec.updatedAt = Date.now();
     await persist(id);
 
-    // A domain that is still producing replies is left entirely alone: no
-    // inbox stopped, no "Not Active", no tenant queued to cancel, nothing
-    // deleted. Cancelling a domain that is working costs more than the block
-    // does, and the block can be dealt with by hand.
-    if (rec.performance?.domain?.verdict === "performing") {
+    // --- Phase 3: quarantine ---------------------------------------------
+    // The under-performing inboxes are stopped whatever the domain is doing:
+    // a mailbox that isn't replying shouldn't keep sending from a blocked
+    // domain, even one worth keeping.
+    if (plan.stop.length === 0) {
       rec.phaseStates.quarantining = "skipped";
+    } else {
+      rec.phase = "quarantining";
+      rec.phaseStates.quarantining = "running";
+      await persist(id);
+      try {
+        const q = await quarantineInboxes(
+          apiKey,
+          workspaceId!,
+          plan.stop.map((i) => i.id)
+        );
+        rec.sendingStopped = q.sendingStopped;
+        rec.warmupStopped = q.warmupStopped;
+        // Only count inboxes as quarantined when BOTH halves landed. Claiming
+        // they're stopped while warmup is still running is worse than saying
+        // nothing — it's the sentence someone reads before deciding not to go
+        // and check Plusvibe.
+        rec.inboxesQuarantined =
+          q.sendingStopped && q.warmupStopped ? plan.stop.length : 0;
+        for (const e of q.errors) {
+          pushError(rec, `Could not stop ${e}`);
+        }
+        rec.phaseStates.quarantining =
+          q.sendingStopped && q.warmupStopped ? "done" : "error";
+      } catch (err) {
+        rec.phaseStates.quarantining = "error";
+        pushError(rec, `Could not stop sending/warmup: ${msg(err)}`);
+      }
+      rec.updatedAt = Date.now();
+      await persist(id);
+    }
+
+    // --- The domain itself ------------------------------------------------
+    // A domain still replying above its own bar is NOT written off: the
+    // Domains tab keeps its status, the tenant is not queued for
+    // cancellation, and nothing is deleted. Its weak inboxes are stopped
+    // above, which is reversible; writing the domain off is not.
+    if (rec.performance?.domain?.verdict === "performing") {
       rec.phaseStates.sheet = "skipped";
       rec.phaseStates.deleting = "skipped";
       rec.status = "kept";
       rec.phase = "finished";
-      rec.inboxesKept = inboxes.length;
-      rec.quarantinedEmails = [];
-      quarantinedInboxes.set(id, []);
       rec.updatedAt = Date.now();
       await persist(id);
       return;
     }
 
+    // --- Phase 4: the sheet ----------------------------------------------
+    // Written immediately, not on confirmation. The domain is under its bar
+    // and its weak inboxes are already stopped, so "Not Active" is simply
+    // true — and the tenant needs cancelling either way. Only the
+    // irreversible deletion is worth making someone press a button for.
+    await runSheet(rec);
+    rec.updatedAt = Date.now();
+    await persist(id);
+
     if (plan.stop.length === 0) {
-      // The domain is under the bar, but every individual inbox on it is above
-      // it — possible when a handful of small mailboxes carry the average
-      // down. Nothing to stop, but the domain is still cancelled.
-      rec.phaseStates.quarantining = "skipped";
+      // Under the bar as a domain, but every individual inbox is above it —
+      // possible when a few small mailboxes carry the average down. The
+      // domain is written off; there is nothing to stop or delete.
       rec.phaseStates.deleting = "skipped";
-      await persist(id);
-      await runSheet(rec);
       finish(rec);
       await persist(id);
       return;
     }
-
-    // --- Phase 3: quarantine ---------------------------------------------
-    rec.phase = "quarantining";
-    rec.phaseStates.quarantining = "running";
-    await persist(id);
-    try {
-      const q = await quarantineInboxes(
-        apiKey,
-        workspaceId!,
-        plan.stop.map((i) => i.id)
-      );
-      rec.sendingStopped = q.sendingStopped;
-      rec.warmupStopped = q.warmupStopped;
-      // Only count inboxes as quarantined when BOTH halves landed. Claiming
-      // they're stopped while warmup is still running is worse than saying
-      // nothing — it's the sentence someone reads before deciding not to go
-      // and check Plusvibe.
-      rec.inboxesQuarantined =
-        q.sendingStopped && q.warmupStopped ? plan.stop.length : 0;
-      for (const e of q.errors) {
-        pushError(rec, `Could not stop ${e}`);
-      }
-      rec.phaseStates.quarantining =
-        q.sendingStopped && q.warmupStopped ? "done" : "error";
-    } catch (err) {
-      rec.phaseStates.quarantining = "error";
-      pushError(rec, `Could not stop sending/warmup: ${msg(err)}`);
-    }
-    rec.updatedAt = Date.now();
-    await persist(id);
-
-    // --- Phase 3: the sheet ----------------------------------------------
-    // Written immediately, not on confirmation. The domain is blocked and its
-    // inboxes are already stopped, so "Not Active" is simply true — and the
-    // tenant needs cancelling either way. Only the irreversible deletion is
-    // worth making someone press a button for.
-    await runSheet(rec);
-    rec.updatedAt = Date.now();
-    await persist(id);
 
     // --- Hand off to deletion, or wait ------------------------------------
     if (settings.autoDelete) {
@@ -453,12 +454,13 @@ async function assess(
   rec: BlockedDomainJob,
   workspaceId: string,
   inboxes: Inbox[],
-  settings: { checkPerformance: boolean; minReplyRateOoo: number }
+  settings: { checkPerformance: boolean; minReplyRateOoo: number; minDomainReplyRateOoo: number }
 ): Promise<QuarantinePlan> {
   const window = performanceWindow();
   const outcome: PerformanceOutcome = {
     ...window,
     threshold: settings.minReplyRateOoo,
+    domainThreshold: settings.minDomainReplyRateOoo,
     source: "skipped",
     inboxes: [],
   };
@@ -487,7 +489,7 @@ async function assess(
       pushError(rec, "Could not read the last 7 days for any inbox on this domain; all of them were stopped.");
     } else {
       plan = planQuarantine(inboxes, indexStats(rows), settings.minReplyRateOoo);
-      outcome.domain = aggregateDomain(rows, settings.minReplyRateOoo);
+      outcome.domain = aggregateDomain(rows, settings.minDomainReplyRateOoo);
     }
     rec.phaseStates.assessing = "done";
   } catch (err) {

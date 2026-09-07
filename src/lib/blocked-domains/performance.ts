@@ -15,7 +15,17 @@
 //
 // Pure module — no API calls — so all of it is unit-tested.
 
+/**
+ * Two separate bars, because they answer two different questions.
+ *
+ * The INBOX bar decides whether one mailbox keeps its daily limit. The DOMAIN
+ * bar decides whether the domain is written off — Not Active in the sheet and
+ * its tenant queued for cancellation. A domain can be worth keeping while some
+ * of its mailboxes are not: those mailboxes are stopped, and the domain and
+ * tenant are left alone.
+ */
 export const DEFAULT_MIN_REPLY_RATE_OOO = 1;
+export const DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO = 1.5;
 
 export type InboxDecision = "stop" | "keep";
 
@@ -163,16 +173,19 @@ export function stopEverything<T extends { id: string; email: string }>(inboxes:
 }
 
 /** The bar, sanitised: a percentage between 0 and 100. */
-export function normalizeThreshold(raw: unknown): number {
+export function normalizeThreshold(
+  raw: unknown,
+  fallback = DEFAULT_MIN_REPLY_RATE_OOO
+): number {
   // Blank must NOT read as 0 — Number("") is 0, and a bar of 0 would keep
   // every inbox on a blocked domain sending. Missing means "use the default".
   if (typeof raw !== "number") {
     const text = String(raw ?? "").trim();
-    if (text === "") return DEFAULT_MIN_REPLY_RATE_OOO;
+    if (text === "") return fallback;
     raw = Number(text);
   }
   const n = raw as number;
-  if (!Number.isFinite(n) || n < 0) return DEFAULT_MIN_REPLY_RATE_OOO;
+  if (!Number.isFinite(n) || n < 0) return fallback;
   return Math.min(100, n);
 }
 
@@ -228,7 +241,7 @@ const round = (n: number) => Math.round(n * 100) / 100;
  * rate in this app is worked out, with OOO replies added to the numerator for
  * the with-OOO figure.
  */
-export function aggregateDomain(rows: InboxStats[], minReplyRateOoo: number): DomainPerformance {
+export function aggregateDomain(rows: InboxStats[], minDomainReplyRateOoo: number): DomainPerformance {
   const sum = (pick: (r: InboxStats) => number) => rows.reduce((n, r) => n + pick(r), 0);
   const sent = sum((r) => r.sent);
   const contacted = sum((r) => r.contacted);
@@ -251,7 +264,7 @@ export function aggregateDomain(rows: InboxStats[], minReplyRateOoo: number): Do
   }
 
   const verdict: DomainVerdict =
-    basis === "none" ? "unknown" : replyRateOoo >= minReplyRateOoo ? "performing" : "under";
+    basis === "none" ? "unknown" : replyRateOoo >= minDomainReplyRateOoo ? "performing" : "under";
 
   return { inboxes: rows.length, sent, contacted, replies, oooReplies, replyRate, replyRateOoo, basis, verdict };
 }

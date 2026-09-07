@@ -22,7 +22,7 @@ const STATUS_META: Record<
   { label: string; className: string }
 > = {
   working: { label: "Working", className: "bg-accent/10 text-accent" },
-  kept: { label: "Left alone — still performing", className: "bg-success/10 text-success" },
+  kept: { label: "Domain kept — still replying", className: "bg-success/10 text-success" },
   awaiting_confirmation: {
     label: "Needs your confirmation",
     className: "bg-warning/10 text-warning",
@@ -84,14 +84,12 @@ export function JobCard({
       if (!perf) return state === "skipped" ? "not checked" : "";
       if (perf.source === "skipped") return "check is off — all stopped";
       if (perf.source === "unavailable") return "no figures — all stopped";
-      if (domain?.verdict === "performing") {
-        return `domain at ${domain.replyRateOoo}% with OOO — left alone`;
-      }
       const kept = job.inboxesKept ?? 0;
       const head = domain ? `domain at ${domain.replyRateOoo}% · ` : "";
-      return `${head}${formatNumber(stopCount)} under ${perf.threshold}%${kept > 0 ? `, ${formatNumber(kept)} still replying` : ""}`;
+      const tail = `${formatNumber(stopCount)} under ${perf.threshold}%${kept > 0 ? `, ${formatNumber(kept)} still replying` : ""}`;
+      return `${head}${tail}`;
     }
-    if (phase === "sheet" && job.status === "kept") return "left alone";
+    if (phase === "sheet" && job.status === "kept") return "domain kept — left alone";
     if (phase === "quarantining") {
       if (job.phaseStates?.quarantining === "skipped") return "nothing to stop";
       if (job.phaseStates?.quarantining === "pending") return "";
@@ -267,7 +265,11 @@ export function JobCard({
 
       {job.status === "kept" && (
         <div className="mt-3 rounded-xl border border-success/30 bg-success/5 p-3 text-xs">
-          <p className="font-medium text-success">Nothing was changed</p>
+          <p className="font-medium text-success">
+            The domain was not written off
+            {stopCount > 0 &&
+              ` — but ${formatNumber(stopCount)} of its inboxes ${stopCount === 1 ? "was" : "were"} stopped`}
+          </p>
           <p className="mt-1 text-muted-foreground">
             Over the last 7 days <span className="font-mono">{job.domain}</span> replied at{" "}
             <span className="font-medium text-foreground">{domain?.replyRateOoo ?? 0}% with OOO</span>
@@ -278,8 +280,11 @@ export function JobCard({
                 {formatNumber(domain.contacted)} leads contacted)
               </>
             )}
-            , at or above the {perf?.threshold ?? 1}% bar. Its inboxes are still sending and warming, the Domains tab
-            was left as it is, and the tenant was not queued to cancel. Handle the block by hand if it needs handling.
+            , at or above the {perf?.domainThreshold ?? 1.5}% domain bar. The Domains tab keeps its status, the tenant
+            was not queued to cancel, and nothing was deleted.{" "}
+            {stopCount > 0
+              ? `The ${formatNumber(stopCount)} inbox${stopCount === 1 ? "" : "es"} under the ${perf?.threshold ?? 1}% inbox bar had their daily limit set to 0 and warmup switched off; turn them back on in Plusvibe if you disagree.`
+              : "Every inbox on it is above the inbox bar too, so none were stopped."}
           </p>
         </div>
       )}
@@ -375,7 +380,11 @@ export function JobCard({
                     domain.basis === "counts"
                       ? ` · ${formatNumber(domain.replies)} replies + ${formatNumber(domain.oooReplies)} OOO from ${formatNumber(domain.contacted)} contacted · ${formatNumber(domain.sent)} sent`
                       : ` · averaged across ${formatNumber(domain.inboxes)} inboxes by send volume`
-                  } — ${domain.verdict === "performing" ? "at or above the bar, so nothing was cancelled" : "under the bar"}`}
+                  } — ${
+                    domain.verdict === "performing"
+                      ? `at or above the ${perf?.domainThreshold ?? 1.5}% domain bar, so the domain and tenant were left alone`
+                      : `under the ${perf?.domainThreshold ?? 1.5}% domain bar, so the domain was written off`
+                  }`}
                 />
               )}
               <Detail

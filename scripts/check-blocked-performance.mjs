@@ -20,11 +20,12 @@ const m = await importTs("@/lib/blocked-domains/performance");
 const {
   DEFAULT_MIN_REPLY_RATE_OOO, readStatsRow, indexStats, statsFor, assessInbox,
   planQuarantine, stopEverything, normalizeThreshold, describePlan, REASON_LABELS,
-  aggregateDomain, unknownDomain,
+  aggregateDomain, unknownDomain, DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO,
 } = m;
 
 // --- reading what the API sends ------------------------------------------------------
-eq("the bar defaults to 1%", DEFAULT_MIN_REPLY_RATE_OOO, 1);
+eq("the inbox bar defaults to 1%", DEFAULT_MIN_REPLY_RATE_OOO, 1);
+eq("the domain bar defaults to 1.5%", DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO, 1.5);
 eq("a bulk row, numbers under header", readStatsRow({
   email_acc_id: "i1", email: "A@Acme.com",
   header: { total_sent_count: 94, total_unique_contacted_count: 80, total_reply_count: 6, total_ooo_reply_count: 2, reply_rate: 6.4, reply_rate_with_ooo: 8.8 },
@@ -107,6 +108,19 @@ eq("a small lucky mailbox can't rescue a silent domain", [skewed.replyRateOoo, s
 eq("…where a plain average of the two rates would have said otherwise", (25 + 0) / 2 >= 1, true);
 
 eq("a domain right on the bar is performing", aggregateDomain([row(100, 100, 1, 0)], 1).verdict, "performing");
+// The two bars are independent: 1.2% clears the inbox bar but not the domain one.
+eq("at the default bars, 1.2% is a kept domain's weak inbox territory", [
+  assessInbox(IN, s(1000, 1.2), DEFAULT_MIN_REPLY_RATE_OOO).decision,
+  aggregateDomain([row(1000, 1000, 12, 0)], DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO).verdict,
+], ["keep", "under"]);
+eq("…and 1.6% clears both", [
+  assessInbox(IN, s(1000, 1.6), DEFAULT_MIN_REPLY_RATE_OOO).decision,
+  aggregateDomain([row(1000, 1000, 16, 0)], DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO).verdict,
+], ["keep", "performing"]);
+eq("…while 0.5% fails both", [
+  assessInbox(IN, s(1000, 0.5), DEFAULT_MIN_REPLY_RATE_OOO).decision,
+  aggregateDomain([row(1000, 1000, 5, 0)], DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO).verdict,
+], ["stop", "under"]);
 eq("…just under is not", aggregateDomain([row(100, 100, 0, 0)], 1).verdict, "under");
 eq("OOO replies count towards it", aggregateDomain([row(100, 100, 0, 2)], 1).verdict, "performing");
 eq("a higher bar flips it", aggregateDomain([row(100, 100, 2, 0)], 5).verdict, "under");
@@ -125,6 +139,8 @@ eq("a number passes through", normalizeThreshold(2.5), 2.5);
 eq("a numeric string is read", normalizeThreshold("0.5"), 0.5);
 eq("zero is allowed", normalizeThreshold(0), 0);
 eq("nonsense falls back to the default", normalizeThreshold("abc"), 1);
+eq("…or to whichever default is asked for", normalizeThreshold("abc", 1.5), 1.5);
+eq("a blank domain bar falls back to 1.5, never 0", normalizeThreshold("", DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO), 1.5);
 eq("undefined falls back to the default", normalizeThreshold(undefined), 1);
 eq("a negative bar falls back to the default", normalizeThreshold(-3), 1);
 eq("over 100 is clamped", normalizeThreshold(150), 100);
