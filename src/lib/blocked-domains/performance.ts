@@ -37,6 +37,8 @@ export interface InboxStats {
   id: string;
   email: string;
   sent: number;
+  /** Unique leads contacted — the denominator the app's rates use. */
+  contacted: number;
   replies: number;
   oooReplies: number;
   /** Percentages, as the API reports them: 7.5 means 7.5%. */
@@ -72,10 +74,17 @@ export function readStatsRow(raw: Record<string, unknown>): InboxStats | null {
   const id = String(raw.email_acc_id ?? raw.id ?? raw._id ?? "").trim();
   const email = String(raw.email ?? "").trim().toLowerCase();
   if (!id && !email) return null;
+  // The app reads rates as replies ÷ UNIQUE leads contacted; the API names
+  // that count three different ways depending on which endpoint answers.
+  const contacted =
+    header.total_unique_contacted_count ??
+    header.total_new_lead_contacted_count ??
+    header.total_contacted_count;
   return {
     id,
     email,
     sent: num(header.total_sent_count),
+    contacted: num(contacted),
     replies: num(header.total_reply_count),
     oooReplies: num(header.total_ooo_reply_count),
     replyRate: num(header.reply_rate),
@@ -174,6 +183,93 @@ export const REASON_LABELS: Record<DecisionReason, string> = {
   "no-stats": "no figures from Plusvibe — stopped",
   "not-checked": "not checked — stopped",
 };
+
+// --- The domain as a whole ---------------------------------------------------
+//
+// The per-inbox decision says which mailboxes to stop. This says whether the
+// DOMAIN is worth keeping at all — and nothing irreversible (the sheet's Not
+// Active, the tenant's cancellation, any deletion) happens to a domain that is
+// still producing replies.
+
+export type DomainVerdict =
+  /** At or above the bar over the whole domain — leave it alone. */
+  | "performing"
+  /** Below the bar. */
+  | "under"
+  /** Nothing to judge it on: no sends, or no figures at all. */
+  | "unknown";
+
+export interface DomainPerformance {
+  inboxes: number;
+  sent: number;
+  contacted: number;
+  replies: number;
+  oooReplies: number;
+  /** Percentages over the whole domain. */
+  replyRate: number;
+  replyRateOoo: number;
+  /**
+   * How the rates were arrived at: "counts" is the real aggregate,
+   * "weighted" averages the per-inbox rates by send volume when the API gave
+   * rates but no usable denominator, "none" means there was nothing to use.
+   */
+  basis: "counts" | "weighted" | "none";
+  verdict: DomainVerdict;
+}
+
+const round = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * The domain's own reply rate over the window.
+ *
+ * Summed across its inboxes rather than averaged per inbox: a mailbox that
+ * sent 5 emails and got one reply must not outweigh one that sent 500 and got
+ * none. The denominator is unique leads contacted, matching how every other
+ * rate in this app is worked out, with OOO replies added to the numerator for
+ * the with-OOO figure.
+ */
+export function aggregateDomain(rows: InboxStats[], minReplyRateOoo: number): DomainPerformance {
+  const sum = (pick: (r: InboxStats) => number) => rows.reduce((n, r) => n + pick(r), 0);
+  const sent = sum((r) => r.sent);
+  const contacted = sum((r) => r.contacted);
+  const replies = sum((r) => r.replies);
+  const oooReplies = sum((r) => r.oooReplies);
+
+  let replyRate = 0;
+  let replyRateOoo = 0;
+  let basis: DomainPerformance["basis"] = "none";
+  if (contacted > 0) {
+    replyRate = round((replies / contacted) * 100);
+    replyRateOoo = round(((replies + oooReplies) / contacted) * 100);
+    basis = "counts";
+  } else if (sent > 0) {
+    // No denominator came back, but the per-inbox rates did. Weight them by
+    // send volume, which is the closest honest thing to the real aggregate.
+    replyRate = round(sum((r) => r.replyRate * r.sent) / sent);
+    replyRateOoo = round(sum((r) => r.replyRateOoo * r.sent) / sent);
+    basis = "weighted";
+  }
+
+  const verdict: DomainVerdict =
+    basis === "none" ? "unknown" : replyRateOoo >= minReplyRateOoo ? "performing" : "under";
+
+  return { inboxes: rows.length, sent, contacted, replies, oooReplies, replyRate, replyRateOoo, basis, verdict };
+}
+
+/** The aggregate for a domain nothing is known about. */
+export function unknownDomain(inboxes: number): DomainPerformance {
+  return {
+    inboxes,
+    sent: 0,
+    contacted: 0,
+    replies: 0,
+    oooReplies: 0,
+    replyRate: 0,
+    replyRateOoo: 0,
+    basis: "none",
+    verdict: "unknown",
+  };
+}
 
 /** "3 stopped, 2 left sending" */
 export function describePlan(plan: QuarantinePlan): string {

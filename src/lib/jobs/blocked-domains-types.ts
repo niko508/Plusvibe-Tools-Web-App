@@ -14,23 +14,38 @@
 // An inbox still replying is left alone by every step after the assessment: it
 // is not stopped, and it is not deleted. Only the stopped ones are.
 //
-// Steps 1-3 all run unattended. The domain is blocked and its inboxes are
+// The assessment decides whether any of that happens at all. A domain still
+// producing replies over the window is LEFT ENTIRELY ALONE — no inbox stopped,
+// no "Not Active" in the sheet, no tenant queued for cancellation, nothing
+// deleted — and the run is recorded as "kept". Only a domain under the bar is
+// cancelled, and even then its individual inboxes that are still replying keep
+// sending and are not deleted.
+//
+// For a domain under the bar, steps 3-4 run unattended: its inboxes are
 // already stopped, so "Not Active" is just true, and the tenant needs
 // cancelling either way. Only the deletion is irreversible, so only the
 // deletion waits for a person — and declining it does not un-write the sheet.
 //
-// Quarantine happens without confirmation on purpose: a blocked domain is
-// actively burning reputation, and stopping it is reversible. Deletion isn't.
+// Quarantine happens without confirmation on purpose: a blocked domain that
+// isn't working is burning reputation, and stopping it is reversible.
 
-import type { InboxAssessment } from "@/lib/blocked-domains/performance";
+import type {
+  DomainPerformance,
+  InboxAssessment,
+} from "@/lib/blocked-domains/performance";
 
-export type { InboxAssessment };
+export type { DomainPerformance, InboxAssessment };
 
 export const MAX_STORED_ERRORS = 30;
 
 export type BlockedDomainStatus =
   /** Locating and quarantining. */
   | "working"
+  /**
+   * The domain is still producing replies, so nothing was touched: no inbox
+   * stopped, no sheet edit, no tenant queued to cancel, nothing deleted.
+   */
+  | "kept"
   /** Quarantined, waiting for someone to confirm the deletion. */
   | "awaiting_confirmation"
   /** Confirmed (or auto-confirmed) and deleting. */
@@ -99,6 +114,8 @@ export interface PerformanceOutcome {
   end: string;
   /** The reply-rate-with-OOO bar, in percent. */
   threshold: number;
+  /** The whole domain's figures over the window, and its verdict. */
+  domain?: DomainPerformance;
   /** Which endpoint answered, or that no figures were available. */
   source: "bulk" | "per-inbox" | "unavailable" | "skipped";
   /** Per inbox, in the order they were found. */

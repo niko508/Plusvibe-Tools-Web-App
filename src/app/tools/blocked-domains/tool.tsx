@@ -122,7 +122,9 @@ export function BlockedDomainsTool() {
     total: jobs.length,
     waiting: awaiting.length,
     deleted: jobs.filter((j) => j.inboxesDeleted > 0).length,
-    kept: jobs.filter((j) => j.status === "dismissed").length,
+    // Domains nothing was done to: still performing, or someone declined the
+    // deletion.
+    kept: jobs.filter((j) => j.status === "dismissed" || j.status === "kept").length,
     failed: jobs.filter(
       (j) =>
         (j.status === "error" || j.status === "interrupted") &&
@@ -207,8 +209,8 @@ export function BlockedDomainsTool() {
             <h2 className="mt-4 text-sm font-semibold">Keep what&apos;s working</h2>
             <p className="mt-1 text-xs text-muted-foreground">
               {view?.settings.checkPerformance
-                ? "Each inbox on the domain is judged on its last 7 days. Only the ones under the bar are stopped — the rest keep sending and are never deleted."
-                : "Every inbox on a blocked domain is stopped, whatever its numbers say."}
+                ? "The domain's own reply rate over the last 7 days decides everything. Above the bar it is left completely alone — no stop, no sheet edit, no tenant cancelled. Below it, only its under-performing inboxes are stopped."
+                : "Every blocked domain is cancelled and all its inboxes stopped, whatever the numbers say."}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <button

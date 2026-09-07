@@ -41,9 +41,11 @@ import {
   type Inbox,
 } from "@/lib/blocked-domains/api";
 import {
+  aggregateDomain,
   indexStats,
   planQuarantine,
   stopEverything,
+  unknownDomain,
   type QuarantinePlan,
 } from "@/lib/blocked-domains/performance";
 import { daysAgo, toApiDate } from "@/lib/format";
@@ -334,10 +336,28 @@ async function runLocateAndQuarantine(id: string) {
     rec.updatedAt = Date.now();
     await persist(id);
 
+    // A domain that is still producing replies is left entirely alone: no
+    // inbox stopped, no "Not Active", no tenant queued to cancel, nothing
+    // deleted. Cancelling a domain that is working costs more than the block
+    // does, and the block can be dealt with by hand.
+    if (rec.performance?.domain?.verdict === "performing") {
+      rec.phaseStates.quarantining = "skipped";
+      rec.phaseStates.sheet = "skipped";
+      rec.phaseStates.deleting = "skipped";
+      rec.status = "kept";
+      rec.phase = "finished";
+      rec.inboxesKept = inboxes.length;
+      rec.quarantinedEmails = [];
+      quarantinedInboxes.set(id, []);
+      rec.updatedAt = Date.now();
+      await persist(id);
+      return;
+    }
+
     if (plan.stop.length === 0) {
-      // Every inbox on the domain is still replying. Nothing is stopped and
-      // nothing is deleted — but the sheet is still written, because the
-      // domain is blocked regardless of how its inboxes are performing.
+      // The domain is under the bar, but every individual inbox on it is above
+      // it — possible when a handful of small mailboxes carry the average
+      // down. Nothing to stop, but the domain is still cancelled.
       rec.phaseStates.quarantining = "skipped";
       rec.phaseStates.deleting = "skipped";
       await persist(id);
@@ -445,8 +465,9 @@ async function assess(
 
   if (!settings.checkPerformance) {
     const plan = stopEverything(inboxes);
-    outcome.note = "The performance check is off, so every inbox on the domain is stopped.";
+    outcome.note = "The performance check is off, so the domain is cancelled and every inbox on it stopped.";
     outcome.inboxes = plan.assessments;
+    outcome.domain = unknownDomain(inboxes.length);
     rec.performance = outcome;
     rec.phaseStates.assessing = "skipped";
     return plan;
@@ -461,16 +482,19 @@ async function assess(
       // Nothing came back at all — treat it as an outage, not as "no replies".
       plan = stopEverything(inboxes);
       outcome.source = "unavailable";
-      outcome.note = "No figures came back for these inboxes, so all of them were stopped.";
+      outcome.domain = unknownDomain(inboxes.length);
+      outcome.note = "No figures came back for these inboxes, so the domain was cancelled and all of them stopped.";
       pushError(rec, "Could not read the last 7 days for any inbox on this domain; all of them were stopped.");
     } else {
       plan = planQuarantine(inboxes, indexStats(rows), settings.minReplyRateOoo);
+      outcome.domain = aggregateDomain(rows, settings.minReplyRateOoo);
     }
     rec.phaseStates.assessing = "done";
   } catch (err) {
     plan = stopEverything(inboxes);
     outcome.source = "unavailable";
-    outcome.note = "The performance check failed, so all inboxes were stopped.";
+    outcome.domain = unknownDomain(inboxes.length);
+    outcome.note = "The performance check failed, so the domain was cancelled and all inboxes stopped.";
     pushError(rec, `Could not check the last 7 days (${msg(err)}); all inboxes were stopped.`);
     rec.phaseStates.assessing = "error";
   }

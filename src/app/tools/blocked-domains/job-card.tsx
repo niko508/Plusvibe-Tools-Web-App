@@ -22,6 +22,7 @@ const STATUS_META: Record<
   { label: string; className: string }
 > = {
   working: { label: "Working", className: "bg-accent/10 text-accent" },
+  kept: { label: "Left alone — still performing", className: "bg-success/10 text-success" },
   awaiting_confirmation: {
     label: "Needs your confirmation",
     className: "bg-warning/10 text-warning",
@@ -59,6 +60,7 @@ export function JobCard({
   const errors = job.errors ?? [];
   const sheet = job.sheet;
   const perf = job.performance;
+  const domain = perf?.domain;
   // How many inboxes this run is actually acting on. Records from before the
   // performance check existed acted on every inbox found.
   const stopCount = perf ? perf.inboxes.filter((i) => i.decision === "stop").length : job.inboxesFound;
@@ -82,9 +84,14 @@ export function JobCard({
       if (!perf) return state === "skipped" ? "not checked" : "";
       if (perf.source === "skipped") return "check is off — all stopped";
       if (perf.source === "unavailable") return "no figures — all stopped";
+      if (domain?.verdict === "performing") {
+        return `domain at ${domain.replyRateOoo}% with OOO — left alone`;
+      }
       const kept = job.inboxesKept ?? 0;
-      return `${formatNumber(stopCount)} under ${perf.threshold}%${kept > 0 ? `, ${formatNumber(kept)} still replying` : ""}`;
+      const head = domain ? `domain at ${domain.replyRateOoo}% · ` : "";
+      return `${head}${formatNumber(stopCount)} under ${perf.threshold}%${kept > 0 ? `, ${formatNumber(kept)} still replying` : ""}`;
     }
+    if (phase === "sheet" && job.status === "kept") return "left alone";
     if (phase === "quarantining") {
       if (job.phaseStates?.quarantining === "skipped") return "nothing to stop";
       if (job.phaseStates?.quarantining === "pending") return "";
@@ -258,6 +265,25 @@ export function JobCard({
         </p>
       )}
 
+      {job.status === "kept" && (
+        <div className="mt-3 rounded-xl border border-success/30 bg-success/5 p-3 text-xs">
+          <p className="font-medium text-success">Nothing was changed</p>
+          <p className="mt-1 text-muted-foreground">
+            Over the last 7 days <span className="font-mono">{job.domain}</span> replied at{" "}
+            <span className="font-medium text-foreground">{domain?.replyRateOoo ?? 0}% with OOO</span>
+            {domain?.basis === "counts" && (
+              <>
+                {" "}
+                ({formatNumber(domain.replies + domain.oooReplies)} replies from{" "}
+                {formatNumber(domain.contacted)} leads contacted)
+              </>
+            )}
+            , at or above the {perf?.threshold ?? 1}% bar. Its inboxes are still sending and warming, the Domains tab
+            was left as it is, and the tenant was not queued to cancel. Handle the block by hand if it needs handling.
+          </p>
+        </div>
+      )}
+
       {job.status === "dismissed" && (
         <p className="mt-2 text-xs text-muted-foreground">
           Not deleted. The inboxes are still quarantined — turn their daily
@@ -342,6 +368,16 @@ export function JobCard({
           />
           {perf && (
             <>
+              {domain && domain.basis !== "none" && (
+                <Detail
+                  label="Domain over 7 days"
+                  value={`${domain.replyRateOoo}% with OOO · ${domain.replyRate}% plain${
+                    domain.basis === "counts"
+                      ? ` · ${formatNumber(domain.replies)} replies + ${formatNumber(domain.oooReplies)} OOO from ${formatNumber(domain.contacted)} contacted · ${formatNumber(domain.sent)} sent`
+                      : ` · averaged across ${formatNumber(domain.inboxes)} inboxes by send volume`
+                  } — ${domain.verdict === "performing" ? "at or above the bar, so nothing was cancelled" : "under the bar"}`}
+                />
+              )}
               <Detail
                 label="Last 7 days"
                 value={

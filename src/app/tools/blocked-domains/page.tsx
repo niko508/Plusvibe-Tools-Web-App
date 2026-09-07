@@ -5,7 +5,7 @@ import { BlockedDomainsTool } from "./tool";
 export const metadata: Metadata = {
   title: "Blocked Domains (Automation) · Plusvibe Tools",
   description:
-    "Clay flags a blocked sending domain, sending and warmup stop immediately, and you confirm the inbox deletion here.",
+    "Clay flags a blocked sending domain; domains still replying are left alone, the rest are stopped and you confirm the inbox deletion here.",
 };
 
 export default function BlockedDomainsPage() {
@@ -19,11 +19,13 @@ export default function BlockedDomainsPage() {
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground sm:text-base">
             When Clay spots a blocked sending domain in a bounce reason, it
-            calls this app. Without waiting for anyone: the domain&apos;s
-            inboxes stop sending and warming, the domain goes Not Active in the
-            Domains sheet, and its tenant is queued on Tenants to Cancel. Only
-            deleting the inboxes waits for you here, because only that
-            can&apos;t be undone.
+            calls this app, which first works out how the domain has replied
+            over the last 7 days. A domain still performing is left entirely
+            alone. One that isn&apos;t has its inboxes stopped, goes Not Active
+            in the Domains sheet and its tenant queued on Tenants to Cancel —
+            except for any individual inbox still replying, which keeps
+            sending. Only deleting inboxes waits for you here, because only
+            that can&apos;t be undone.
           </p>
         </div>
         <BlockedDomainsTool />
