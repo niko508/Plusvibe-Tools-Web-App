@@ -25,6 +25,7 @@ import {
   BLOCKED_STATUS,
   CANCEL_TAB,
   COL_CANCEL_TENANT,
+  COL_DOMAIN_HOST,
   buildCancelRow,
   findDomainRow,
   headerIndex,
@@ -35,6 +36,7 @@ import { loadSettings } from "@/lib/blocked-domains/settings";
 import {
   deleteInbox,
   fetchInboxStats,
+  isSending,
   listInboxes,
   listWorkspaces,
   quarantineInboxes,
@@ -300,7 +302,7 @@ async function runLocateAndQuarantine(id: string) {
 
   try {
     // --- Phase 1: locate --------------------------------------------------
-    const { workspaceId, workspaceName, inboxes, viaSheet, scanned, client } =
+    const { workspaceId, workspaceName, inboxes, viaSheet, scanned, client, domainHost } =
       await locate(apiKey, rec);
 
     rec.workspaceId = workspaceId ?? undefined;
@@ -308,7 +310,10 @@ async function runLocateAndQuarantine(id: string) {
     rec.foundViaSheet = viaSheet;
     rec.workspacesScanned = scanned;
     rec.inboxesFound = inboxes.length;
-    if (client) rec.sheet = { ...(rec.sheet ?? emptySheet()), client };
+    rec.inboxesActive = inboxes.filter(isSending).length;
+    if (client || domainHost) {
+      rec.sheet = { ...(rec.sheet ?? emptySheet()), client, domainHost };
+    }
     rec.phaseStates.locating = "done";
     rec.updatedAt = Date.now();
     await persist(id);
@@ -368,6 +373,9 @@ async function runLocateAndQuarantine(id: string) {
         // and check Plusvibe.
         rec.inboxesQuarantined =
           q.sendingStopped && q.warmupStopped ? plan.stop.length : 0;
+        if (q.sendingStopped) {
+          rec.inboxesActive = Math.max(0, (rec.inboxesActive ?? inboxes.length) - plan.stop.length);
+        }
         for (const e of q.errors) {
           pushError(rec, `Could not stop ${e}`);
         }
@@ -533,6 +541,7 @@ interface LocateResult {
   viaSheet: boolean;
   scanned: number;
   client?: string;
+  domainHost?: string;
 }
 
 /**
@@ -549,6 +558,7 @@ async function locate(
 ): Promise<LocateResult> {
   const workspaces = await listWorkspaces(apiKey);
   let client: string | undefined;
+  let domainHost: string | undefined;
   let hinted: string | null = null;
 
   // The sheet is a hint only; a failure here costs speed, not correctness.
@@ -563,9 +573,11 @@ async function locate(
         tenantEmail: headerIndex(header, COL_TENANT_EMAIL),
         tenantSource: headerIndex(header, COL_TENANT_SOURCE),
         client: headerIndex(header, "Client"),
+        domainHost: headerIndex(header, COL_DOMAIN_HOST),
       });
       if (hit.row) {
         client = hit.row.client || undefined;
+        domainHost = hit.row.domainHost || undefined;
         if (client) hinted = matchWorkspaceByClient(client, workspaces);
       }
     }
@@ -585,6 +597,7 @@ async function locate(
         viaSheet: true,
         scanned: 1,
         client,
+        domainHost,
       };
     }
   }
@@ -605,6 +618,7 @@ async function locate(
         viaSheet: false,
         scanned,
         client,
+        domainHost,
       };
     }
   }
@@ -616,6 +630,7 @@ async function locate(
     viaSheet: false,
     scanned,
     client,
+    domainHost,
   };
 }
 
@@ -688,6 +703,9 @@ async function runDelete(id: string) {
     }
   }
   quarantinedInboxes.delete(id);
+  // `inboxesFound` means "on the domain as of the last look", so the ones just
+  // deleted are no longer among them.
+  rec.inboxesFound = Math.max(0, rec.inboxesFound - rec.inboxesDeleted);
   rec.phaseStates.deleting =
     rec.inboxesDeleted === inboxes.length ? "done" : "error";
 
@@ -737,6 +755,7 @@ async function runSheet(rec: BlockedDomainJob) {
       tenantEmail: headerIndex(header, COL_TENANT_EMAIL),
       tenantSource: headerIndex(header, COL_TENANT_SOURCE),
       client: headerIndex(header, "Client"),
+      domainHost: headerIndex(header, COL_DOMAIN_HOST),
     });
 
     if (!hit.row) {
@@ -757,6 +776,7 @@ async function runSheet(rec: BlockedDomainJob) {
     outcome.tenantEmail = hit.row.tenantEmail || undefined;
     outcome.tenantSource = hit.row.tenantSource || undefined;
     outcome.client = hit.row.client || outcome.client;
+    outcome.domainHost = hit.row.domainHost || outcome.domainHost;
 
     if (iStatus < 0) {
       pushError(rec, `The "${DEFAULT_SHEET_TAB}" tab has no ${COL_STATUS} column.`);
@@ -839,6 +859,34 @@ async function tick() {
   }
 }
 
+/**
+ * Reads the domain's registrar from the sheet onto the record.
+ *
+ * Best-effort: the host is context for whoever reads the card, so a sheet that
+ * can't be read costs a line of detail, never the run.
+ */
+async function refreshDomainHost(rec: BlockedDomainJob) {
+  try {
+    const sheetId = envSpreadsheetId();
+    if (!sheetId) return;
+    const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
+    const header = grid[0] ?? [];
+    const hit = findDomainRow(grid, rec.domain, {
+      domain: headerIndex(header, COL_DOMAIN),
+      status: headerIndex(header, COL_STATUS),
+      tenantEmail: headerIndex(header, COL_TENANT_EMAIL),
+      tenantSource: headerIndex(header, COL_TENANT_SOURCE),
+      client: headerIndex(header, "Client"),
+      domainHost: headerIndex(header, COL_DOMAIN_HOST),
+    });
+    if (hit.row?.domainHost) {
+      rec.sheet = { ...(rec.sheet ?? emptySheet()), domainHost: hit.row.domainHost };
+    }
+  } catch {
+    // the card simply won't show a host
+  }
+}
+
 /** Arms the repeat checks for a record, if there is anything left to watch. */
 async function scheduleRecheck(rec: BlockedDomainJob) {
   const settings = await loadSettings();
@@ -899,6 +947,8 @@ export async function runRecheck(
     );
     run.inboxesFound = inboxes.length;
     rec.inboxesFound = inboxes.length;
+    rec.inboxesActive = inboxes.filter(isSending).length;
+    run.inboxesActive = rec.inboxesActive;
 
     if (inboxes.length === 0) {
       state.endedReason = "No inboxes left on this domain.";
@@ -907,6 +957,10 @@ export async function runRecheck(
       run.kept = 0;
       return true;
     }
+
+    // Backfills the host for records handled before it was read, and keeps it
+    // honest if the sheet has been corrected since.
+    await refreshDomainHost(rec);
 
     const plan = await assess(apiKey, rec, rec.workspaceId, inboxes, settings);
     const domain = rec.performance?.domain;
@@ -922,6 +976,8 @@ export async function runRecheck(
       const q = await quarantineInboxes(apiKey, rec.workspaceId, fresh.map((i) => i.id));
       if (q.sendingStopped && q.warmupStopped) {
         run.stopped = fresh.length;
+        rec.inboxesActive = Math.max(0, (rec.inboxesActive ?? fresh.length) - fresh.length);
+        run.inboxesActive = rec.inboxesActive;
         rec.inboxesQuarantined += fresh.length;
         rec.sendingStopped = true;
         rec.warmupStopped = true;

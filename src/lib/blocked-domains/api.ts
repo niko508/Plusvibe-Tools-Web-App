@@ -23,6 +23,35 @@ const STATS_CHUNK = 100;
 export interface Inbox {
   id: string;
   email: string;
+  /** As Plusvibe reports it: ACTIVE, PAUSED, and so on. */
+  status?: string;
+  /** Campaign sends per day. 0 is a stopped inbox. */
+  dailyLimit?: number;
+  warmupStatus?: string;
+}
+
+/**
+ * Whether an inbox is still sending.
+ *
+ * Stopping one sets its daily limit to 0 and its warmup to INACTIVE, so a
+ * limit of 0 is the signal — including for inboxes stopped by hand in
+ * Plusvibe rather than by this automation. A missing limit falls back to the
+ * account's own status, and an inbox that reports neither is counted as
+ * sending, because claiming an inbox is stopped when it isn't is the more
+ * expensive mistake.
+ */
+export function isSending(inbox: Inbox): boolean {
+  if (typeof inbox.dailyLimit === "number") return inbox.dailyLimit > 0;
+  if (inbox.status) return inbox.status.toUpperCase() === "ACTIVE";
+  return true;
+}
+
+function readLimit(a: Record<string, unknown>, payload: Record<string, unknown>): number | undefined {
+  for (const v of [a.daily_limit, payload.daily_limit, (payload.schedules as Record<string, unknown> | undefined)?.daily_limit]) {
+    const n = typeof v === "number" ? v : v == null ? NaN : Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
 }
 
 export async function listWorkspaces(apiKey: string): Promise<Workspace[]> {
@@ -65,7 +94,15 @@ export async function listInboxes(
     for (const a of raw) {
       const id = String(a.id ?? a._id ?? "").trim();
       const email = String(a.email ?? "").trim();
-      if (id && email) out.push({ id, email });
+      if (!id || !email) continue;
+      const payload = (a.payload ?? {}) as Record<string, unknown>;
+      out.push({
+        id,
+        email,
+        status: a.status ? String(a.status) : undefined,
+        dailyLimit: readLimit(a, payload),
+        warmupStatus: a.warmup_status ? String(a.warmup_status) : undefined,
+      });
     }
     if (raw.length < PAGE_SIZE) break;
   }

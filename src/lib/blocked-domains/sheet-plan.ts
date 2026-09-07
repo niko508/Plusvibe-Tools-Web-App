@@ -13,6 +13,9 @@ import { normalizeDomain } from "@/lib/blocked-domains/domain";
 /** The status a blocked domain's row is set to. */
 export const BLOCKED_STATUS = "Not Active";
 
+/** Where the domain was bought — Porkbun, Spaceship, and so on. */
+export const COL_DOMAIN_HOST = "Domain Host";
+
 export const CANCEL_TAB = "🚯 Tenants to Cancel";
 export const COL_CANCEL_TENANT = "Tenant";
 export const COL_CANCEL_SOURCE = "Tenant / Inbox Source";
@@ -30,6 +33,8 @@ export interface DomainsRowLookup {
   tenantEmail: string;
   tenantSource: string;
   client: string;
+  /** The registrar the domain sits with, when the sheet says. */
+  domainHost: string;
 }
 
 /**
@@ -51,6 +56,8 @@ export function findDomainRow(
     tenantEmail: number;
     tenantSource: number;
     client: number;
+    /** Optional: older callers don't ask for it. */
+    domainHost?: number;
   }
 ): { row: DomainsRowLookup | null; matches: number } {
   const wanted = normalizeDomain(domain);
@@ -73,6 +80,7 @@ export function findDomainRow(
       tenantEmail: cell(row, cols.tenantEmail),
       tenantSource: cell(row, cols.tenantSource),
       client: cell(row, cols.client),
+      domainHost: cell(row, cols.domainHost ?? -1),
     };
   }
   return { row: found, matches };

@@ -67,6 +67,13 @@ export function JobCard({
   const perf = job.performance;
   const domain = perf?.domain;
   const recheck = job.recheck;
+  const host = sheet?.domainHost;
+  // "12/50 sending" — how much of the domain is still going out. Records from
+  // before this was tracked carry no count, so it is derived from what they do
+  // record: everything found, minus what this run stopped. Falling back to the
+  // total would claim a fully-stopped domain is still sending.
+  const activeCount = job.inboxesActive ?? Math.max(0, job.inboxesFound - job.inboxesQuarantined);
+  const sendingLabel = `${formatNumber(activeCount)}/${formatNumber(job.inboxesFound)} sending`;
   // How many inboxes this run is actually acting on. Records from before the
   // performance check existed acted on every inbox found.
   const stopCount = perf ? perf.inboxes.filter((i) => i.decision === "stop").length : job.inboxesFound;
@@ -78,9 +85,7 @@ export function JobCard({
     if (phase === "locating") {
       if (job.phaseStates?.locating !== "done") return "";
       if (job.inboxesFound === 0) return "no inboxes found";
-      return `${formatNumber(job.inboxesFound)} inbox${
-        job.inboxesFound === 1 ? "" : "es"
-      } in ${job.workspaceName ?? "a workspace"}${
+      return `${sendingLabel} in ${job.workspaceName ?? "a workspace"}${
         job.foundViaSheet ? " (from the sheet)" : ""
       }`;
     }
@@ -136,6 +141,19 @@ export function JobCard({
           <span className="truncate font-mono text-sm font-medium">
             {job.domain}
           </span>
+          {host && (
+            <span className="pv-chip shrink-0" title="Domain Host, from the Domains sheet">
+              {host}
+            </span>
+          )}
+          {job.inboxesFound > 0 && (
+            <span
+              className={`pv-chip shrink-0 ${activeCount === 0 ? "text-muted-foreground" : ""}`}
+              title="Inboxes on this domain still sending, out of the total"
+            >
+              {sendingLabel}
+            </span>
+          )}
           {job.autoDeleted && (
             <span className="pv-chip shrink-0">auto-deleted</span>
           )}
@@ -412,10 +430,11 @@ export function JobCard({
           />
           <Detail
             label="Inboxes"
-            value={`${formatNumber(job.inboxesFound)} found · ${formatNumber(
-              job.inboxesQuarantined
-            )} stopped · ${formatNumber(job.inboxesKept ?? 0)} left sending · ${formatNumber(job.inboxesDeleted)} deleted`}
+            value={`${sendingLabel} · ${formatNumber(job.inboxesQuarantined)} stopped by this run · ${formatNumber(
+              job.inboxesKept ?? 0
+            )} above the inbox bar · ${formatNumber(job.inboxesDeleted)} deleted`}
           />
+          {host && <Detail label="Domain host" value={`${host} — from the Domains sheet`} />}
           {perf && (
             <>
               {domain && domain.basis !== "none" && (

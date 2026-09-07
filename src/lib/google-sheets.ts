@@ -14,9 +14,12 @@ import { createSign } from "crypto";
 // sheet with the service account's client_email (Editor), and set the whole
 // JSON as GOOGLE_SERVICE_ACCOUNT_JSON.
 
-const TOKEN_URL = "https://oauth2.googleapis.com/token";
+// Overridable so a stand-in can serve Google's endpoints in tests; production
+// never sets either, and both default to the real thing.
+const TOKEN_URL = process.env.GOOGLE_TOKEN_URL || "https://oauth2.googleapis.com/token";
 const SCOPE = "https://www.googleapis.com/auth/spreadsheets";
-const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
+const SHEETS_API =
+  process.env.GOOGLE_SHEETS_API_URL || "https://sheets.googleapis.com/v4/spreadsheets";
 
 export class GoogleSheetsError extends Error {
   status: number;

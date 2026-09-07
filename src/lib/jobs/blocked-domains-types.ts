@@ -114,6 +114,8 @@ export interface SheetOutcome {
   tenantSource?: string;
   /** Client from the sheet, which is also the workspace hint. */
   client?: string;
+  /** The registrar the domain sits with, from the sheet's Domain Host column. */
+  domainHost?: string;
   /** Set when the sheet could not be read or written at all. */
   error?: string;
 }
@@ -141,6 +143,8 @@ export interface RecheckRun {
   at: number;
   trigger: "scheduled" | "manual";
   inboxesFound: number;
+  /** Of those, how many were still sending after the run. */
+  inboxesActive?: number;
   /** The domain's rate at that moment, and what it meant. */
   domainReplyRateOoo?: number;
   verdict?: DomainVerdict;
@@ -196,6 +200,12 @@ export interface BlockedDomainJob {
   inboxesQuarantined: number;
   /** Inboxes left sending because they are still replying. */
   inboxesKept?: number;
+  /**
+   * How many of the domain's inboxes were still sending when it was last
+   * looked at — daily limit above 0. Counts inboxes stopped by hand in
+   * Plusvibe too, not just the ones this automation stopped.
+   */
+  inboxesActive?: number;
   /** What the last 7 days said, per inbox. */
   performance?: PerformanceOutcome;
   /**
