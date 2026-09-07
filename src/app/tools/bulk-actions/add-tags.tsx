@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Workspace } from "@/lib/plusvibe-types";
 import {
   MAX_TAG_NAME_LENGTH,
@@ -9,7 +9,8 @@ import {
   prepareRemoveBatch,
   type TagInput,
 } from "@/lib/tags/bulk-tags";
-import { addTagsToWorkspaces, ApiClientError, type BulkTagsResponse } from "@/lib/api-client";
+import { addTagsToWorkspaces, fetchTagCatalog, ApiClientError, type BulkTagsResponse } from "@/lib/api-client";
+import type { CatalogTag } from "@/lib/inbox-tags/plan";
 import { formatNumber } from "@/lib/format";
 import { Spinner } from "@/components/ui";
 import { AlertIcon, RefreshIcon, TagIcon, TrashIcon } from "@/components/icons";
@@ -30,12 +31,33 @@ const PALETTE = ["#FF5733", "#3B82F6", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899
 
 interface Row extends TagInput {
   key: number;
+  /**
+   * Removal picks from the tags the selected workspaces actually have. A row
+   * set to `custom` types a name instead — for a tag the list doesn't show,
+   * or one only some workspaces have under a slightly different spelling.
+   */
+  custom?: boolean;
 }
+
+/** The option value for "not in the list — let me type it". */
+const TYPE_IT = "__type__";
 
 let nextKey = 1;
 const blankRow = (i: number): Row => ({ key: nextKey++, name: "", color: PALETTE[i % PALETTE.length], description: "" });
 
 type Mode = "add" | "remove";
+
+/**
+ * The option to show as selected for a row's name.
+ *
+ * Names are matched case-insensitively, like everything else about tags, so a
+ * row carrying "vip clients" still shows the catalogue's "VIP Clients".
+ */
+function pickValue(name: string, catalog: CatalogTag[] | null): string {
+  const key = name.trim().toLowerCase();
+  if (!key) return "";
+  return catalog?.find((t) => t.name.trim().toLowerCase() === key)?.name ?? "";
+}
 
 export function AddTags({
   workspaces,
@@ -48,6 +70,10 @@ export function AddTags({
 }) {
   const [mode, setMode] = useState<Mode>("add");
   const [rows, setRows] = useState<Row[]>([blankRow(0)]);
+  const [catalog, setCatalog] = useState<CatalogTag[] | null>(null);
+  const [catalogFor, setCatalogFor] = useState("");
+  const [catalogBusy, setCatalogBusy] = useState(false);
+  const [catalogNote, setCatalogNote] = useState<string | null>(null);
   const [result, setResult] = useState<BulkTagsResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,9 +106,48 @@ export function AddTags({
   // preview of this exact selection has been seen.
   const previewed = result !== null && result.dryRun && !stale && result.mode === "remove";
 
-  function update(key: number, patch: Partial<TagInput>) {
+  function update(key: number, patch: Partial<Row>) {
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   }
+
+  // --- What the selected workspaces actually have --------------------------
+  // Only read while removing: adding names tags that don't exist yet, so a
+  // list of existing ones would be noise there.
+  const loadCatalog = useCallback(async (targets: { id: string; name: string }[], ids: string) => {
+    if (targets.length === 0) {
+      setCatalog(null);
+      setCatalogFor("");
+      return;
+    }
+    setCatalogBusy(true);
+    setCatalogNote(null);
+    try {
+      const res = await fetchTagCatalog(targets);
+      setCatalog(res.tags);
+      setCatalogFor(ids);
+      if (res.failed.length > 0) {
+        setCatalogNote(
+          `Could not read the tags of ${res.failed.length} workspace${res.failed.length === 1 ? "" : "s"} (${res.failed
+            .slice(0, 3)
+            .map((f) => f.workspaceName || f.workspaceId)
+            .join(", ")}${res.failed.length > 3 ? ", …" : ""}), so their tags aren't in this list.`
+        );
+      }
+    } catch (err) {
+      setCatalogNote(
+        `Could not read the tags in use: ${err instanceof Error ? err.message : "failed"}. Type the names instead.`
+      );
+    } finally {
+      setCatalogBusy(false);
+    }
+  }, []);
+  useEffect(() => {
+    if (!removing || chosenIds === catalogFor) return;
+    // A short pause so ticking several workspaces makes one read, not many.
+    const t = setTimeout(() => void loadCatalog(chosen, chosenIds), 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [removing, chosenIds]);
 
   async function run(dryRun: boolean) {
     if (!canRun || runLock.current) return;
@@ -119,6 +184,32 @@ export function AddTags({
               </button>
             ))}
           </div>
+          {removing && (
+            <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground">
+                {catalogBusy
+                  ? `Reading the tags in ${formatNumber(chosen.length)} workspace${chosen.length === 1 ? "" : "s"}…`
+                  : catalog
+                    ? `${formatNumber(catalog.length)} tag${catalog.length === 1 ? "" : "s"} in use across ${formatNumber(chosen.length)} workspace${chosen.length === 1 ? "" : "s"}`
+                    : "Pick some workspaces to see their tags."}
+              </span>
+              <button
+                type="button"
+                className="pv-btn-ghost text-xs"
+                disabled={catalogBusy || chosen.length === 0}
+                onClick={() => void loadCatalog(chosen, chosenIds)}
+              >
+                {catalogBusy ? <Spinner size={12} /> : <RefreshIcon size={12} />}
+                Reload tags
+              </button>
+            </div>
+          )}
+          {catalogNote && removing && (
+            <p className="mb-1.5 flex gap-1.5 text-xs text-warning">
+              <AlertIcon size={13} className="mt-0.5 shrink-0" />
+              <span>{catalogNote}</span>
+            </p>
+          )}
           <div className="mb-1.5 flex items-center justify-between">
             <span className="text-xs font-medium text-muted-foreground">
               {removing ? "Tags to remove" : "Tags to create"}{" "}
@@ -137,17 +228,55 @@ export function AddTags({
               const problems = idx >= 0 ? batch.problems.get(idx) ?? [] : [];
               const dup = idx >= 0 && batch.duplicates.includes(idx);
               const swatch = normalizeColor(r.color);
+              // The dropdown can only show a name it has an option for. A row
+              // naming a tag the list doesn't carry — typed, or picked before
+              // the list changed — shows the name in a field instead, so it is
+              // never armed for removal while appearing blank.
+              const showList =
+                removing &&
+                !r.custom &&
+                (r.name.trim() === "" || catalog === null || pickValue(r.name, catalog) !== "");
               return (
                 <div key={r.key} className="rounded-xl border border-border p-2.5">
                   <div className={`grid gap-2 ${removing ? "sm:grid-cols-[1fr_auto]" : "sm:grid-cols-[1fr_150px_1.4fr_auto]"}`}>
-                    <input
-                      type="text"
-                      className="pv-input text-sm"
-                      placeholder={i === 0 ? "VIP Clients" : "Tag name"}
-                      value={r.name}
-                      maxLength={MAX_TAG_NAME_LENGTH * 2}
-                      onChange={(e) => update(r.key, { name: e.target.value })}
-                    />
+                    {showList ? (
+                      <select
+                        className="pv-input text-sm"
+                        value={pickValue(r.name, catalog)}
+                        onChange={(e) => {
+                          if (e.target.value === TYPE_IT) update(r.key, { custom: true, name: "" });
+                          else update(r.key, { name: e.target.value });
+                        }}
+                        aria-label="Tag to remove"
+                      >
+                        <option value="">
+                          {catalogBusy
+                            ? "Reading the tags in use…"
+                            : catalog === null
+                              ? "Pick some workspaces first…"
+                              : catalog.length === 0
+                                ? "No tags in these workspaces"
+                                : "Pick a tag…"}
+                        </option>
+                        {(catalog ?? []).map((t) => (
+                          <option key={t.name} value={t.name}>
+                            {t.name}
+                            {chosen.length > 1 ? ` — in ${t.count} of ${chosen.length}` : ""}
+                          </option>
+                        ))}
+                        <option value={TYPE_IT}>Type a name instead…</option>
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        className="pv-input text-sm"
+                        placeholder={i === 0 ? "VIP Clients" : "Tag name"}
+                        value={r.name}
+                        maxLength={MAX_TAG_NAME_LENGTH * 2}
+                        onChange={(e) => update(r.key, { name: e.target.value })}
+                        aria-label={removing ? "Tag name to remove" : "Tag name"}
+                      />
+                    )}
                     {!removing && (
                     <div className="flex items-center gap-2">
                       <input
@@ -176,15 +305,27 @@ export function AddTags({
                       onChange={(e) => update(r.key, { description: e.target.value })}
                     />
                     )}
-                    <button
-                      type="button"
-                      className="pv-btn-ghost text-xs"
-                      disabled={rows.length === 1}
-                      onClick={() => setRows((prev) => prev.filter((x) => x.key !== r.key))}
-                      title="Remove this row"
-                    >
-                      <TrashIcon size={14} />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      {removing && !showList && (
+                        <button
+                          type="button"
+                          className="pv-btn-ghost text-xs"
+                          onClick={() => update(r.key, { custom: false, name: "" })}
+                          title="Pick from the tags in use instead"
+                        >
+                          List
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="pv-btn-ghost text-xs"
+                        disabled={rows.length === 1}
+                        onClick={() => setRows((prev) => prev.filter((x) => x.key !== r.key))}
+                        title="Remove this row"
+                      >
+                        <TrashIcon size={14} />
+                      </button>
+                    </div>
                   </div>
                   {problems.length > 0 && (
                     <p className="mt-1.5 flex gap-1.5 text-xs text-warning">
