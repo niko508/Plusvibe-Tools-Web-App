@@ -11,11 +11,14 @@ import {
   plusvibePost,
 } from "@/lib/plusvibe-server";
 import { acquireSlot } from "@/lib/jobs/rate-limit";
+import { readStatsRow, type InboxStats } from "@/lib/blocked-domains/performance";
 import type { Workspace } from "@/lib/plusvibe-types";
 
 const PAGE_SIZE = 100;
 /** Enough for the largest workspace with room to spare. */
 const MAX_PAGES = 200;
+/** The bulk stats endpoint's documented cap on ids per call. */
+const STATS_CHUNK = 100;
 
 export interface Inbox {
   id: string;
@@ -67,6 +70,74 @@ export async function listInboxes(
     if (raw.length < PAGE_SIZE) break;
   }
   return out;
+}
+
+/**
+ * The last-7-days figures for a set of inboxes.
+ *
+ * The bulk endpoint answers for up to 100 accounts in one call, which is the
+ * whole domain in one request. It is newer than the per-account endpoint this
+ * app has used all along, so a failure falls back to asking per inbox rather
+ * than giving up — and giving up would mean stopping inboxes that are fine.
+ */
+export async function fetchInboxStats(
+  apiKey: string,
+  workspaceId: string,
+  inboxes: Inbox[],
+  range: { start: string; end: string }
+): Promise<{ rows: InboxStats[]; source: "bulk" | "per-inbox"; errors: string[] }> {
+  const errors: string[] = [];
+  const query = { workspace_id: workspaceId, start_date: range.start, end_date: range.end };
+
+  const rows: InboxStats[] = [];
+  try {
+    for (let i = 0; i < inboxes.length; i += STATS_CHUNK) {
+      const part = inboxes.slice(i, i + STATS_CHUNK);
+      await acquireSlot();
+      const data = await plusvibeGet<unknown>({
+        apiKey,
+        path: "/account/email-stats/bulk",
+        query: {
+          ...query,
+          email_acc_ids: part.map((p) => p.id).join(","),
+          include_chart: "false",
+          limit: String(STATS_CHUNK),
+        },
+      });
+      const raw = Array.isArray(data)
+        ? (data as Array<Record<string, unknown>>)
+        : Array.isArray((data as { accounts?: unknown })?.accounts)
+          ? (data as { accounts: Array<Record<string, unknown>> }).accounts
+          : [];
+      for (const r of raw) {
+        const row = readStatsRow(r);
+        if (row) rows.push(row);
+      }
+    }
+    return { rows, source: "bulk", errors };
+  } catch (err) {
+    errors.push(
+      `Bulk stats unavailable (${err instanceof Error ? err.message : "failed"}); read one inbox at a time instead.`
+    );
+  }
+
+  // Fallback: one call per inbox, through the endpoint the rest of the app uses.
+  const perInbox: InboxStats[] = [];
+  for (const inbox of inboxes) {
+    try {
+      await acquireSlot();
+      const data = await plusvibeGet<Record<string, unknown>>({
+        apiKey,
+        path: "/account/email-stats",
+        query: { ...query, email_acc_id: inbox.id },
+      });
+      const row = readStatsRow({ ...data, email_acc_id: inbox.id, email: inbox.email });
+      if (row) perInbox.push(row);
+    } catch (err) {
+      errors.push(`${inbox.email}: could not read its stats (${err instanceof Error ? err.message : "failed"}).`);
+    }
+  }
+  return { rows: perInbox, source: "per-inbox", errors };
 }
 
 /**

@@ -1036,14 +1036,21 @@ export function fetchBlockedDomains(signal?: AbortSignal) {
   });
 }
 
+export function setBlockedDomainSettings(
+  patch: { autoDelete?: boolean; checkPerformance?: boolean; minReplyRateOoo?: number },
+  signal?: AbortSignal
+) {
+  return request<{ settings: BlockedDomainsView["settings"] }>(
+    "/api/jobs/blocked-domains/settings",
+    { method: "PUT", body: patch, signal }
+  );
+}
+
 export function setBlockedDomainAutoDelete(
   autoDelete: boolean,
   signal?: AbortSignal
 ) {
-  return request<{ settings: { autoDelete: boolean } }>(
-    "/api/jobs/blocked-domains/settings",
-    { method: "PUT", body: { autoDelete }, signal }
-  );
+  return setBlockedDomainSettings({ autoDelete }, signal);
 }
 
 export function confirmBlockedDomain(jobId: string, signal?: AbortSignal) {

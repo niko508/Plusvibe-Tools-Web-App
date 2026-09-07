@@ -34,13 +34,22 @@ import {
 import { loadSettings } from "@/lib/blocked-domains/settings";
 import {
   deleteInbox,
+  fetchInboxStats,
   listInboxes,
   listWorkspaces,
   quarantineInboxes,
   type Inbox,
 } from "@/lib/blocked-domains/api";
+import {
+  indexStats,
+  planQuarantine,
+  stopEverything,
+  type QuarantinePlan,
+} from "@/lib/blocked-domains/performance";
+import { daysAgo, toApiDate } from "@/lib/format";
 import type {
   BlockedDomainJob,
+  PerformanceOutcome,
   PhaseState,
   SheetOutcome,
 } from "@/lib/jobs/blocked-domains-types";
@@ -73,8 +82,8 @@ const RECORDS_DIR = path.join(JOBS_DIR, "records");
 // something that happens on its own after enough time passes.
 
 const records = new Map<string, BlockedDomainJob>();
-/** Memory-only: the inboxes found, so confirming doesn't re-scan. */
-const foundInboxes = new Map<string, Inbox[]>();
+/** Memory-only: the inboxes that were stopped, so confirming doesn't re-scan. */
+const quarantinedInboxes = new Map<string, Inbox[]>();
 let loaded = false;
 
 export function serverApiKey(): string | null {
@@ -133,6 +142,9 @@ function migrateRecord(raw: BlockedDomainJob): BlockedDomainJob {
   const ps = (rec.phaseStates ?? {}) as Record<string, PhaseState>;
   rec.phaseStates = {
     locating: ps.locating ?? "pending",
+    // Records written before the performance check existed have no state for
+    // it; they stopped everything, which is what "skipped" says here.
+    assessing: ps.assessing ?? (ps.locating === "done" ? "skipped" : "pending"),
     quarantining: ps.quarantining ?? "pending",
     deleting: ps.deleting ?? "pending",
     sheet: ps.sheet ?? "pending",
@@ -221,6 +233,7 @@ export async function intake(args: {
     phase: "locating",
     phaseStates: {
       locating: "running",
+      assessing: "pending",
       quarantining: "pending",
       deleting: "pending",
       sheet: "pending",
@@ -286,7 +299,6 @@ async function runLocateAndQuarantine(id: string) {
     rec.workspacesScanned = scanned;
     rec.inboxesFound = inboxes.length;
     if (client) rec.sheet = { ...(rec.sheet ?? emptySheet()), client };
-    foundInboxes.set(id, inboxes);
     rec.phaseStates.locating = "done";
     rec.updatedAt = Date.now();
     await persist(id);
@@ -294,6 +306,7 @@ async function runLocateAndQuarantine(id: string) {
     if (inboxes.length === 0) {
       // Nothing to stop or delete, but the sheet still needs updating — the
       // domain is blocked whether or not Plusvibe still holds inboxes for it.
+      rec.phaseStates.assessing = "skipped";
       rec.phaseStates.quarantining = "skipped";
       rec.phaseStates.deleting = "skipped";
       pushError(
@@ -307,7 +320,34 @@ async function runLocateAndQuarantine(id: string) {
       return;
     }
 
-    // --- Phase 2: quarantine ---------------------------------------------
+    // --- Phase 2: assess --------------------------------------------------
+    // Which of these inboxes actually have to stop. An inbox still getting
+    // replies keeps sending, and is left out of the deletion too.
+    rec.phase = "assessing";
+    rec.phaseStates.assessing = "running";
+    await persist(id);
+    const settings = await loadSettings();
+    const plan = await assess(apiKey, rec, workspaceId!, inboxes, settings);
+    quarantinedInboxes.set(id, plan.stop);
+    rec.inboxesKept = plan.keep.length;
+    rec.quarantinedEmails = plan.stop.map((i) => i.email);
+    rec.updatedAt = Date.now();
+    await persist(id);
+
+    if (plan.stop.length === 0) {
+      // Every inbox on the domain is still replying. Nothing is stopped and
+      // nothing is deleted — but the sheet is still written, because the
+      // domain is blocked regardless of how its inboxes are performing.
+      rec.phaseStates.quarantining = "skipped";
+      rec.phaseStates.deleting = "skipped";
+      await persist(id);
+      await runSheet(rec);
+      finish(rec);
+      await persist(id);
+      return;
+    }
+
+    // --- Phase 3: quarantine ---------------------------------------------
     rec.phase = "quarantining";
     rec.phaseStates.quarantining = "running";
     await persist(id);
@@ -315,7 +355,7 @@ async function runLocateAndQuarantine(id: string) {
       const q = await quarantineInboxes(
         apiKey,
         workspaceId!,
-        inboxes.map((i) => i.id)
+        plan.stop.map((i) => i.id)
       );
       rec.sendingStopped = q.sendingStopped;
       rec.warmupStopped = q.warmupStopped;
@@ -324,7 +364,7 @@ async function runLocateAndQuarantine(id: string) {
       // nothing — it's the sentence someone reads before deciding not to go
       // and check Plusvibe.
       rec.inboxesQuarantined =
-        q.sendingStopped && q.warmupStopped ? inboxes.length : 0;
+        q.sendingStopped && q.warmupStopped ? plan.stop.length : 0;
       for (const e of q.errors) {
         pushError(rec, `Could not stop ${e}`);
       }
@@ -347,8 +387,7 @@ async function runLocateAndQuarantine(id: string) {
     await persist(id);
 
     // --- Hand off to deletion, or wait ------------------------------------
-    const { autoDelete } = await loadSettings();
-    if (autoDelete) {
+    if (settings.autoDelete) {
       rec.autoDeleted = true;
       rec.confirmedAt = Date.now();
       await persist(id);
@@ -375,6 +414,69 @@ async function runLocateAndQuarantine(id: string) {
 
 function emptySheet(): SheetOutcome {
   return { statusUpdated: false, tenantQueued: false };
+}
+
+/** The window the inboxes are judged on: the last 7 days, ending today. */
+export function performanceWindow(): { start: string; end: string } {
+  return { start: toApiDate(daysAgo(6)), end: toApiDate(new Date()) };
+}
+
+/**
+ * Reads the domain's inboxes' last 7 days and decides which have to stop.
+ *
+ * Every failure path stops everything. The domain is blocked, so an inbox
+ * keeping its daily limit is the exception that needs evidence — no stats
+ * means no evidence, not the benefit of the doubt.
+ */
+async function assess(
+  apiKey: string,
+  rec: BlockedDomainJob,
+  workspaceId: string,
+  inboxes: Inbox[],
+  settings: { checkPerformance: boolean; minReplyRateOoo: number }
+): Promise<QuarantinePlan> {
+  const window = performanceWindow();
+  const outcome: PerformanceOutcome = {
+    ...window,
+    threshold: settings.minReplyRateOoo,
+    source: "skipped",
+    inboxes: [],
+  };
+
+  if (!settings.checkPerformance) {
+    const plan = stopEverything(inboxes);
+    outcome.note = "The performance check is off, so every inbox on the domain is stopped.";
+    outcome.inboxes = plan.assessments;
+    rec.performance = outcome;
+    rec.phaseStates.assessing = "skipped";
+    return plan;
+  }
+
+  let plan: QuarantinePlan;
+  try {
+    const { rows, source, errors } = await fetchInboxStats(apiKey, workspaceId, inboxes, window);
+    outcome.source = source;
+    for (const e of errors) pushError(rec, e);
+    if (rows.length === 0 && inboxes.length > 0) {
+      // Nothing came back at all — treat it as an outage, not as "no replies".
+      plan = stopEverything(inboxes);
+      outcome.source = "unavailable";
+      outcome.note = "No figures came back for these inboxes, so all of them were stopped.";
+      pushError(rec, "Could not read the last 7 days for any inbox on this domain; all of them were stopped.");
+    } else {
+      plan = planQuarantine(inboxes, indexStats(rows), settings.minReplyRateOoo);
+    }
+    rec.phaseStates.assessing = "done";
+  } catch (err) {
+    plan = stopEverything(inboxes);
+    outcome.source = "unavailable";
+    outcome.note = "The performance check failed, so all inboxes were stopped.";
+    pushError(rec, `Could not check the last 7 days (${msg(err)}); all inboxes were stopped.`);
+    rec.phaseStates.assessing = "error";
+  }
+  outcome.inboxes = plan.assessments;
+  rec.performance = outcome;
+  return plan;
 }
 
 function finish(rec: BlockedDomainJob) {
@@ -512,14 +614,19 @@ async function runDelete(id: string) {
   await persist(id);
 
   // The inbox list is memory-only, so a restart between quarantine and confirm
-  // means re-finding them rather than deleting nothing.
-  let inboxes = foundInboxes.get(id);
+  // means re-finding them rather than deleting nothing. Only the inboxes that
+  // were actually stopped are deleted — one left sending because it is still
+  // replying must not be swept up by the re-read.
+  let inboxes = quarantinedInboxes.get(id);
   if (!inboxes) {
     try {
-      inboxes = (await listInboxes(apiKey, rec.workspaceId)).filter((i) =>
+      const onDomain = (await listInboxes(apiKey, rec.workspaceId)).filter((i) =>
         inboxIsOnDomain(i.email, rec.domain)
       );
-      rec.inboxesFound = inboxes.length;
+      const stopped = rec.quarantinedEmails;
+      inboxes = stopped
+        ? onDomain.filter((i) => stopped.includes(i.email.trim().toLowerCase()) || stopped.includes(i.email))
+        : onDomain;
     } catch (err) {
       rec.phaseStates.deleting = "error";
       pushError(rec, `Could not re-read the inboxes: ${msg(err)}`);
@@ -539,7 +646,7 @@ async function runDelete(id: string) {
       await persist(id);
     }
   }
-  foundInboxes.delete(id);
+  quarantinedInboxes.delete(id);
   rec.phaseStates.deleting =
     rec.inboxesDeleted === inboxes.length ? "done" : "error";
 
@@ -693,7 +800,7 @@ export async function dismissJob(id: string): Promise<boolean> {
   // regardless of this choice. Only the deletion is declined.
   rec.phaseStates.deleting = "skipped";
   rec.updatedAt = Date.now();
-  foundInboxes.delete(id);
+  quarantinedInboxes.delete(id);
   await persist(id);
   return true;
 }
@@ -725,7 +832,7 @@ export async function deleteJob(id: string): Promise<boolean> {
   const rec = records.get(id);
   if (!rec) return false;
   records.delete(id);
-  foundInboxes.delete(id);
+  quarantinedInboxes.delete(id);
   try {
     await fs.unlink(fileFor(id));
   } catch {

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { BlockedDomainsView } from "@/lib/jobs/blocked-domains-types";
 import {
   fetchBlockedDomains,
-  setBlockedDomainAutoDelete,
+  setBlockedDomainSettings,
   confirmBlockedDomain,
   dismissBlockedDomain,
   rearmBlockedDomain,
@@ -14,7 +14,7 @@ import {
 import { useApiKey } from "@/lib/use-api-key";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { EmptyState, Spinner } from "@/components/ui";
-import { AlertIcon, CheckIcon, CopyIcon, FireIcon } from "@/components/icons";
+import { AlertIcon, CheckIcon, CopyIcon, FireIcon, GaugeIcon } from "@/components/icons";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatNumber } from "@/lib/format";
 import { JobCard } from "./job-card";
@@ -79,10 +79,18 @@ export function BlockedDomainsTool() {
   }
 
   async function handleToggle(next: boolean) {
+    await saveSettings({ autoDelete: next });
+  }
+
+  async function saveSettings(patch: {
+    autoDelete?: boolean;
+    checkPerformance?: boolean;
+    minReplyRateOoo?: number;
+  }) {
     setSavingToggle(true);
     setError(null);
     try {
-      await setBlockedDomainAutoDelete(next);
+      await setBlockedDomainSettings(patch);
     } catch (err) {
       setError(errMessage(err));
     } finally {
@@ -195,6 +203,48 @@ export function BlockedDomainsTool() {
                 ? "Auto-delete is ON"
                 : "Auto-delete is OFF"}
             </button>
+
+            <h2 className="mt-4 text-sm font-semibold">Keep what&apos;s working</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {view?.settings.checkPerformance
+                ? "Each inbox on the domain is judged on its last 7 days. Only the ones under the bar are stopped — the rest keep sending and are never deleted."
+                : "Every inbox on a blocked domain is stopped, whatever its numbers say."}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={savingToggle || !view}
+                onClick={() => saveSettings({ checkPerformance: !view?.settings.checkPerformance })}
+                aria-label="Toggle the performance check"
+                className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
+                  view?.settings.checkPerformance
+                    ? "border-success/40 bg-success/10 text-success"
+                    : "border-border hover:text-foreground"
+                }`}
+              >
+                {savingToggle ? <Spinner size={12} /> : <GaugeIcon size={13} />}
+                {view?.settings.checkPerformance ? "Check is ON" : "Check is OFF"}
+              </button>
+              {view?.settings.checkPerformance && (
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  Stop under
+                  <input
+                    type="number"
+                    className="pv-input w-20 py-1 text-xs"
+                    min={0}
+                    max={100}
+                    step={0.1}
+                    value={String(view.settings.minReplyRateOoo)}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      if (Number.isFinite(n) && n >= 0 && n <= 100) void saveSettings({ minReplyRateOoo: n });
+                    }}
+                    aria-label="Reply rate with OOO bar"
+                  />
+                  % reply rate (with OOO)
+                </label>
+              )}
+            </div>
           </div>
         </div>
 

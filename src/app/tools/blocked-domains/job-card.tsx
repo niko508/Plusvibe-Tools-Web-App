@@ -7,6 +7,7 @@ import type {
   PhaseState,
 } from "@/lib/jobs/blocked-domains-types";
 import { PHASE_ORDER, PHASE_LABELS } from "@/lib/jobs/blocked-domains-types";
+import { REASON_LABELS } from "@/lib/blocked-domains/performance";
 import { formatNumber } from "@/lib/format";
 import { Spinner, RemoveJobButton } from "@/components/ui";
 import {
@@ -57,6 +58,10 @@ export function JobCard({
   // row instead of throwing and blanking the page.
   const errors = job.errors ?? [];
   const sheet = job.sheet;
+  const perf = job.performance;
+  // How many inboxes this run is actually acting on. Records from before the
+  // performance check existed acted on every inbox found.
+  const stopCount = perf ? perf.inboxes.filter((i) => i.decision === "stop").length : job.inboxesFound;
   // Both halves of the quarantine have to have landed before the card is
   // allowed to say the domain is stopped.
   const fullyStopped = job.sendingStopped === true && job.warmupStopped === true;
@@ -71,9 +76,19 @@ export function JobCard({
         job.foundViaSheet ? " (from the sheet)" : ""
       }`;
     }
+    if (phase === "assessing") {
+      const state = job.phaseStates?.assessing ?? "pending";
+      if (state === "pending") return "";
+      if (!perf) return state === "skipped" ? "not checked" : "";
+      if (perf.source === "skipped") return "check is off — all stopped";
+      if (perf.source === "unavailable") return "no figures — all stopped";
+      const kept = job.inboxesKept ?? 0;
+      return `${formatNumber(stopCount)} under ${perf.threshold}%${kept > 0 ? `, ${formatNumber(kept)} still replying` : ""}`;
+    }
     if (phase === "quarantining") {
+      if (job.phaseStates?.quarantining === "skipped") return "nothing to stop";
       if (job.phaseStates?.quarantining === "pending") return "";
-      if (fullyStopped) return `${formatNumber(job.inboxesFound)} stopped`;
+      if (fullyStopped) return `${formatNumber(stopCount)} stopped`;
       const done = [
         job.sendingStopped ? "sending" : null,
         job.warmupStopped ? "warmup" : null,
@@ -188,10 +203,17 @@ export function JobCard({
                   : "These inboxes are still sending"}
           </p>
           <p className="mt-1 text-muted-foreground">
-            {formatNumber(job.inboxesFound)} inbox
-            {job.inboxesFound === 1 ? "" : "es"} on{" "}
+            {formatNumber(stopCount)} inbox
+            {stopCount === 1 ? "" : "es"} on{" "}
             <span className="font-mono">{job.domain}</span> in{" "}
             {job.workspaceName ?? "this workspace"}
+            {(job.inboxesKept ?? 0) > 0 && (
+              <>
+                {" "}
+                ({formatNumber(job.inboxesKept ?? 0)} more{" "}
+                {(job.inboxesKept ?? 0) === 1 ? "is" : "are"} still replying and will be left alone)
+              </>
+            )}
             {fullyStopped ? (
               <>
                 {" "}
@@ -253,8 +275,8 @@ export function JobCard({
               onClick={() => onConfirm(job.id)}
             >
               {busy ? <Spinner /> : <TrashIcon size={16} />}
-              Delete {formatNumber(job.inboxesFound)} inbox
-              {job.inboxesFound === 1 ? "" : "es"}
+              Delete {formatNumber(stopCount)} inbox
+              {stopCount === 1 ? "" : "es"}
             </button>
             <button
               type="button"
@@ -316,8 +338,48 @@ export function JobCard({
             label="Inboxes"
             value={`${formatNumber(job.inboxesFound)} found · ${formatNumber(
               job.inboxesQuarantined
-            )} stopped · ${formatNumber(job.inboxesDeleted)} deleted`}
+            )} stopped · ${formatNumber(job.inboxesKept ?? 0)} left sending · ${formatNumber(job.inboxesDeleted)} deleted`}
           />
+          {perf && (
+            <>
+              <Detail
+                label="Last 7 days"
+                value={
+                  perf.source === "skipped"
+                    ? `check off — every inbox stopped (${perf.start} … ${perf.end})`
+                    : perf.source === "unavailable"
+                      ? `no figures available — every inbox stopped (${perf.start} … ${perf.end})`
+                      : `${perf.start} … ${perf.end} · keep at ${perf.threshold}%+ reply rate with OOO`
+                }
+              />
+              {perf.inboxes.length > 0 && (
+                <div className="space-y-1 pt-1">
+                  {perf.inboxes.map((i) => (
+                    <div key={i.id || i.email} className="flex flex-wrap items-baseline gap-x-2">
+                      <span
+                        className={`rounded-full px-1.5 py-0.5 text-[11px] ${
+                          i.decision === "keep"
+                            ? "bg-success/10 text-success"
+                            : "bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        {i.decision === "keep" ? "kept" : "stopped"}
+                      </span>
+                      <span className="break-all font-mono">{i.email}</span>
+                      {/* The reason is always shown: an inbox stopped for
+                          sending nothing reads as "0%", which looks like a
+                          judgement on its copy rather than on its silence. */}
+                      <span className="text-muted-foreground">
+                        {REASON_LABELS[i.reason]}
+                        {i.replyRateOoo !== undefined &&
+                          ` · ${i.replyRateOoo}% with OOO · ${i.replyRate}% plain · ${formatNumber(i.sent ?? 0)} sent`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
           {job.bounceReason && (
             <Detail label="Bounce reason" value={job.bounceReason} />
           )}

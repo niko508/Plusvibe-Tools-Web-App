@@ -18,7 +18,11 @@ export async function GET(request: Request) {
     const [jobs, settings] = await Promise.all([listJobs(), loadSettings()]);
     const view: BlockedDomainsView = {
       jobs,
-      settings: { autoDelete: settings.autoDelete },
+      settings: {
+        autoDelete: settings.autoDelete,
+        checkPerformance: settings.checkPerformance,
+        minReplyRateOoo: settings.minReplyRateOoo,
+      },
       readiness: {
         serverKey: serverApiKey() !== null,
         spreadsheet: envSpreadsheetId() !== null,

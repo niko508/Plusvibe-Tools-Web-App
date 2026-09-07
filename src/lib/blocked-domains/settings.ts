@@ -2,6 +2,10 @@ import "server-only";
 
 import { promises as fs } from "fs";
 import path from "path";
+import {
+  DEFAULT_MIN_REPLY_RATE_OOO,
+  normalizeThreshold,
+} from "@/lib/blocked-domains/performance";
 
 // The one setting the Blocked Domains automation has: whether a blocked domain
 // is deleted on arrival, or quarantined and left for someone to confirm.
@@ -21,11 +25,21 @@ export interface BlockedDomainSettings {
    * but nothing is deleted until someone confirms in the UI.
    */
   autoDelete: boolean;
+  /**
+   * When true the domain's inboxes are judged on their last 7 days first, and
+   * only the ones under the bar are stopped. Off means every inbox on the
+   * domain is stopped, which is what the automation did before.
+   */
+  checkPerformance: boolean;
+  /** The bar, in percent, on reply rate with OOO. */
+  minReplyRateOoo: number;
   updatedAt: number;
 }
 
 export const DEFAULT_SETTINGS: BlockedDomainSettings = {
   autoDelete: false,
+  checkPerformance: true,
+  minReplyRateOoo: DEFAULT_MIN_REPLY_RATE_OOO,
   updatedAt: 0,
 };
 
@@ -37,6 +51,13 @@ export async function loadSettings(): Promise<BlockedDomainSettings> {
       // Anything other than a literal true is off. A corrupt or half-written
       // file must not be what turns unattended deletion on.
       autoDelete: parsed.autoDelete === true,
+      // The check is the safer behaviour for the client's inboxes, so it is on
+      // unless the file explicitly says otherwise — including for the settings
+      // files written before it existed.
+      checkPerformance: parsed.checkPerformance !== false,
+      minReplyRateOoo: normalizeThreshold(
+        parsed.minReplyRateOoo ?? DEFAULT_MIN_REPLY_RATE_OOO
+      ),
       updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
     };
   } catch {
@@ -45,10 +66,15 @@ export async function loadSettings(): Promise<BlockedDomainSettings> {
 }
 
 export async function saveSettings(
-  autoDelete: boolean
+  patch: Partial<Pick<BlockedDomainSettings, "autoDelete" | "checkPerformance" | "minReplyRateOoo">>
 ): Promise<BlockedDomainSettings> {
+  const current = await loadSettings();
   const next: BlockedDomainSettings = {
-    autoDelete: autoDelete === true,
+    autoDelete: patch.autoDelete === undefined ? current.autoDelete : patch.autoDelete === true,
+    checkPerformance:
+      patch.checkPerformance === undefined ? current.checkPerformance : patch.checkPerformance === true,
+    minReplyRateOoo:
+      patch.minReplyRateOoo === undefined ? current.minReplyRateOoo : normalizeThreshold(patch.minReplyRateOoo),
     updatedAt: Date.now(),
   };
   await fs.mkdir(STORE_DIR, { recursive: true });
