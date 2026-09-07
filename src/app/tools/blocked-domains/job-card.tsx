@@ -13,9 +13,12 @@ import { Spinner, RemoveJobButton } from "@/components/ui";
 import {
   CheckIcon,
   AlertIcon,
+  ClockIcon,
+  GaugeIcon,
   TrashIcon,
   RefreshIcon,
 } from "@/components/icons";
+import { describeNext } from "@/lib/blocked-domains/recheck";
 
 const STATUS_META: Record<
   BlockedDomainStatus,
@@ -40,6 +43,7 @@ export function JobCard({
   onDismiss,
   onRearm,
   onRemove,
+  onRecheck,
   busy,
 }: {
   job: BlockedDomainJob;
@@ -47,6 +51,7 @@ export function JobCard({
   onDismiss: (id: string) => void | Promise<void>;
   onRearm: (id: string) => void | Promise<void>;
   onRemove: (id: string) => void | Promise<void>;
+  onRecheck: (id: string, action: "now" | "on" | "off") => void | Promise<void>;
   busy: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -61,6 +66,7 @@ export function JobCard({
   const sheet = job.sheet;
   const perf = job.performance;
   const domain = perf?.domain;
+  const recheck = job.recheck;
   // How many inboxes this run is actually acting on. Records from before the
   // performance check existed acted on every inbox found.
   const stopCount = perf ? perf.inboxes.filter((i) => i.decision === "stop").length : job.inboxesFound;
@@ -296,6 +302,22 @@ export function JobCard({
         </p>
       )}
 
+      {recheck && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <ClockIcon size={13} />
+            {recheck.enabled
+              ? `Checked again every ${recheck.everyDays} days · next ${describeNext(recheck.nextAt, Date.now())}`
+              : recheck.endedReason || "Not being checked again"}
+          </span>
+          {recheck.runs.length > 0 && (
+            <button type="button" className="underline" onClick={() => setOpen((v) => !v)}>
+              {recheck.runs.length} repeat check{recheck.runs.length === 1 ? "" : "s"} so far
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="mt-4 flex flex-wrap items-center gap-2">
         {awaiting && (
           <>
@@ -334,6 +356,29 @@ export function JobCard({
             <RefreshIcon size={16} />
             Allow re-run
           </button>
+        )}
+
+        {!active && recheck && (
+          <>
+            <button
+              type="button"
+              className="pv-btn-ghost disabled:opacity-50"
+              disabled={busy}
+              onClick={() => onRecheck(job.id, "now")}
+              title="Read the last 7 days again now, and act on what it says"
+            >
+              {busy ? <Spinner /> : <GaugeIcon size={16} />}
+              Check now
+            </button>
+            <button
+              type="button"
+              className="pv-btn-ghost disabled:opacity-50"
+              disabled={busy}
+              onClick={() => onRecheck(job.id, recheck.enabled ? "off" : "on")}
+            >
+              {recheck.enabled ? "Stop watching" : "Watch again"}
+            </button>
+          </>
         )}
 
         {/* Available on every card, including one waiting for confirmation —
@@ -429,6 +474,26 @@ export function JobCard({
             <Detail label="Bounce reason" value={job.bounceReason} />
           )}
           <Detail label="Triggered by" value={job.source} />
+          {recheck && recheck.runs.length > 0 && (
+            <div className="space-y-1 pt-1">
+              <span className="text-muted-foreground">Repeat checks:</span>
+              {recheck.runs.map((r, i) => (
+                <div key={`${r.at}-${i}`} className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="text-muted-foreground">{relativeTime(r.at)}</span>
+                  <span>
+                    {r.error
+                      ? r.error
+                      : `${formatNumber(r.inboxesFound)} inbox${r.inboxesFound === 1 ? "" : "es"}${
+                          r.domainReplyRateOoo !== undefined ? ` · domain at ${r.domainReplyRateOoo}%` : ""
+                        } · ${r.stopped > 0 ? `${formatNumber(r.stopped)} newly stopped` : "nothing new to stop"}${
+                          r.kept > 0 ? `, ${formatNumber(r.kept)} still replying` : ""
+                        }${r.wroteOff ? " · domain written off" : ""}`}
+                  </span>
+                  {r.trigger === "manual" && <span className="text-muted-foreground">(by hand)</span>}
+                </div>
+              ))}
+            </div>
+          )}
           {sheet && (
             <>
               <Detail

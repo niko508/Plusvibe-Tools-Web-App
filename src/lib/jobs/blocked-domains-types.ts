@@ -39,10 +39,11 @@
 
 import type {
   DomainPerformance,
+  DomainVerdict,
   InboxAssessment,
 } from "@/lib/blocked-domains/performance";
 
-export type { DomainPerformance, InboxAssessment };
+export type { DomainPerformance, DomainVerdict, InboxAssessment };
 
 export const MAX_STORED_ERRORS = 30;
 
@@ -135,6 +136,35 @@ export interface PerformanceOutcome {
   note?: string;
 }
 
+/** One repeat check of a domain that was flagged earlier. */
+export interface RecheckRun {
+  at: number;
+  trigger: "scheduled" | "manual";
+  inboxesFound: number;
+  /** The domain's rate at that moment, and what it meant. */
+  domainReplyRateOoo?: number;
+  verdict?: DomainVerdict;
+  /** Inboxes stopped by THIS run — ones that had held up until now. */
+  stopped: number;
+  /** Inboxes still above the inbox bar afterwards. */
+  kept: number;
+  /** True when this run was the one that wrote the domain off. */
+  wroteOff?: boolean;
+  error?: string;
+}
+
+export interface RecheckState {
+  enabled: boolean;
+  /** How often, in days. */
+  everyDays: number;
+  nextAt?: number;
+  runs: RecheckRun[];
+  /** Why the repeat checks ended, when they have. */
+  endedReason?: string;
+}
+
+export const MAX_RECHECK_RUNS = 20;
+
 export interface BlockedDomainJob {
   id: string;
   /** The normalized domain. Also the duplicate key. */
@@ -196,6 +226,12 @@ export interface BlockedDomainJob {
 
   sheet?: SheetOutcome;
 
+  /**
+   * The repeat checks. A flagged domain rarely stops declining, so the same
+   * assessment is repeated on a schedule until there is nothing left to watch.
+   */
+  recheck?: RecheckState;
+
   errors: string[];
   errorsTruncated?: boolean;
 }
@@ -207,6 +243,8 @@ export interface BlockedDomainsView {
     checkPerformance: boolean;
     minReplyRateOoo: number;
     minDomainReplyRateOoo: number;
+    recheck: boolean;
+    recheckDays: number;
   };
   /** Whether the webhook can actually run unattended. */
   readiness: {

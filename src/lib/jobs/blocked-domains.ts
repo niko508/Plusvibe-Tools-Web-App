@@ -48,14 +48,22 @@ import {
   unknownDomain,
   type QuarantinePlan,
 } from "@/lib/blocked-domains/performance";
+import {
+  canRecheck,
+  endOfTheLine,
+  isRecheckDue,
+  nextRunAt,
+  startRecheck,
+} from "@/lib/blocked-domains/recheck";
 import { daysAgo, toApiDate } from "@/lib/format";
 import type {
   BlockedDomainJob,
   PerformanceOutcome,
   PhaseState,
+  RecheckRun,
   SheetOutcome,
 } from "@/lib/jobs/blocked-domains-types";
-import { MAX_STORED_ERRORS } from "@/lib/jobs/blocked-domains-types";
+import { MAX_RECHECK_RUNS, MAX_STORED_ERRORS } from "@/lib/jobs/blocked-domains-types";
 
 // Server-side manager for the Blocked Domains automation.
 //
@@ -383,6 +391,9 @@ async function runLocateAndQuarantine(id: string) {
       rec.phaseStates.deleting = "skipped";
       rec.status = "kept";
       rec.phase = "finished";
+      // A kept domain is exactly the case worth watching: it is flagged, and
+      // its inboxes are the likeliest to fall under the bar next week.
+      await scheduleRecheck(rec);
       rec.updatedAt = Date.now();
       await persist(id);
       return;
@@ -403,6 +414,7 @@ async function runLocateAndQuarantine(id: string) {
       // domain is written off; there is nothing to stop or delete.
       rec.phaseStates.deleting = "skipped";
       finish(rec);
+      await scheduleRecheck(rec);
       await persist(id);
       return;
     }
@@ -418,6 +430,9 @@ async function runLocateAndQuarantine(id: string) {
       // Only the deletion waits now — the sheet is already written.
       rec.phase = "deleting";
       rec.phaseStates.deleting = "waiting";
+      // The inboxes that were left sending still deserve watching, whether or
+      // not anyone gets round to confirming the deletion.
+      await scheduleRecheck(rec);
       rec.updatedAt = Date.now();
       await persist(id);
     }
@@ -677,6 +692,9 @@ async function runDelete(id: string) {
     rec.inboxesDeleted === inboxes.length ? "done" : "error";
 
   finish(rec);
+  // Inboxes that were kept are still sending, so the domain stays watched;
+  // if the deletion took the last one, scheduleRecheck ends the schedule.
+  await scheduleRecheck(rec);
   await persist(id);
 }
 
@@ -789,6 +807,192 @@ async function runSheet(rec: BlockedDomainJob) {
   }
 }
 
+// --- Repeat checks ---------------------------------------------------------
+//
+// A flagged domain is re-assessed on a schedule, because the mailboxes still
+// replying today are the likeliest to fall under the bar next week. Each run
+// applies the same two bars to fresh figures: newly weak inboxes are stopped,
+// and a domain that has now fallen under its bar is written off.
+
+const TICK_MS = 60_000;
+let schedulerStarted = false;
+/** Ids with a recheck in flight, so a slow run can't be started twice. */
+const rechecking = new Set<string>();
+
+export async function bootScheduler() {
+  await loadOnce();
+  if (schedulerStarted) return;
+  schedulerStarted = true;
+  const timer = setInterval(() => void tick(), TICK_MS);
+  // Never keep the process alive just for this.
+  timer.unref?.();
+  // A check that came due while the process was down shouldn't wait a further
+  // minute — on Railway the process is replaced on every deploy.
+  void tick();
+}
+
+async function tick() {
+  const now = Date.now();
+  for (const [id, rec] of records) {
+    if (!isRecheckDue(rec, now) || !canRecheck(rec)) continue;
+    await runRecheck(id, "scheduled");
+  }
+}
+
+/** Arms the repeat checks for a record, if there is anything left to watch. */
+async function scheduleRecheck(rec: BlockedDomainJob) {
+  const settings = await loadSettings();
+  const writtenOff = rec.status !== "kept";
+  const end = endOfTheLine({
+    inboxesFound: Math.max(0, rec.inboxesFound - rec.inboxesDeleted),
+    keptInboxes: rec.inboxesKept ?? 0,
+    writtenOff,
+  });
+  const existing = rec.recheck;
+  if (end.reason) {
+    rec.recheck = {
+      enabled: false,
+      everyDays: existing?.everyDays ?? settings.recheckDays,
+      runs: existing?.runs ?? [],
+      endedReason: end.reason,
+    };
+    return;
+  }
+  rec.recheck = {
+    enabled: settings.recheck,
+    everyDays: settings.recheckDays,
+    nextAt: settings.recheck ? nextRunAt(Date.now(), settings.recheckDays) : undefined,
+    runs: existing?.runs ?? [],
+    endedReason: settings.recheck ? undefined : "Repeat checks are switched off.",
+  };
+}
+
+/**
+ * One repeat assessment of an already-flagged domain.
+ *
+ * Everything it can do is additive: it stops inboxes that have fallen under
+ * the bar since last time, and writes the domain off if it has fallen under
+ * its own. It never un-stops an inbox, never restores a sheet status, and
+ * never deletes anything on its own.
+ */
+export async function runRecheck(
+  id: string,
+  trigger: "scheduled" | "manual"
+): Promise<boolean> {
+  await loadOnce();
+  const rec = records.get(id);
+  if (!rec || !canRecheck(rec) || rechecking.has(id)) return false;
+  const apiKey = serverApiKey();
+  const state = rec.recheck;
+  if (!state) return false;
+
+  rechecking.add(id);
+  const run: RecheckRun = { at: Date.now(), trigger, inboxesFound: 0, stopped: 0, kept: 0 };
+  try {
+    if (!apiKey) throw new Error("PLUSVIBE_API_KEY is not set on the server.");
+    if (!rec.workspaceId) throw new Error("This run never found a workspace, so there is nothing to re-check.");
+    const settings = await loadSettings();
+
+    // What is still there. Inboxes deleted since last time simply aren't.
+    const inboxes = (await listInboxes(apiKey, rec.workspaceId)).filter((i) =>
+      inboxIsOnDomain(i.email, rec.domain)
+    );
+    run.inboxesFound = inboxes.length;
+    rec.inboxesFound = inboxes.length;
+
+    if (inboxes.length === 0) {
+      state.endedReason = "No inboxes left on this domain.";
+      state.enabled = false;
+      state.nextAt = undefined;
+      run.kept = 0;
+      return true;
+    }
+
+    const plan = await assess(apiKey, rec, rec.workspaceId, inboxes, settings);
+    const domain = rec.performance?.domain;
+    run.domainReplyRateOoo = domain?.replyRateOoo;
+    run.verdict = domain?.verdict;
+    run.kept = plan.keep.length;
+    rec.inboxesKept = plan.keep.length;
+
+    // Only inboxes that weren't already stopped are worth a call.
+    const already = new Set((rec.quarantinedEmails ?? []).map((e) => e.trim().toLowerCase()));
+    const fresh = plan.stop.filter((i) => !already.has(i.email.trim().toLowerCase()));
+    if (fresh.length > 0) {
+      const q = await quarantineInboxes(apiKey, rec.workspaceId, fresh.map((i) => i.id));
+      if (q.sendingStopped && q.warmupStopped) {
+        run.stopped = fresh.length;
+        rec.inboxesQuarantined += fresh.length;
+        rec.sendingStopped = true;
+        rec.warmupStopped = true;
+      } else {
+        for (const e of q.errors) pushError(rec, `Repeat check could not stop ${e}`);
+        run.error = "Some inboxes could not be stopped.";
+      }
+    }
+    rec.quarantinedEmails = plan.stop.map((i) => i.email.trim().toLowerCase());
+    quarantinedInboxes.set(id, plan.stop);
+
+    // A domain that has now fallen under its bar gets written off — once.
+    const alreadyWrittenOff = rec.status !== "kept";
+    if (domain?.verdict === "under" && !alreadyWrittenOff) {
+      await runSheet(rec);
+      run.wroteOff = true;
+      rec.status =
+        plan.stop.length > 0 && !settings.autoDelete ? "awaiting_confirmation" : "done";
+      rec.phase = plan.stop.length > 0 && !settings.autoDelete ? "deleting" : "finished";
+      rec.phaseStates.deleting = plan.stop.length > 0 && !settings.autoDelete ? "waiting" : "skipped";
+    }
+
+    // Schedule the next one, or stop if there is nothing left to learn.
+    const end = endOfTheLine({
+      inboxesFound: inboxes.length,
+      keptInboxes: plan.keep.length,
+      writtenOff: rec.status !== "kept",
+    });
+    if (end.reason) {
+      state.enabled = false;
+      state.nextAt = undefined;
+      state.endedReason = end.reason;
+    } else {
+      state.everyDays = settings.recheckDays;
+      state.enabled = settings.recheck;
+      state.nextAt = settings.recheck ? nextRunAt(Date.now(), settings.recheckDays) : undefined;
+      state.endedReason = settings.recheck ? undefined : "Repeat checks are switched off.";
+    }
+    return true;
+  } catch (err) {
+    run.error = msg(err);
+    pushError(rec, `Repeat check failed: ${run.error}`);
+    // A failure doesn't end the schedule — the next one may well work.
+    if (state.enabled) state.nextAt = nextRunAt(Date.now(), state.everyDays);
+    return false;
+  } finally {
+    rechecking.delete(id);
+    state.runs.unshift(run);
+    if (state.runs.length > MAX_RECHECK_RUNS) state.runs.length = MAX_RECHECK_RUNS;
+    rec.updatedAt = Date.now();
+    await persist(id);
+  }
+}
+
+/** Turns the repeat checks for one record on or off by hand. */
+export async function setRecheck(id: string, enabled: boolean): Promise<boolean> {
+  await loadOnce();
+  const rec = records.get(id);
+  if (!rec) return false;
+  const settings = await loadSettings();
+  const state = rec.recheck ?? startRecheck(Date.now(), settings.recheckDays, false);
+  state.enabled = enabled;
+  state.everyDays = state.everyDays || settings.recheckDays;
+  state.nextAt = enabled ? nextRunAt(Date.now(), state.everyDays) : undefined;
+  state.endedReason = enabled ? undefined : "Switched off for this domain.";
+  rec.recheck = state;
+  rec.updatedAt = Date.now();
+  await persist(id);
+  return true;
+}
+
 // --- Query / control -------------------------------------------------------
 
 export async function listJobs(): Promise<BlockedDomainJob[]> {
@@ -847,6 +1051,13 @@ export async function rearmJob(id: string): Promise<boolean> {
     rec.status === "awaiting_confirmation";
   if (inFlight || rec.rearmedAt) return false;
   rec.rearmedAt = Date.now();
+  // A re-armed record is history: a fresh run will schedule its own checks,
+  // and two schedules on one domain would assess it twice over.
+  if (rec.recheck) {
+    rec.recheck.enabled = false;
+    rec.recheck.nextAt = undefined;
+    rec.recheck.endedReason = "The domain was re-armed, so this record stopped watching it.";
+  }
   rec.updatedAt = rec.rearmedAt;
   await persist(id);
   return true;

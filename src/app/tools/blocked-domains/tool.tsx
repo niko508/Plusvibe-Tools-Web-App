@@ -8,13 +8,21 @@ import {
   confirmBlockedDomain,
   dismissBlockedDomain,
   rearmBlockedDomain,
+  recheckBlockedDomain,
   deleteBlockedDomainJob,
   ApiClientError,
 } from "@/lib/api-client";
 import { useApiKey } from "@/lib/use-api-key";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { EmptyState, Spinner } from "@/components/ui";
-import { AlertIcon, CheckIcon, CopyIcon, FireIcon, GaugeIcon } from "@/components/icons";
+import {
+  AlertIcon,
+  CheckIcon,
+  ClockIcon,
+  CopyIcon,
+  FireIcon,
+  GaugeIcon,
+} from "@/components/icons";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatNumber } from "@/lib/format";
 import { JobCard } from "./job-card";
@@ -87,6 +95,8 @@ export function BlockedDomainsTool() {
     checkPerformance?: boolean;
     minReplyRateOoo?: number;
     minDomainReplyRateOoo?: number;
+    recheck?: boolean;
+    recheckDays?: number;
   }) {
     setSavingToggle(true);
     setError(null);
@@ -229,8 +239,50 @@ export function BlockedDomainsTool() {
                 {view?.settings.checkPerformance ? "Check is ON" : "Check is OFF"}
               </button>
             </div>
+            <h2 className="mt-4 text-sm font-semibold">Keep watching</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {view?.settings.recheck
+                ? `A flagged domain is assessed again every ${view.settings.recheckDays} days — the same two bars on fresh figures — until it is written off with every inbox stopped, or has no inboxes left.`
+                : "A domain is assessed once, when it is flagged, and never looked at again."}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={savingToggle || !view}
+                onClick={() => saveSettings({ recheck: !view?.settings.recheck })}
+                aria-label="Toggle repeat checks"
+                className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
+                  view?.settings.recheck
+                    ? "border-success/40 bg-success/10 text-success"
+                    : "border-border hover:text-foreground"
+                }`}
+              >
+                {savingToggle ? <Spinner size={12} /> : <ClockIcon size={13} />}
+                {view?.settings.recheck ? "Repeat checks are ON" : "Repeat checks are OFF"}
+              </button>
+              {view?.settings.recheck && (
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  every
+                  <input
+                    type="number"
+                    className="pv-input w-16 py-1 text-xs"
+                    min={1}
+                    max={90}
+                    step={1}
+                    value={String(view.settings.recheckDays)}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      if (Number.isInteger(n) && n >= 1 && n <= 90) void saveSettings({ recheckDays: n });
+                    }}
+                    aria-label="Days between repeat checks"
+                  />
+                  days
+                </label>
+              )}
+            </div>
+
             {view?.settings.checkPerformance && (
-              <div className="mt-2 space-y-1.5">
+              <div className="mt-3 space-y-1.5">
                 <Bar
                   label="Stop an inbox under"
                   hint="daily limit to 0 and warmup off"
@@ -307,6 +359,7 @@ export function BlockedDomainsTool() {
               onDismiss={(id) => withBusy(id, () => dismissBlockedDomain(id))}
               onRearm={(id) => withBusy(id, () => rearmBlockedDomain(id))}
               onRemove={(id) => withBusy(id, () => deleteBlockedDomainJob(id))}
+              onRecheck={(id, action) => withBusy(id, () => recheckBlockedDomain(id, action))}
             />
           ))}
         </div>
@@ -332,6 +385,7 @@ export function BlockedDomainsTool() {
               onDismiss={(id) => withBusy(id, () => dismissBlockedDomain(id))}
               onRearm={(id) => withBusy(id, () => rearmBlockedDomain(id))}
               onRemove={(id) => withBusy(id, () => deleteBlockedDomainJob(id))}
+              onRecheck={(id, action) => withBusy(id, () => recheckBlockedDomain(id, action))}
             />
           ))}
         </div>

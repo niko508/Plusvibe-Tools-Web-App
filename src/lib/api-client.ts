@@ -1042,6 +1042,8 @@ export function setBlockedDomainSettings(
     checkPerformance?: boolean;
     minReplyRateOoo?: number;
     minDomainReplyRateOoo?: number;
+    recheck?: boolean;
+    recheckDays?: number;
   },
   signal?: AbortSignal
 ) {
@@ -1056,6 +1058,19 @@ export function setBlockedDomainAutoDelete(
   signal?: AbortSignal
 ) {
   return setBlockedDomainSettings({ autoDelete }, signal);
+}
+
+/** Runs the repeat assessment now, or arms/disarms it for one domain. */
+export function recheckBlockedDomain(
+  jobId: string,
+  action: "now" | "on" | "off" = "now",
+  signal?: AbortSignal
+) {
+  return request<{ ok: boolean }>("/api/jobs/blocked-domains/recheck", {
+    method: "POST",
+    body: { jobId, action },
+    signal,
+  });
 }
 
 export function confirmBlockedDomain(jobId: string, signal?: AbortSignal) {

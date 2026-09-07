@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
-import { loadSettings, saveSettings } from "@/lib/blocked-domains/settings";
+import { MAX_RECHECK_DAYS, loadSettings, saveSettings } from "@/lib/blocked-domains/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +16,8 @@ export async function PUT(request: Request) {
       checkPerformance?: unknown;
       minReplyRateOoo?: unknown;
       minDomainReplyRateOoo?: unknown;
+      recheck?: unknown;
+      recheckDays?: unknown;
     };
     const patch: Parameters<typeof saveSettings>[0] = {};
 
@@ -25,11 +27,23 @@ export async function PUT(request: Request) {
       }
       patch.autoDelete = body.autoDelete;
     }
-    if (body.checkPerformance !== undefined) {
-      if (typeof body.checkPerformance !== "boolean") {
-        return NextResponse.json({ error: "checkPerformance must be true or false" }, { status: 400 });
+    for (const key of ["checkPerformance", "recheck"] as const) {
+      const raw = body[key];
+      if (raw === undefined) continue;
+      if (typeof raw !== "boolean") {
+        return NextResponse.json({ error: `${key} must be true or false` }, { status: 400 });
       }
-      patch.checkPerformance = body.checkPerformance;
+      patch[key] = raw;
+    }
+    if (body.recheckDays !== undefined) {
+      const n = typeof body.recheckDays === "number" ? body.recheckDays : Number(body.recheckDays);
+      if (!Number.isInteger(n) || n < 1 || n > MAX_RECHECK_DAYS) {
+        return NextResponse.json(
+          { error: `recheckDays must be a whole number of days between 1 and ${MAX_RECHECK_DAYS}` },
+          { status: 400 }
+        );
+      }
+      patch.recheckDays = n;
     }
     for (const key of ["minReplyRateOoo", "minDomainReplyRateOoo"] as const) {
       const raw = body[key];

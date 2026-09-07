@@ -23,6 +23,8 @@ export async function GET(request: Request) {
         checkPerformance: settings.checkPerformance,
         minReplyRateOoo: settings.minReplyRateOoo,
         minDomainReplyRateOoo: settings.minDomainReplyRateOoo,
+        recheck: settings.recheck,
+        recheckDays: settings.recheckDays,
       },
       readiness: {
         serverKey: serverApiKey() !== null,

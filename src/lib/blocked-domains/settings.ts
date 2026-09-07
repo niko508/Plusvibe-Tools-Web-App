@@ -7,6 +7,11 @@ import {
   DEFAULT_MIN_REPLY_RATE_OOO,
   normalizeThreshold,
 } from "@/lib/blocked-domains/performance";
+import {
+  DEFAULT_RECHECK_DAYS,
+  MAX_RECHECK_DAYS,
+  normalizeRecheckDays,
+} from "@/lib/blocked-domains/recheck";
 
 // The one setting the Blocked Domains automation has: whether a blocked domain
 // is deleted on arrival, or quarantined and left for someone to confirm.
@@ -44,14 +49,26 @@ export interface BlockedDomainSettings {
    * tenant are left alone.
    */
   minDomainReplyRateOoo: number;
+  /**
+   * Whether a flagged domain is checked again on a schedule. A blocked domain
+   * usually keeps declining, so the same assessment is repeated until there is
+   * nothing left to watch.
+   */
+  recheck: boolean;
+  /** How often the repeat check runs, in days. */
+  recheckDays: number;
   updatedAt: number;
 }
+
+export { DEFAULT_RECHECK_DAYS, MAX_RECHECK_DAYS, normalizeRecheckDays };
 
 export const DEFAULT_SETTINGS: BlockedDomainSettings = {
   autoDelete: false,
   checkPerformance: true,
   minReplyRateOoo: DEFAULT_MIN_REPLY_RATE_OOO,
   minDomainReplyRateOoo: DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO,
+  recheck: true,
+  recheckDays: DEFAULT_RECHECK_DAYS,
   updatedAt: 0,
 };
 
@@ -72,6 +89,8 @@ export async function loadSettings(): Promise<BlockedDomainSettings> {
         parsed.minDomainReplyRateOoo,
         DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO
       ),
+      recheck: parsed.recheck !== false,
+      recheckDays: normalizeRecheckDays(parsed.recheckDays),
       updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
     };
   } catch {
@@ -83,7 +102,12 @@ export async function saveSettings(
   patch: Partial<
     Pick<
       BlockedDomainSettings,
-      "autoDelete" | "checkPerformance" | "minReplyRateOoo" | "minDomainReplyRateOoo"
+      | "autoDelete"
+      | "checkPerformance"
+      | "minReplyRateOoo"
+      | "minDomainReplyRateOoo"
+      | "recheck"
+      | "recheckDays"
     >
   >
 ): Promise<BlockedDomainSettings> {
@@ -100,6 +124,9 @@ export async function saveSettings(
       patch.minDomainReplyRateOoo === undefined
         ? current.minDomainReplyRateOoo
         : normalizeThreshold(patch.minDomainReplyRateOoo, DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO),
+    recheck: patch.recheck === undefined ? current.recheck : patch.recheck === true,
+    recheckDays:
+      patch.recheckDays === undefined ? current.recheckDays : normalizeRecheckDays(patch.recheckDays),
     updatedAt: Date.now(),
   };
   await fs.mkdir(STORE_DIR, { recursive: true });
