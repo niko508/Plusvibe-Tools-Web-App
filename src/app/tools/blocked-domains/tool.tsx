@@ -26,14 +26,26 @@ import {
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatNumber } from "@/lib/format";
 import { JobCard } from "./job-card";
+import { ScheduledView, watchedJobs } from "./scheduled-view";
+import { StatsView } from "./stats-view";
 
 /** Polled while anything is in flight; slower otherwise, since Clay drives it. */
 const POLL_ACTIVE_MS = 2000;
 const POLL_IDLE_MS = 20000;
 
+// The three sections of the page. Home is the setup and the log, as it always
+// was; the other two are different cuts of the same records.
+type Section = "home" | "scheduled" | "stats";
+const SECTIONS: { id: Section; label: string }[] = [
+  { id: "home", label: "Home" },
+  { id: "scheduled", label: "Scheduled" },
+  { id: "stats", label: "Stats" },
+];
+
 export function BlockedDomainsTool() {
   const { hasKey, ready } = useApiKey();
 
+  const [section, setSection] = useState<Section>("home");
   const [view, setView] = useState<BlockedDomainsView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -157,8 +169,68 @@ export function BlockedDomainsTool() {
       ].filter(Boolean as unknown as (v: unknown) => v is string)
     : [];
 
+  const watchedCount = watchedJobs(jobs).length;
+  const recheck = (id: string, action: "now" | "on" | "off") =>
+    withBusy(id, () => recheckBlockedDomain(id, action));
+
   return (
     <div className="space-y-5">
+      {/* Menu bar */}
+      <nav
+        role="tablist"
+        aria-label="Blocked Domains sections"
+        className="flex flex-wrap items-center gap-2"
+      >
+        {SECTIONS.map((s) => {
+          const current = section === s.id;
+          const badge =
+            s.id === "scheduled" ? watchedCount : s.id === "stats" ? stats.total : stats.waiting;
+          return (
+            <button
+              key={s.id}
+              type="button"
+              role="tab"
+              aria-selected={current}
+              onClick={() => setSection(s.id)}
+              className={`pv-chip ${current ? "pv-chip-active" : "hover:text-foreground"}`}
+            >
+              {s.label}
+              {badge > 0 && (
+                <span
+                  className={`rounded-full px-1.5 text-[10px] tabular-nums ${
+                    current ? "bg-accent/15" : "bg-muted"
+                  } ${s.id === "home" ? "text-warning" : ""}`}
+                  title={
+                    s.id === "home"
+                      ? "Waiting for your confirmation"
+                      : s.id === "scheduled"
+                        ? "Domains being watched"
+                        : "Blocks counted"
+                  }
+                >
+                  {formatNumber(badge)}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+
+      {error && section !== "home" && (
+        <div className="flex items-start gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
+          <AlertIcon size={16} className="mt-0.5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {section === "scheduled" && (
+        <ScheduledView jobs={jobs} busyId={busyId} onRecheck={recheck} />
+      )}
+
+      {section === "stats" && <StatsView jobs={jobs} />}
+
+      {section === "home" && (
+        <>
       {/* Setup + the automation toggle */}
       <div className="pv-card p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -359,7 +431,7 @@ export function BlockedDomainsTool() {
               onDismiss={(id) => withBusy(id, () => dismissBlockedDomain(id))}
               onRearm={(id) => withBusy(id, () => rearmBlockedDomain(id))}
               onRemove={(id) => withBusy(id, () => deleteBlockedDomainJob(id))}
-              onRecheck={(id, action) => withBusy(id, () => recheckBlockedDomain(id, action))}
+              onRecheck={recheck}
             />
           ))}
         </div>
@@ -385,7 +457,7 @@ export function BlockedDomainsTool() {
               onDismiss={(id) => withBusy(id, () => dismissBlockedDomain(id))}
               onRearm={(id) => withBusy(id, () => rearmBlockedDomain(id))}
               onRemove={(id) => withBusy(id, () => deleteBlockedDomainJob(id))}
-              onRecheck={(id, action) => withBusy(id, () => recheckBlockedDomain(id, action))}
+              onRecheck={recheck}
             />
           ))}
         </div>
@@ -396,6 +468,8 @@ export function BlockedDomainsTool() {
             of your sending domains is blocked, it lands here.
           </EmptyState>
         )
+      )}
+        </>
       )}
     </div>
   );
