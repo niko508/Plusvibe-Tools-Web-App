@@ -168,9 +168,9 @@ export const TOOLS: Tool[] = [
   {
     slug: "campaign-types",
     name: "Create All Campaign Types",
-    tagline: "Split a campaign across its Microsoft and Opt Out copies",
+    tagline: "Split a campaign across its Microsoft, Opt Out and Signature copies",
     description:
-      "Point it at the original campaign and it finds the three copies you duplicated, adds the opt-out line to step 1 of both Opt Out campaigns, then sorts the not-contacted leads by mailbox provider and splits them four ways — Microsoft into the \u{1F535} campaigns, the rest halved with the original.",
+      "Point it at the original campaign and it builds the other five, adds the opt-out line to step 1 of both Opt Out campaigns and swaps step 1's sign-off to {{sender_signature}} on both Signature campaigns, then sorts the not-contacted leads by mailbox provider and splits them six ways — Microsoft into the \u{1F535} campaigns, the rest across the original and its copies.",
     status: "active",
     color: "amber",
     Icon: ScissorsIcon,

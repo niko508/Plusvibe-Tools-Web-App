@@ -1,9 +1,11 @@
 // Unit checks for the Create All Campaign Types pure logic: name derivation,
-// the 4-way split, ESP classification and the step-1 spintax append.
+// the 6-way split, ESP classification, the step-1 spintax append and the
+// step-1 sign-off swap.
 //
 //   node scripts/check-campaign-types.mjs
 
 import { readFileSync } from "fs";
+import { importTs } from "./ts-loader.mjs";
 
 let failures = 0;
 const eq = (label, got, want) => {
@@ -16,24 +18,10 @@ const eq = (label, got, want) => {
 };
 
 // --- names -----------------------------------------------------------------
+// The REAL modules, so these checks fail when the shipped logic changes.
 const BLUE = "\u{1F535}";
-const OPT_OUT = "Opt Out";
-const SEP = " - ";
-const TRAILING_PAREN = /\s*(\([^()]*\))\s*$/;
-const withBlue = (n) => (n.trim().startsWith(BLUE) ? n.trim() : `${BLUE} ${n.trim()}`);
-const hasOptOut = (n) => new RegExp(`(^|\\s|-)${OPT_OUT}(\\s|$|\\()`, "i").test(n);
-const withOptOut = (n) => {
-  const t = n.trim();
-  if (hasOptOut(t)) return t;
-  const m = t.match(TRAILING_PAREN);
-  if (m) return `${t.slice(0, m.index).trim()}${SEP}${OPT_OUT} ${m[1]}`;
-  return `${t}${SEP}${OPT_OUT}`;
-};
-const deriveNames = (n) => ({
-  blue: withBlue(n.trim()),
-  optOut: withOptOut(n.trim()),
-  blueOptOut: withOptOut(withBlue(n.trim())),
-});
+const namesMod = await importTs("@/lib/campaign-types/names");
+const { withBlue, withOptOut, withSignature, deriveNames } = namesMod;
 
 console.log("--- names");
 // The real naming structure: month in a trailing parenthetical, and no
@@ -42,7 +30,27 @@ eq("the real worked example", deriveNames("Tree Removal (August)"), {
   blue: "\u{1F535} Tree Removal (August)",
   optOut: "Tree Removal - Opt Out (August)",
   blueOptOut: "\u{1F535} Tree Removal - Opt Out (August)",
+  signature: "Tree Removal - Signature (August)",
+  blueSignature: "\u{1F535} Tree Removal - Signature (August)",
 });
+eq("the user's worked example", deriveNames("Logistics & Warehousing (August)"), {
+  blue: "\u{1F535} Logistics & Warehousing (August)",
+  optOut: "Logistics & Warehousing - Opt Out (August)",
+  blueOptOut: "\u{1F535} Logistics & Warehousing - Opt Out (August)",
+  signature: "Logistics & Warehousing - Signature (August)",
+  blueSignature: "\u{1F535} Logistics & Warehousing - Signature (August)",
+});
+eq("signature keeps the parenthetical last",
+  deriveNames("Tree Removal (August)").signature.endsWith("(August)"), true);
+eq("signature is not doubled", withSignature("Tree Removal - Signature (August)"),
+  "Tree Removal - Signature (August)");
+eq("signature match is case-insensitive", withSignature("Tree Removal - SIGNATURE (August)"),
+  "Tree Removal - SIGNATURE (August)");
+eq("signature with no parenthetical appends", withSignature("Tree Removal"),
+  "Tree Removal - Signature");
+eq("a Signature name is never also an Opt Out name",
+  withOptOut(withSignature("Tree Removal (August)")),
+  "Tree Removal - Signature - Opt Out (August)");
 eq("no dash is introduced before the parenthetical",
   /- \(/.test(deriveNames("Tree Removal (August)").optOut), false);
 eq("the parenthetical stays last",
@@ -51,6 +59,8 @@ eq("no parenthetical appends instead", deriveNames("Tree Removal"), {
   blue: "\u{1F535} Tree Removal",
   optOut: "Tree Removal - Opt Out",
   blueOptOut: "\u{1F535} Tree Removal - Opt Out",
+  signature: "Tree Removal - Signature",
+  blueSignature: "\u{1F535} Tree Removal - Signature",
 });
 eq("a name that already has a dash keeps it once",
   withOptOut("Tree Removal - UK (August)"), "Tree Removal - UK - Opt Out (August)");
@@ -64,57 +74,84 @@ eq("surrounding whitespace trimmed", deriveNames("  Tree Removal (August)  ").op
 eq("multi-word parenthetical preserved", withOptOut("Tree Removal (August 2026)"),
   "Tree Removal - Opt Out (August 2026)");
 eq("derived names are all distinct",
-  new Set(Object.values(deriveNames("Tree Removal (August)"))).size, 3);
+  new Set(Object.values(deriveNames("Tree Removal (August)"))).size, 5);
+eq("…and none of them is the source name",
+  Object.values(deriveNames("Tree Removal (August)")).includes("Tree Removal (August)"), false);
 // Applying twice must be a no-op, so a re-run can't stack markers.
 eq("derivation is idempotent", withOptOut(withOptOut("Tree Removal (August)")),
   "Tree Removal - Opt Out (August)");
 eq("blue idempotent", withBlue(withBlue("Tree Removal (August)")), "\u{1F535} Tree Removal (August)");
 
 // --- split -----------------------------------------------------------------
-const splitCounts = (ms, other) => {
-  const blue = Math.ceil(ms / 2);
-  const optOut = Math.floor(other / 2);
-  return { source: other - optOut, optOut, blue, blueOptOut: ms - blue };
-};
+const { splitCounts, planSplit } = await importTs("@/lib/campaign-types/split");
+const MS_ROLES = ["blue", "blueOptOut", "blueSignature"];
+const OTHER_ROLES = ["source", "optOut", "signature"];
+const sum = (c, roles) => roles.reduce((n, r) => n + c[r], 0);
 
 console.log("--- split");
-eq("the spec's 20k / 10k example", splitCounts(10000, 10000),
-  { source: 5000, optOut: 5000, blue: 5000, blueOptOut: 5000 });
-eq("no microsoft leads", splitCounts(0, 100), { source: 50, optOut: 50, blue: 0, blueOptOut: 0 });
-eq("all microsoft leads", splitCounts(100, 0), { source: 0, optOut: 0, blue: 50, blueOptOut: 50 });
+// Opt Out takes half of each bucket, then what is left halves again between
+// the campaign it sat in and its Signature copy.
+eq("the spec's 20k / 10k example", splitCounts(10000, 10000), {
+  source: 2500, optOut: 5000, blue: 2500, blueOptOut: 5000,
+  signature: 2500, blueSignature: 2500,
+});
+eq("no microsoft leads", splitCounts(0, 100), {
+  source: 25, optOut: 50, blue: 0, blueOptOut: 0, signature: 25, blueSignature: 0,
+});
+eq("all microsoft leads", splitCounts(100, 0), {
+  source: 0, optOut: 0, blue: 25, blueOptOut: 50, signature: 0, blueSignature: 25,
+});
+eq("empty campaign", splitCounts(0, 0), {
+  source: 0, optOut: 0, blue: 0, blueOptOut: 0, signature: 0, blueSignature: 0,
+});
+eq("single lead stays put", splitCounts(0, 1), {
+  source: 1, optOut: 0, blue: 0, blueOptOut: 0, signature: 0, blueSignature: 0,
+});
+// Odd counts favour Opt Out's siblings first, then the original over Signature.
+eq("odd others favour the source over signature", splitCounts(0, 7),
+  { source: 2, optOut: 3, blue: 0, blueOptOut: 0, signature: 2, blueSignature: 0 });
 eq("odd microsoft favours the blue original", splitCounts(7, 0),
-  { source: 0, optOut: 0, blue: 4, blueOptOut: 3 });
-eq("odd others favour the source", splitCounts(0, 7), { source: 4, optOut: 3, blue: 0, blueOptOut: 0 });
-eq("empty campaign", splitCounts(0, 0), { source: 0, optOut: 0, blue: 0, blueOptOut: 0 });
-eq("single lead stays put", splitCounts(0, 1), { source: 1, optOut: 0, blue: 0, blueOptOut: 0 });
+  { source: 0, optOut: 0, blue: 2, blueOptOut: 3, signature: 0, blueSignature: 2 });
+eq("two leads leave signature empty rather than the source",
+  splitCounts(0, 2).source >= splitCounts(0, 2).signature, true);
+eq("three leads", splitCounts(0, 3),
+  { source: 1, optOut: 1, blue: 0, blueOptOut: 0, signature: 1, blueSignature: 0 });
 // Conservation: nothing may be invented or lost, at any size.
-for (const [ms, other] of [[0,0],[1,0],[0,1],[7,13],[9999,1],[10000,10000],[3,4],[12345,54321]]) {
+for (const [ms, other] of [[0,0],[1,0],[0,1],[2,2],[7,13],[9999,1],[10000,10000],[3,4],[12345,54321]]) {
   const c = splitCounts(ms, other);
-  eq(`conserves ${ms}+${other}`, c.source + c.optOut + c.blue + c.blueOptOut, ms + other);
-  eq(`microsoft only to blue (${ms}+${other})`, c.blue + c.blueOptOut, ms);
-  eq(`others only to source/optOut (${ms}+${other})`, c.source + c.optOut, other);
+  eq(`conserves ${ms}+${other}`, sum(c, [...MS_ROLES, ...OTHER_ROLES]), ms + other);
+  eq(`microsoft only to blue campaigns (${ms}+${other})`, sum(c, MS_ROLES), ms);
+  eq(`others only to non-blue campaigns (${ms}+${other})`, sum(c, OTHER_ROLES), other);
+  eq(`no negative counts (${ms}+${other})`,
+    Object.values(c).every((n) => n >= 0 && Number.isInteger(n)), true);
+  // Opt Out is the deliberate big half, so nothing may quietly exceed it.
+  eq(`opt out is the largest non-blue share (${ms}+${other})`,
+    c.optOut >= c.source - 1 && c.optOut >= c.signature - 1, true);
 }
 
 // planSplit assigns disjoint, complete lead sets
-const planSplit = (microsoft, other) => {
-  const counts = splitCounts(microsoft.length, other.length);
-  return {
-    counts,
-    moves: [
-      { destination: "blue", leads: microsoft.slice(0, counts.blue) },
-      { destination: "blueOptOut", leads: microsoft.slice(counts.blue) },
-      { destination: "optOut", leads: other.slice(counts.source) },
-    ],
-  };
-};
 const ms = Array.from({ length: 7 }, (_, i) => `m${i}`);
 const ot = Array.from({ length: 5 }, (_, i) => `o${i}`);
 const plan = planSplit(ms, ot);
 const moved = plan.moves.flatMap((m) => m.leads);
 eq("moved leads are unique", new Set(moved).size, moved.length);
-eq("moved count matches plan", moved.length, plan.counts.blue + plan.counts.blueOptOut + plan.counts.optOut);
+eq("moved count matches plan", moved.length,
+  plan.counts.blue + plan.counts.blueOptOut + plan.counts.blueSignature +
+  plan.counts.optOut + plan.counts.signature);
 eq("leads left in source", ot.filter((o) => !moved.includes(o)).length, plan.counts.source);
 eq("no microsoft lead stays in source", ms.every((m) => moved.includes(m)), true);
+eq("every destination is moved to, and source is not",
+  plan.moves.map((m) => m.destination).sort(),
+  ["blue", "blueOptOut", "blueSignature", "optOut", "signature"]);
+// A microsoft lead landing in a non-blue campaign would send from the wrong
+// mailboxes, which is the failure the whole split exists to prevent.
+for (const mv of plan.moves) {
+  const fromMs = mv.leads.every((l) => l.startsWith("m"));
+  const fromOther = mv.leads.every((l) => l.startsWith("o"));
+  eq(`${mv.destination} takes one bucket only`,
+    MS_ROLES.includes(mv.destination) ? fromMs : fromOther, true);
+  eq(`${mv.destination} moves what it planned`, mv.leads.length, plan.counts[mv.destination]);
+}
 
 // --- esp -------------------------------------------------------------------
 const MICROSOFT_MX = ["outlook.com","office365.com","microsoft.com","hotmail.com","messaging.microsoft.com"];
@@ -145,21 +182,9 @@ eq("outlook.com as a bare host", classifyMx(["outlook.com"]), "MICROSOFT");
 const spintaxSrc = readFileSync("src/lib/campaign-types/opt-out-spintax.ts", "utf8");
 const SPINTAX = spintaxSrc.match(/export const OPT_OUT_SPINTAX[^`]*`([\s\S]*?)`;/)[1];
 const SPACER = "<div>&nbsp;</div>";
-const hasBlock = (b) => b.includes(SPINTAX);
-const appendBody = (b) => (hasBlock(b) ? b : `${b}${SPACER}<div>${SPINTAX}</div>`);
-const appendStepOne = (steps) => {
-  const changed = [], already = [];
-  const out = steps.map((s) => {
-    if (s.step !== 1) return s;
-    return { ...s, variations: s.variations.map((v) => {
-      const body = v.body ?? "";
-      if (hasBlock(body)) { already.push(v.variation); return v; }
-      changed.push(v.variation);
-      return { ...v, body: appendBody(body) };
-    })};
-  });
-  return { steps: out, changed, alreadyPresent: already };
-};
+const optOutMod = await importTs("@/lib/campaign-types/append-opt-out");
+const hasBlock = optOutMod.hasOptOutBlock;
+const appendStepOne = optOutMod.appendOptOutToStepOne;
 
 console.log("--- append opt-out");
 const seq = [
@@ -196,6 +221,78 @@ eq("missing body field is tolerated", hasBlock(appendStepOne(
 eq("campaign with no step 1 is a no-op", appendStepOne(
   [{ step: 2, variations: [{ variation: "A", body: "x" }] }]).changed, []);
 
+
+// --- sign-off swap ----------------------------------------------------------
+const {
+  swapSignatureInStepOne,
+  swapInText,
+  hasSenderFirstName,
+  hasSenderSignature,
+} = await importTs("@/lib/campaign-types/swap-signature");
+
+console.log("--- sign-off swap");
+// The tail of the user's real script: the sign-off sits after a spintax block.
+const SIGN_OFF = "<div>{{Random | Thanks, | Best, | Take care,}}</div><div>{{sender_first_name}}</div>";
+const sigSeq = [
+  { step: 1, wait_time: 0, variations: [
+    { variation: "A", subject: "Hi {{first_name}}", body: `<div>hello</div>${SIGN_OFF}` },
+    { variation: "B", subject: "Hi", body: `<div>other</div>${SIGN_OFF}` },
+  ]},
+  { step: 2, wait_time: 3, variations: [
+    { variation: "A", subject: "Bump", body: `<div>follow up</div>${SIGN_OFF}` },
+  ]},
+];
+const s1 = swapSignatureInStepOne(sigSeq);
+eq("both step-1 variations swapped", s1.changed, ["A", "B"]);
+eq("the sign-off now uses the signature",
+  s1.steps[0].variations[0].body.includes("<div>{{sender_signature}}</div>"), true);
+eq("…and no longer the first name",
+  hasSenderFirstName(s1.steps[0].variations[0].body), false);
+// Step 2 keeping {{sender_first_name}} is the whole point of "step 1 only".
+eq("step 2 is left alone", s1.steps[1].variations[0].body, `<div>follow up</div>${SIGN_OFF}`);
+eq("the rest of the body is untouched",
+  s1.steps[0].variations[0].body.startsWith("<div>hello</div>"), true);
+eq("the greeting variable is not touched",
+  s1.steps[0].variations[0].subject, "Hi {{first_name}}");
+eq("every step is returned for the replace-all write", s1.steps.length, sigSeq.length);
+eq("nothing was reported as missing", s1.missing, []);
+
+// Idempotence — a resumed run must not double-swap or report a false problem.
+const s2 = swapSignatureInStepOne(s1.steps);
+eq("second pass changes nothing", s2.changed, []);
+eq("second pass reports both as already signed", s2.alreadyPresent, ["A", "B"]);
+eq("…and none as missing", s2.missing, []);
+eq("body identical after second pass",
+  s2.steps[0].variations[0].body, s1.steps[0].variations[0].body);
+
+// A variation that signs off some other way: reported, never invented.
+const odd = swapSignatureInStepOne([
+  { step: 1, variations: [
+    { variation: "A", body: "<div>hi</div><div>{{sender_first_name}}</div>" },
+    { variation: "B", body: "<div>hi</div><div>The team</div>" },
+  ]},
+]);
+eq("the variation with no sign-off variable is reported", odd.missing, ["B"]);
+eq("…and is left exactly as it was",
+  odd.steps[0].variations[1].body, "<div>hi</div><div>The team</div>");
+eq("…while its sibling is still swapped", odd.changed, ["A"]);
+
+// A subject signed with the first name would contradict the body.
+const subj = swapSignatureInStepOne([
+  { step: 1, variations: [{ variation: "A", subject: "from {{sender_first_name}}", body: "<div>hi</div>" }] },
+]);
+eq("the subject is swapped too", subj.steps[0].variations[0].subject, "from {{sender_signature}}");
+
+eq("padded braces are matched", swapInText("{{ sender_first_name }}"), "{{sender_signature}}");
+eq("every occurrence is swapped",
+  swapInText("{{sender_first_name}} x {{sender_first_name}}"),
+  "{{sender_signature}} x {{sender_signature}}");
+eq("a lookalike variable is left alone",
+  swapInText("{{sender_first_name_2}}"), "{{sender_first_name_2}}");
+eq("an empty body is not a crash", swapInText(""), "");
+eq("detection agrees with the swap",
+  [hasSenderFirstName("a {{sender_first_name}} b"), hasSenderSignature("a {{sender_signature}} b")],
+  [true, true]);
 
 // --- companion matching -----------------------------------------------------
 const normalizeName = (n) => n.replace(/\uFE0F/g, "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -358,22 +455,37 @@ eq("a sub-sequence is never reused",
 eq("the source name does not collide with any derived name",
   planDuplication(SRC2, [{ id: "s1", name: SRC2 }]).every((p) => p.action === "create"), true);
 
-// The three derived names must be distinct, or two roles would adopt the same
+// The five derived names must be distinct, or two roles would adopt the same
 // campaign and the split would move two buckets into one place.
 const derived = deriveNames(SRC2);
 eq("derived names are distinct after normalization",
-  new Set(Object.values(derived).map(normalizeName)).size, 3);
+  new Set(Object.values(derived).map(normalizeName)).size, 5);
 eq("no derived name equals the source",
   Object.values(derived).some((n) => normalizeName(n) === normalizeName(SRC2)), false);
 
-// Duplication order: blue must exist before the blue opt-out copies from it.
-const DUP_FROM = { blue: "source", optOut: "source", blueOptOut: "blue" };
-eq("blue opt out duplicates from blue", DUP_FROM.blueOptOut, "blue");
-eq("the other two duplicate from the source",
-  [DUP_FROM.blue, DUP_FROM.optOut], ["source", "source"]);
-const order = ["blue", "optOut", "blueOptOut"];
-eq("blue is created before the copy that needs it",
-  order.indexOf("blue") < order.indexOf("blueOptOut"), true);
+// Duplication order, from the REAL constants the job runs on: blue must exist
+// before the two 🔵 copies duplicate from it.
+const roles = await importTs("@/lib/jobs/campaign-types-types");
+eq("every created role has a name and a job to do",
+  roles.CREATED_ROLES.slice().sort(),
+  ["blue", "blueOptOut", "blueSignature", "optOut", "signature"]);
+eq("the 🔵 copies duplicate from blue",
+  roles.FROM_BLUE_ROLES.slice().sort(), ["blueOptOut", "blueSignature"]);
+for (const r of roles.FROM_BLUE_ROLES) {
+  eq(`blue is created before ${r}`,
+    roles.CREATED_ROLES.indexOf("blue") < roles.CREATED_ROLES.indexOf(r), true);
+}
+eq("blue itself is not copied from blue", roles.FROM_BLUE_ROLES.includes("blue"), false);
+// A role in both lists would have its step 1 rewritten twice, and the second
+// pass would be writing over copy the first one had just put there.
+eq("no role is both an Opt Out and a Signature copy",
+  roles.OPT_OUT_ROLES.some((r) => roles.SIGNATURE_ROLES.includes(r)), false);
+eq("every Opt Out and Signature role is one the tool creates",
+  [...roles.OPT_OUT_ROLES, ...roles.SIGNATURE_ROLES].every((r) =>
+    roles.CREATED_ROLES.includes(r)), true);
+// Each created role must be able to find its name in the payload.
+eq("every created role is named by deriveNames",
+  roles.CREATED_ROLES.every((r) => typeof deriveNames(SRC2)[r] === "string"), true);
 
 console.log(failures === 0 ? "\nall campaign-types checks OK" : `\n${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);

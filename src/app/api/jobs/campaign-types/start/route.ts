@@ -9,7 +9,8 @@ export const dynamic = "force-dynamic";
 
 // POST /api/jobs/campaign-types/start
 // Body: { workspaceId, workspaceName, sourceCampaignId, sourceCampaignName,
-//         names: { blue, optOut, blueOptOut }, activate? }
+//         names: { blue, optOut, blueOptOut, signature, blueSignature },
+//         activate? }
 export async function POST(request: Request) {
   try {
     const apiKey = resolveApiKey(request);
@@ -28,6 +29,8 @@ export async function POST(request: Request) {
       blue: String(body.names?.blue ?? "").trim(),
       optOut: String(body.names?.optOut ?? "").trim(),
       blueOptOut: String(body.names?.blueOptOut ?? "").trim(),
+      signature: String(body.names?.signature ?? "").trim(),
+      blueSignature: String(body.names?.blueSignature ?? "").trim(),
     };
     for (const [role, name] of Object.entries(names)) {
       if (!name) {

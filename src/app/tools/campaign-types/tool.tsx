@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Workspace, CampaignSummary } from "@/lib/plusvibe-types";
 import type { CampaignTypesJob } from "@/lib/jobs/campaign-types-types";
+import { CREATED_ROLES } from "@/lib/jobs/campaign-types-types";
 import {
   fetchWorkspaces,
   fetchCampaigns,
@@ -31,6 +32,8 @@ const ROLE_LABELS = {
   blue: "Microsoft leads",
   optOut: "Opt-out copy on step 1",
   blueOptOut: "Microsoft leads + opt-out copy",
+  signature: "Signs off with the signature",
+  blueSignature: "Microsoft leads + signature sign-off",
 } as const;
 
 export function CampaignTypesTool() {
@@ -147,7 +150,7 @@ export function CampaignTypesTool() {
   }, [parents, existing]);
 
   const rows = names
-    ? (["blue", "optOut", "blueOptOut"] as const).map((role) => ({
+    ? CREATED_ROLES.map((role) => ({
         role,
         name: names[role],
         reused: existing.get(normalizeName(names[role])) ?? null,
@@ -267,7 +270,7 @@ export function CampaignTypesTool() {
         {source && names && (
           <div className="rounded-xl border border-border p-3 sm:p-4">
             <h3 className="mb-1 text-sm font-medium">
-              Three campaigns will be created
+              Five campaigns will be created
             </h3>
             <p className="mb-3 text-xs text-muted-foreground">
               Duplicated from{" "}
@@ -331,8 +334,8 @@ export function CampaignTypesTool() {
                 onChange={(e) => setActivate(e.target.checked)}
               />
               <span>
-                Activate all four campaigns at the end, sub-sequences included.
-                Untick to leave the three copies as drafts and launch them
+                Activate all six campaigns at the end, sub-sequences included.
+                Untick to leave the five copies as drafts and launch them
                 yourself.
               </span>
             </label>

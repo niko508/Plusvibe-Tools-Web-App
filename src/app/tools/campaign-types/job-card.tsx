@@ -255,6 +255,34 @@ export function JobCard({
                 }
               />
             ))}
+          {created
+            .filter((c) => c.signature)
+            .map((c) => (
+              <Detail
+                key={`signature-${c.role}`}
+                label={`Sign-off · ${shortName(c.name)}`}
+                value={
+                  c.signature!.state === "error"
+                    ? c.signature!.error || "failed"
+                    : [
+                        c.signature!.applied.length > 0
+                          ? `swapped on step 1 ${c.signature!.applied.join(", ")}`
+                          : null,
+                        c.signature!.alreadyPresent.length > 0
+                          ? `already signed on ${c.signature!.alreadyPresent.join(", ")}`
+                          : null,
+                        // Worth its own clause: these variations send exactly
+                        // as the source does, which is the one outcome someone
+                        // would not expect from a Signature campaign.
+                        c.signature!.missing.length > 0
+                          ? `nothing to swap on ${c.signature!.missing.join(", ")}`
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ") || c.signature!.state
+                }
+              />
+            ))}
           {activation.map((a) => (
             <Detail
               key={`launch-${a.role}`}

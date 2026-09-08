@@ -15,6 +15,7 @@ import { moveLeadChunk, MOVE_CHUNK } from "@/lib/move-leads-core";
 import { resolveLeadEsps } from "@/lib/campaign-types/resolve-esp";
 import { planSplit } from "@/lib/campaign-types/split";
 import { applyOptOutToCampaign } from "@/lib/campaign-types/apply-opt-out";
+import { applySignatureToCampaign } from "@/lib/campaign-types/apply-signature";
 import { duplicateCampaign, launchCampaign } from "@/lib/campaign-types/duplicate";
 import { buildReuseIndex, normalizeName } from "@/lib/campaign-types/match";
 import type {
@@ -27,7 +28,13 @@ import type {
   MoveTarget,
   PhaseState,
 } from "@/lib/jobs/campaign-types-types";
-import { MAX_STORED_ERRORS } from "@/lib/jobs/campaign-types-types";
+import {
+  MAX_STORED_ERRORS,
+  CREATED_ROLES,
+  OPT_OUT_ROLES,
+  SIGNATURE_ROLES,
+  FROM_BLUE_ROLES,
+} from "@/lib/jobs/campaign-types-types";
 
 // Server-side manager for Create All Campaign Types jobs.
 //
@@ -360,8 +367,6 @@ function pump(fp: string) {
   }
 }
 
-const CREATED_ROLES: CreatedRole[] = ["blue", "optOut", "blueOptOut"];
-const OPT_OUT_ROLES: CreatedRole[] = ["optOut", "blueOptOut"];
 
 export async function createJob(
   apiKey: string,
@@ -406,6 +411,16 @@ export async function createJob(
     state: "pending" as const,
     ...(OPT_OUT_ROLES.includes(role)
       ? { optOut: { state: "pending" as const, applied: [], alreadyPresent: [] } }
+      : {}),
+    ...(SIGNATURE_ROLES.includes(role)
+      ? {
+          signature: {
+            state: "pending" as const,
+            applied: [],
+            alreadyPresent: [],
+            missing: [],
+          },
+        }
       : {}),
   }));
 
@@ -587,11 +602,10 @@ async function runJob(id: string) {
       rec.updatedAt = Date.now();
       await persist(id);
 
-      // 🔵 Opt Out is duplicated from 🔵, the other two from the source.
-      const from =
-        target.role === "blueOptOut"
-          ? rec.created.find((c) => c.role === "blue")?.campaignId
-          : sourceCampaignId;
+      // The 🔵 copies are duplicated from 🔵, the rest from the source.
+      const from = FROM_BLUE_ROLES.includes(target.role)
+        ? rec.created.find((c) => c.role === "blue")?.campaignId
+        : sourceCampaignId;
 
       try {
         const already = existingByName.get(normalizeName(target.name));
@@ -654,18 +668,60 @@ async function runJob(id: string) {
       await persist(id);
     }
 
+    // Sign-off swap on the two Signature campaigns.
+    for (const target of rec.created) {
+      if (!target.signature || !target.campaignId || target.state === "error") continue;
+      check();
+      target.signature.state = "running";
+      await persist(id);
+      try {
+        const res = await applySignatureToCampaign({
+          apiKey,
+          workspaceId,
+          campaignId: target.campaignId,
+        });
+        target.signature.applied = res.applied;
+        target.signature.alreadyPresent = res.alreadyPresent;
+        target.signature.missing = res.missing;
+        target.signature.state = "done";
+        if (res.missing.length > 0) {
+          pushError(
+            rec,
+            `Step 1 variation(s) ${res.missing.join(", ")} of "${target.name}" carry neither {{sender_first_name}} nor {{sender_signature}}, so nothing was swapped on them. They will send exactly as the source does.`
+          );
+        }
+        if (!res.verified) {
+          pushError(
+            rec,
+            `The sign-off was swapped on "${target.name}" but the re-read didn't confirm it. Check step 1 in Plusvibe before launching.`
+          );
+        }
+      } catch (err) {
+        if (err instanceof AbortedError || m.aborted) throw err;
+        target.signature.state = "error";
+        target.signature.error = msg(err);
+        pushError(rec, `Sign-off swap failed for "${target.name}": ${msg(err)}`);
+      }
+      rec.updatedAt = Date.now();
+      await persist(id);
+    }
+
     const setupFailed = rec.created.some(
-      (c) => c.state === "error" || c.optOut?.state === "error"
+      (c) =>
+        c.state === "error" ||
+        c.optOut?.state === "error" ||
+        c.signature?.state === "error"
     );
     rec.phaseStates.duplicating = setupFailed ? "error" : "done";
     await persist(id);
 
-    // Moving leads into a campaign that is missing or lacks its opt-out line
-    // would send the wrong email — and the move is the irreversible half.
+    // Moving leads into a campaign that is missing, lacks its opt-out line or
+    // still signs off with the wrong variable would send the wrong email — and
+    // the move is the irreversible half.
     if (setupFailed) {
       pushError(
         rec,
-        "Stopped before moving any leads: a campaign is missing or lacks its opt-out copy. Fix it in Plusvibe, then run again — the copies already made are reused, the opt-out step is idempotent, and no leads have moved."
+        "Stopped before moving any leads: a campaign is missing, lacks its opt-out copy or still has the wrong sign-off. Fix it in Plusvibe, then run again — the copies already made are reused, both copy steps are idempotent, and no leads have moved."
       );
       rec.status = "error";
       return;
@@ -679,7 +735,11 @@ async function runJob(id: string) {
     rec.moving.staysInSource = plan.counts.source;
     for (const t of rec.moving.targets) t.planned = plan.counts[t.role];
     rec.moving.plannedTotal =
-      plan.counts.blue + plan.counts.blueOptOut + plan.counts.optOut;
+      plan.counts.blue +
+      plan.counts.blueOptOut +
+      plan.counts.optOut +
+      plan.counts.signature +
+      plan.counts.blueSignature;
     await persist(id);
 
     let sinceFlush = 0;

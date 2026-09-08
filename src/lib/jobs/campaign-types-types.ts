@@ -1,14 +1,16 @@
 // Shared types for Create All Campaign Types jobs (server + client).
 //
-// The tool takes ONE campaign and produces four:
+// The tool takes ONE campaign and produces six:
 //
-//   Tree Removal (August)              source, untouched copy-wise
-//   🔵 Tree Removal (August)           Microsoft leads
-//   Tree Removal - Opt Out (August)    opt-out line on step 1
-//   🔵 Tree Removal - Opt Out (August) both
+//   Tree Removal (August)                source, untouched copy-wise
+//   🔵 Tree Removal (August)             Microsoft leads
+//   Tree Removal - Opt Out (August)      opt-out line on step 1
+//   🔵 Tree Removal - Opt Out (August)   both
+//   Tree Removal - Signature (August)    step 1 signs off with the signature
+//   🔵 Tree Removal - Signature (August) both
 //
-// Four phases: sort the leads, duplicate the campaigns (and add the opt-out
-// copy), move the leads, then launch everything.
+// Four phases: sort the leads, duplicate the campaigns (adding the opt-out copy
+// and swapping the sign-off), move the leads, then launch everything.
 
 export const MAX_STORED_ERRORS = 50;
 
@@ -46,11 +48,38 @@ export const PHASE_LABELS: Record<CampaignTypesPhase, string> = {
 
 export type PhaseState = "pending" | "running" | "done" | "skipped" | "error";
 
-/** The four campaigns, by role. */
-export type CampaignRole = "source" | "blue" | "optOut" | "blueOptOut";
+/** The six campaigns, by role. */
+export type CampaignRole =
+  | "source"
+  | "blue"
+  | "optOut"
+  | "blueOptOut"
+  | "signature"
+  | "blueSignature";
 
-/** The three roles this tool creates. */
+/** The five roles this tool creates. */
 export type CreatedRole = Exclude<CampaignRole, "source">;
+
+/**
+ * Creation order. "blue" leads because the two 🔵 copies duplicate from it
+ * rather than from the source, so it has to exist first.
+ */
+export const CREATED_ROLES: CreatedRole[] = [
+  "blue",
+  "optOut",
+  "blueOptOut",
+  "signature",
+  "blueSignature",
+];
+
+/** Roles whose step 1 gets the opt-out spintax appended. */
+export const OPT_OUT_ROLES: CreatedRole[] = ["optOut", "blueOptOut"];
+
+/** Roles whose step 1 signs off with {{sender_signature}}. */
+export const SIGNATURE_ROLES: CreatedRole[] = ["signature", "blueSignature"];
+
+/** The 🔵 copies, duplicated from the blue campaign rather than the source. */
+export const FROM_BLUE_ROLES: CreatedRole[] = ["blueOptOut", "blueSignature"];
 
 export interface CreatedCampaign {
   role: CreatedRole;
@@ -72,6 +101,17 @@ export interface CreatedCampaign {
     applied: string[];
     /** Labels that already had it. */
     alreadyPresent: string[];
+    error?: string;
+  };
+  /** Sign-off swap, for the two Signature roles only. */
+  signature?: {
+    state: PhaseState;
+    /** Variation labels swapped to {{sender_signature}} on this run. */
+    applied: string[];
+    /** Labels already signing off with it. */
+    alreadyPresent: string[];
+    /** Labels carrying neither variable, so nothing was swapped. */
+    missing: string[];
     error?: string;
   };
 }
@@ -149,7 +189,13 @@ export interface CampaignTypesStartPayload {
   sourceCampaignId: string;
   sourceCampaignName: string;
   /** Derived client-side and shown before starting, so sent explicitly. */
-  names: { blue: string; optOut: string; blueOptOut: string };
-  /** Launch all four at the end. Off leaves the copies as drafts. */
+  names: {
+    blue: string;
+    optOut: string;
+    blueOptOut: string;
+    signature: string;
+    blueSignature: string;
+  };
+  /** Launch all six at the end. Off leaves the copies as drafts. */
   activate?: boolean;
 }
