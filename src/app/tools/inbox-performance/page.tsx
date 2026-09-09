@@ -12,7 +12,8 @@ export default function InboxPerformancePage() {
   return (
     <div className="min-h-screen">
       <Header back={{ href: "/", label: "All tools" }} />
-      <main className="mx-auto max-w-6xl px-4 pb-24 sm:px-6">
+      {/* Wider than the other tools: the global view carries a workspace column. */}
+      <main className="mx-auto max-w-7xl px-4 pb-24 sm:px-6">
         <div className="py-8">
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
             Inbox Performance Monitoring

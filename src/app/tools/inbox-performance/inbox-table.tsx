@@ -15,9 +15,12 @@ import { PROVIDER_BADGE, providerShort } from "../domain-performance/providers";
 
 type Heat = { text: string; bg: string };
 
+/** Numeric cells: tight padding, never wrapped, so ten columns fit the card. */
+const NUM = "whitespace-nowrap px-2.5 py-3 text-right tabular-nums";
+
 function HeatCell({ value, heat }: { value: number; heat: Heat }) {
   return (
-    <td className="px-4 py-3 text-right tabular-nums">
+    <td className={NUM}>
       <span
         className="inline-block rounded-md px-2 py-0.5 tabular-nums"
         style={{ color: heat.text, backgroundColor: heat.bg }}
@@ -52,7 +55,7 @@ const COLUMNS: Column[] = [
   { key: "contacted", label: "Contacted", align: "right" },
   { key: "replies", label: "Replies", align: "right" },
   { key: "reply_rate", label: "True reply %", align: "right" },
-  { key: "reply_rate_ooo", label: "Reply % (OOO)", align: "right" },
+  { key: "reply_rate_ooo", label: "Reply % OOO", align: "right" },
   { key: "pos_reply_rate", label: "Pos %", align: "right" },
   { key: "bounce_rate", label: "Bounce %", align: "right" },
 ];
@@ -101,7 +104,7 @@ export function InboxTable({ rows, sort, onSort, selected, onSelect, showWorkspa
   return (
     <div className="pv-card overflow-hidden">
       <div className="pv-scroll overflow-x-auto">
-        <table className="w-full min-w-[960px] text-sm">
+        <table className="w-full min-w-[880px] text-sm">
           <thead>
             <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
               {columns.map((col) => {
@@ -109,7 +112,9 @@ export function InboxTable({ rows, sort, onSort, selected, onSelect, showWorkspa
                 return (
                   <th
                     key={col.key}
-                    className={`px-4 py-3 font-medium ${col.align === "right" ? "text-right" : "text-left"}`}
+                    className={`whitespace-nowrap py-3 font-medium ${
+                      col.align === "right" ? "px-2.5 text-right" : "px-3 text-left"
+                    }`}
                   >
                     <button
                       type="button"
@@ -140,15 +145,15 @@ export function InboxTable({ rows, sort, onSort, selected, onSelect, showWorkspa
           {totals.count > 0 && (
             <tfoot>
               <tr className="border-t border-border bg-muted/40 font-medium">
-                <td className="px-4 py-3" colSpan={showWorkspace ? 3 : 2}>
+                <td className="px-3 py-3" colSpan={showWorkspace ? 3 : 2}>
                   Total · {formatNumber(totals.count)} inbox{totals.count === 1 ? "" : "es"}
                 </td>
-                <td className="px-4 py-3 text-right tabular-nums">{formatNumber(totals.sent)}</td>
-                <td className="px-4 py-3 text-right tabular-nums">{formatNumber(totals.contacted)}</td>
-                <td className="px-4 py-3 text-right tabular-nums">{formatNumber(totals.replies)}</td>
+                <td className={NUM}>{formatNumber(totals.sent)}</td>
+                <td className={NUM}>{formatNumber(totals.contacted)}</td>
+                <td className={NUM}>{formatNumber(totals.replies)}</td>
                 <HeatCell value={totals.replyRate} heat={replyRateHeat(totals.replyRate)} />
                 <HeatCell value={totals.replyRateOoo} heat={replyRateOooHeat(totals.replyRateOoo)} />
-                <td className="px-4 py-3 text-right tabular-nums">{formatPercent(totals.posRate)}</td>
+                <td className={NUM}>{formatPercent(totals.posRate)}</td>
                 <HeatCell value={totals.bounceRate} heat={bounceRateHeat(totals.bounceRate)} />
               </tr>
             </tfoot>
@@ -180,10 +185,11 @@ function InboxTableRow({
         clickable ? "cursor-pointer hover:bg-muted/50" : ""
       } ${selected ? "bg-accent/5" : ""}`}
     >
-      <td className="px-4 py-3">
+      <td className="px-3 py-3">
         <div className="flex items-center gap-2">
-          {selected && <span className="h-4 w-0.5 rounded-full bg-accent" />}
-          <span className="font-medium">{row.email}</span>
+          {selected && <span className="h-4 w-0.5 shrink-0 rounded-full bg-accent" />}
+          {/* Long addresses wrap here rather than pushing the numbers off the card. */}
+          <span className="break-all font-medium">{row.email}</span>
           {row.accountStatus && row.accountStatus.toUpperCase() !== "ACTIVE" && (
             <span className="pv-chip py-0.5 text-[10px]" title="Account status in Plusvibe">
               {row.accountStatus.toLowerCase()}
@@ -202,9 +208,9 @@ function InboxTableRow({
         </div>
       </td>
       {showWorkspace && (
-        <td className="px-4 py-3 text-muted-foreground">{row.workspaceName}</td>
+        <td className="max-w-[160px] px-3 py-3 text-muted-foreground">{row.workspaceName}</td>
       )}
-      <td className="px-4 py-3">
+      <td className="px-3 py-3">
         <span
           className={`inline-block whitespace-nowrap rounded-md px-2 py-0.5 text-xs font-medium ${
             PROVIDER_BADGE[row.provider] ?? PROVIDER_BADGE.REGULAR_ACCOUNT
@@ -215,16 +221,16 @@ function InboxTableRow({
       </td>
       {r ? (
         <>
-          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(r.sent)}</td>
-          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(r.contacted)}</td>
-          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(r.replies)}</td>
+          <td className={NUM}>{formatNumber(r.sent)}</td>
+          <td className={NUM}>{formatNumber(r.contacted)}</td>
+          <td className={NUM}>{formatNumber(r.replies)}</td>
           <HeatCell value={r.replyRate} heat={replyRateHeat(r.replyRate)} />
           <HeatCell value={r.replyRateOoo} heat={replyRateOooHeat(r.replyRateOoo)} />
-          <td className="px-4 py-3 text-right tabular-nums">{formatPercent(r.posRate)}</td>
+          <td className={NUM}>{formatPercent(r.posRate)}</td>
           <HeatCell value={r.bounceRate} heat={bounceRateHeat(r.bounceRate)} />
         </>
       ) : (
-        <td colSpan={7} className="px-4 py-3 text-right text-xs text-muted-foreground">
+        <td colSpan={7} className="px-3 py-3 text-right text-xs text-muted-foreground">
           {row.status === "error" ? row.error || "Failed to load" : row.status === "loading" ? "Loading…" : "Not loaded"}
         </td>
       )}
