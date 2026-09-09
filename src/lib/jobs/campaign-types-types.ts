@@ -135,6 +135,8 @@ export interface MoveTarget {
   name: string;
   planned: number;
   moved: number;
+  /** Planned for this campaign but left in the source: refused, or unconfirmed. */
+  unmoved?: number;
   state: PhaseState;
 }
 
@@ -144,6 +146,12 @@ export interface MovingProgress {
   staysInSource: number;
   processed: number;
   plannedTotal: number;
+  /** Leads that stayed in the source when they should have moved. */
+  unmoved?: number;
+  /** Why, by reason, e.g. { duplicate: 2, "invalid-email": 1 }. */
+  unmovedReasons?: Record<string, number>;
+  /** Plusvibe's lead quota was reached mid-split; the rest was skipped. */
+  quotaHit?: boolean;
 }
 
 export interface ActivationTarget {

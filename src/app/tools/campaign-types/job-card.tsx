@@ -139,7 +139,9 @@ export function JobCard({
             <Metric
               key={t.role}
               label={shortName(t.name)}
-              sub={`${formatNumber(t.moved)} of ${formatNumber(t.planned)} moved`}
+              sub={`${formatNumber(t.moved)} of ${formatNumber(t.planned)} moved${
+                t.unmoved ? ` · ${formatNumber(t.unmoved)} stayed in the source` : ""
+              }`}
               value={t.planned}
               tone={t.state === "error" ? "danger" : undefined}
             />

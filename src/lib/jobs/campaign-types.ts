@@ -12,6 +12,7 @@ import {
 } from "@/lib/plusvibe-leads";
 import { listCampaigns } from "@/lib/plusvibe-campaigns";
 import { moveLeadChunk, MOVE_CHUNK } from "@/lib/move-leads-core";
+import { UNMOVED_LABELS, type UnmovedLead, type UnmovedReason } from "@/lib/move-leads-plan";
 import { resolveLeadEsps } from "@/lib/campaign-types/resolve-esp";
 import { planSplit } from "@/lib/campaign-types/split";
 import { applyOptOutToCampaign } from "@/lib/campaign-types/apply-opt-out";
@@ -491,6 +492,8 @@ export async function createJob(
 
 class AbortedError extends Error {}
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 function msg(err: unknown): string {
   return err instanceof Error ? err.message : "Unknown error";
 }
@@ -742,8 +745,22 @@ async function runJob(id: string) {
       plan.counts.blueSignature;
     await persist(id);
 
+    // What did not move stays in the source, which is launched too, so a
+    // refused lead is recorded and the split carries on — it is never a
+    // reason to stop, and never a reason not to activate.
     let sinceFlush = 0;
-    let moveFailed = false;
+    let moveProblems = false;
+    let quotaHit = false;
+    const reasons: Record<string, number> = {};
+    const noteUnmoved = (target: MoveTarget, list: UnmovedLead[]) => {
+      if (list.length === 0) return;
+      for (const u of list) reasons[u.reason] = (reasons[u.reason] ?? 0) + 1;
+      target.unmoved = (target.unmoved ?? 0) + list.length;
+      rec.moving.unmoved = (rec.moving.unmoved ?? 0) + list.length;
+      rec.moving.unmovedReasons = { ...reasons };
+      moveProblems = true;
+    };
+
     for (const move of plan.moves) {
       check();
       const target = rec.moving.targets.find((t) => t.role === move.destination);
@@ -765,27 +782,66 @@ async function runJob(id: string) {
       for (let i = 0; i < payloads.length; i += MOVE_CHUNK) {
         check();
         const chunk = payloads.slice(i, i + MOVE_CHUNK);
-        const outcome = await moveLeadChunk({
-          apiKey,
-          workspaceId,
-          sourceCampaignId,
-          destinationCampaignId,
-          chunk,
-          isAborted: () => m.aborted,
-        });
+        const range = `${i + 1}–${i + chunk.length}`;
 
-        if (!outcome.ok) {
-          pushError(
-            rec,
-            `Moving leads ${i + 1}–${i + chunk.length} to "${target.name}" failed at the ${outcome.stage} step: ${outcome.reason}`
-          );
-          target.state = "error";
-          rec.status = "error";
-          moveFailed = true;
-          break;
+        if (quotaHit) {
+          // The plan is full; every further add would be turned away.
+          noteUnmoved(target, chunk.map((c) => ({ email: c.email, reason: "overflow" as UnmovedReason })));
+          rec.moving.processed += chunk.length;
+          continue;
         }
 
-        target.moved += chunk.length;
+        const attempt = () =>
+          moveLeadChunk({
+            apiKey,
+            workspaceId,
+            sourceCampaignId,
+            destinationCampaignId,
+            chunk,
+            isAborted: () => m.aborted,
+          });
+        let outcome = await attempt();
+        // A failed add changed nothing, so it gets one more go after a pause:
+        // the usual cause is a passing 5xx or a rate-limit hiccup.
+        if (!outcome.ok && outcome.stage === "add" && outcome.reason !== "aborted") {
+          await sleep(2000);
+          check();
+          outcome = await attempt();
+        }
+
+        if (!outcome.ok) {
+          if (outcome.reason === "aborted") throw new AbortedError();
+          if (outcome.stage === "delete") {
+            // In the destination, and still in the source. Counted as moved —
+            // the destination has them — and flagged for cleaning up.
+            pushError(rec, `Moving leads ${range} to "${target.name}": ${outcome.reason}`);
+            target.moved += chunk.length;
+            moveProblems = true;
+          } else {
+            pushError(
+              rec,
+              `Moving leads ${range} to "${target.name}" failed twice at the add step: ${outcome.reason}. Those leads stayed in the source.`
+            );
+            noteUnmoved(target, [
+              ...outcome.unmoved,
+              ...chunk
+                .filter((c) => !outcome.unmoved.some((u) => u.email === c.email))
+                .map((c) => ({ email: c.email, reason: "add-failed" as UnmovedReason })),
+            ]);
+          }
+        } else {
+          target.moved += outcome.deleted;
+          noteUnmoved(target, outcome.unmoved);
+          if (outcome.quotaHit) {
+            quotaHit = true;
+            rec.moving.quotaHit = true;
+            pushError(
+              rec,
+              `Plusvibe's lead quota was reached while moving to "${target.name}". The leads it turned away stayed in the source, and the rest of the split was skipped; they can be moved once there is room.`
+            );
+          }
+        }
+
         rec.moving.processed += chunk.length;
         rec.updatedAt = Date.now();
         if (++sinceFlush >= PERSIST_EVERY) {
@@ -794,23 +850,21 @@ async function runJob(id: string) {
         }
       }
 
-      if (moveFailed) break;
-      target.state = "done";
+      target.state = (target.unmoved ?? 0) > 0 ? "error" : "done";
       await persist(id);
     }
 
-    rec.phaseStates.moving = moveFailed ? "error" : "done";
-    await persist(id);
-
-    // A half-moved split must not be launched: the campaigns would start
-    // sending with the wrong leads in them.
-    if (moveFailed) {
+    if ((rec.moving.unmoved ?? 0) > 0) {
+      const parts = Object.entries(reasons)
+        .sort((a, b) => b[1] - a[1])
+        .map(([reason, n]) => `${n} ${UNMOVED_LABELS[reason as UnmovedReason] ?? reason}`);
       pushError(
         rec,
-        "Stopped before activating: the lead split did not finish, so launching now would send from campaigns holding the wrong leads."
+        `${rec.moving.unmoved} lead${rec.moving.unmoved === 1 ? "" : "s"} stayed in the source campaign: ${parts.join(", ")}. They were not deleted from anywhere; the source is launched with them in it.`
       );
-      return;
     }
+    rec.phaseStates.moving = moveProblems ? "error" : "done";
+    await persist(id);
 
     // --- Phase 4: activating campaigns -----------------------------------
     if (!activate) {
