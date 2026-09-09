@@ -4,6 +4,7 @@ import { useState } from "react";
 import { formatNumber } from "@/lib/format";
 import { EmptyState, Spinner, RemoveJobButton } from "@/components/ui";
 import { ZapIcon } from "@/components/icons";
+import { PROVIDER_LABELS } from "@/lib/plusvibe-providers";
 import type {
   ChangeLimitsJob,
   ChangeLimitsStatus,
@@ -112,17 +113,30 @@ function JobCard({
           value={p.inboxesFailed}
           tone={p.inboxesFailed > 0 ? "danger" : "muted"}
         />
-        <Metric label="Settings applied" value={job.settings.length} tone="default" />
+        <Metric
+          label="Settings applied"
+          value={job.settings.reduce((n, b) => n + b.rows.length, 0)}
+          tone="default"
+        />
       </div>
 
       {job.settings.length > 0 && (
-        <ul className="mt-3 flex flex-wrap gap-2">
-          {job.settings.map((s) => (
-            <li key={s.key} className="pv-chip" title={s.apiField}>
-              {s.label} <span className="ml-1 font-medium">{s.value}</span>
-            </li>
+        <div className="mt-3 space-y-2">
+          {job.settings.map((block) => (
+            <div key={block.scope} className="flex flex-wrap items-center gap-2">
+              {job.settings.length > 1 && (
+                <span className="text-xs font-medium text-muted-foreground">
+                  {block.label}
+                </span>
+              )}
+              {block.rows.map((s) => (
+                <span key={s.key} className="pv-chip" title={s.apiField}>
+                  {s.label} <span className="ml-1 font-medium">{s.value}</span>
+                </span>
+              ))}
+            </div>
           ))}
-        </ul>
+        </div>
       )}
 
       {job.status === "interrupted" && (
@@ -153,6 +167,7 @@ function JobCard({
               <thead>
                 <tr className="border-b border-border text-left text-muted-foreground">
                   <th className="px-3 py-2 font-medium">Workspace</th>
+                  <th className="px-3 py-2 font-medium">Senders</th>
                   <th className="px-3 py-2 text-right font-medium">Inboxes</th>
                   <th className="px-3 py-2 text-right font-medium">Updated</th>
                   <th className="px-3 py-2 text-right font-medium">Failed</th>
@@ -160,8 +175,14 @@ function JobCard({
               </thead>
               <tbody>
                 {job.groups.map((g) => (
-                  <tr key={g.workspaceId} className="border-b border-border/70 last:border-0">
+                  <tr
+                    key={`${g.workspaceId}:${g.provider}`}
+                    className="border-b border-border/70 last:border-0"
+                  >
                     <td className="px-3 py-2">{g.workspaceName}</td>
+                    <td className="px-3 py-2 text-muted-foreground">
+                      {PROVIDER_LABELS[g.provider] ?? g.provider}
+                    </td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatNumber(g.total)}</td>
                     <td className="px-3 py-2 text-right tabular-nums text-success">
                       {formatNumber(g.updated)}

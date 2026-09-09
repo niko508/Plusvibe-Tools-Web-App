@@ -206,5 +206,103 @@ eq(
   ]
 );
 
+// --- Per-provider settings --------------------------------------------------
+const {
+  EMPTY_BUNDLE,
+  settingsFor,
+  parseBundle,
+  bundleBlocks,
+  describeBundle,
+  migrateBundle,
+} = await importTs("@/lib/change-limits/settings");
+
+const shared = {
+  ...EMPTY_BUNDLE,
+  sameForAll: true,
+  all: { ...EMPTY_SETTINGS, campaignEmails: "40" },
+};
+eq(
+  "one shared set governs every provider",
+  ["google", "microsoft", "other"].map((p) => settingsFor(shared, p).campaignEmails),
+  ["40", "40", "40"]
+);
+eq("…and reads as one block", bundleBlocks(shared).map((b) => b.scope), ["all"]);
+eq(
+  "…described without naming a provider",
+  describeBundle(bundleBlocks(shared)),
+  "Campaign emails 40 per day"
+);
+
+const split = {
+  sameForAll: false,
+  all: { ...EMPTY_SETTINGS, campaignEmails: "40" },
+  google: { ...EMPTY_SETTINGS, campaignEmails: "60", intervalMinutes: "5" },
+  microsoft: { ...EMPTY_SETTINGS, campaignEmails: "25" },
+  other: { ...EMPTY_SETTINGS },
+};
+const parsedSplit = parseBundle(split);
+eq(
+  "split apart, each provider gets its own daily limit",
+  [parsedSplit.byProvider.google.body.daily_limit, parsedSplit.byProvider.microsoft.body.daily_limit],
+  [60, 25]
+);
+eq(
+  "…a field set for one provider is not sent for the other",
+  parsedSplit.byProvider.microsoft.body.interval_limit_in_min,
+  undefined
+);
+eq(
+  "…a provider left blank has nothing to apply",
+  [parsedSplit.byProvider.other.ok, parsedSplit.byProvider.other.body],
+  [false, {}]
+);
+eq("…and only the two set providers count", parsedSplit.scopesWithSettings, ["google", "microsoft"]);
+check("…the bundle is runnable", parsedSplit.anyOk);
+eq(
+  "…the shared set is ignored once split",
+  parsedSplit.byProvider.other.count,
+  0
+);
+eq(
+  "…each block is labelled by sender",
+  bundleBlocks(split).map((b) => b.label),
+  ["Google senders", "Microsoft senders"]
+);
+eq(
+  "…and the label names both",
+  describeBundle(bundleBlocks(split)),
+  "Google senders: Campaign emails 60 per day · Email Interval 5 minutes — Microsoft senders: Campaign emails 25 per day"
+);
+
+const allBlank = parseBundle(EMPTY_BUNDLE);
+check("nothing set anywhere is not runnable", !allBlank.anyOk);
+eq("…and offers no blocks", bundleBlocks(EMPTY_BUNDLE), []);
+check(
+  "a bad value in one provider is reported",
+  parseBundle({ ...split, google: { ...EMPTY_SETTINGS, warmupEmails: "0" } }).anyProblem
+);
+
+// Settings saved before providers had their own values.
+const migrated = migrateBundle({
+  campaignEmails: "40",
+  warmupEmails: "18",
+  randomize: "",
+  warmupReplyRate: "",
+  intervalMinutes: "",
+});
+eq(
+  "an old flat setting is carried over as the shared set",
+  [migrated.sameForAll, migrated.all.campaignEmails, migrated.all.warmupEmails],
+  [true, "40", "18"]
+);
+eq(
+  "a bundle is read back as it was saved",
+  migrateBundle(split).google.campaignEmails,
+  "60"
+);
+eq("…including that it was split", migrateBundle(split).sameForAll, false);
+eq("nothing in storage gives the empty bundle", migrateBundle(null), EMPTY_BUNDLE);
+eq("…as does junk", migrateBundle("nonsense"), EMPTY_BUNDLE);
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

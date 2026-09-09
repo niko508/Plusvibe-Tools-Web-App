@@ -6,7 +6,12 @@ import path from "path";
 import { onShutdownFlush } from "@/lib/jobs/shutdown";
 import { acquireSlot } from "@/lib/jobs/rate-limit";
 import { plusvibePut } from "@/lib/plusvibe-server";
-import { describeSettings, parseSettings } from "@/lib/change-limits/settings";
+import {
+  bundleBlocks,
+  describeBundle,
+  parseBundle,
+} from "@/lib/change-limits/settings";
+import type { ProviderBucket } from "@/lib/plusvibe-providers";
 import type {
   ChangeLimitsGroup,
   ChangeLimitsJob,
@@ -31,8 +36,8 @@ interface JobMeta {
   fingerprint: string;
   apiKey?: string;
   aborted: boolean;
-  /** The update body and the inboxes live only in memory while the job runs. */
-  body?: Record<string, string | number>;
+  /** The update bodies and the inboxes live only in memory while the job runs. */
+  bodies?: Record<ProviderBucket, Record<string, string | number>>;
   targets?: ChangeLimitsStartPayload["targets"];
 }
 
@@ -107,8 +112,12 @@ async function loadOnce() {
         // The key lived only in memory, so a job caught mid-run can't go on.
         if (live(parsed)) parsed.status = "interrupted";
         parsed.groups = Array.isArray(parsed.groups) ? parsed.groups : [];
-        parsed.settings = Array.isArray(parsed.settings) ? parsed.settings : [];
         parsed.errors = Array.isArray(parsed.errors) ? parsed.errors : [];
+        parsed.settings = normalizeSettings(parsed.settings);
+        // Runs from before per-provider settings had no provider on a group.
+        for (const g of parsed.groups) {
+          if (!g.provider) g.provider = "other";
+        }
         records.set(parsed.id, parsed);
         meta.set(parsed.id, { fingerprint, aborted: false });
       } catch {
@@ -118,6 +127,27 @@ async function loadOnce() {
   } catch {
     // nothing to load
   }
+}
+
+/**
+ * Runs recorded before per-provider settings stored a flat list of rows.
+ * Those are wrapped into a single "all senders" block so an old job still
+ * reads correctly instead of rendering as nothing.
+ */
+function normalizeSettings(raw: unknown): ChangeLimitsJob["settings"] {
+  if (!Array.isArray(raw)) return [];
+  if (raw.length === 0) return [];
+  const first = raw[0] as Record<string, unknown>;
+  if (first && typeof first === "object" && Array.isArray(first.rows)) {
+    return raw as ChangeLimitsJob["settings"];
+  }
+  return [
+    {
+      scope: "all",
+      label: "All senders",
+      rows: raw as ChangeLimitsJob["settings"][number]["rows"],
+    },
+  ];
 }
 
 // --- Creation --------------------------------------------------------------
@@ -149,27 +179,39 @@ export async function createJob(
 
   // Re-checked here rather than trusted from the browser: this is the last
   // point before real inboxes change.
-  const parsed = parseSettings(payload.settings);
-  const firstProblem = Object.values(parsed.problems)[0];
-  if (firstProblem) throw new Error(firstProblem);
-  if (!parsed.ok) throw new Error("Set at least one value under Increase settings.");
+  const parsed = parseBundle(payload.settings);
+  for (const b of ["google", "microsoft", "other"] as ProviderBucket[]) {
+    const firstProblem = Object.values(parsed.byProvider[b].problems)[0];
+    if (firstProblem) throw new Error(firstProblem);
+  }
+  if (!parsed.anyOk) throw new Error("Set at least one value under Increase settings.");
 
-  const targets = payload.targets.filter((t) => t.workspaceId && t.inboxes.length > 0);
-  if (targets.length === 0) throw new Error("No inboxes to update.");
+  // A group whose provider has nothing set would send an empty update, so it
+  // never reaches the run at all.
+  const targets = payload.targets.filter(
+    (t) => t.workspaceId && t.inboxes.length > 0 && parsed.byProvider[t.provider]?.ok
+  );
+  if (targets.length === 0) {
+    throw new Error(
+      "No inboxes to update: nothing is set for the providers these inboxes send through."
+    );
+  }
 
   const inboxesTotal = targets.reduce((n, t) => n + t.inboxes.length, 0);
+  const blocks = bundleBlocks(payload.settings);
   const id = randomUUID();
   const now = Date.now();
   const record: ChangeLimitsJob = {
     id,
-    label: `${inboxesTotal} inbox${inboxesTotal === 1 ? "" : "es"} · ${describeSettings(parsed.summary)}`,
+    label: `${inboxesTotal} inbox${inboxesTotal === 1 ? "" : "es"} · ${describeBundle(blocks)}`,
     status: "running",
     createdAt: now,
     updatedAt: now,
-    settings: parsed.summary,
+    settings: blocks,
     groups: targets.map((t) => ({
       workspaceId: t.workspaceId,
       workspaceName: t.workspaceName,
+      provider: t.provider,
       total: t.inboxes.length,
       updated: 0,
       failed: 0,
@@ -186,7 +228,17 @@ export async function createJob(
   };
 
   records.set(id, record);
-  meta.set(id, { fingerprint: fp, apiKey, aborted: false, body: parsed.body, targets });
+  meta.set(id, {
+    fingerprint: fp,
+    apiKey,
+    aborted: false,
+    bodies: {
+      google: parsed.byProvider.google.body,
+      microsoft: parsed.byProvider.microsoft.body,
+      other: parsed.byProvider.other.body,
+    },
+    targets,
+  });
   await persist(id);
   void runJob(id);
   return id;
@@ -208,9 +260,9 @@ function pushError(rec: ChangeLimitsJob, text: string) {
 async function runJob(id: string) {
   const rec = records.get(id);
   const m = meta.get(id);
-  if (!rec || !m || !m.apiKey || !m.body || !m.targets) return;
+  if (!rec || !m || !m.apiKey || !m.bodies || !m.targets) return;
   const apiKey = m.apiKey;
-  const body = m.body;
+  const bodies = m.bodies;
   const targets = m.targets;
   const check = () => {
     if (m.aborted) throw new AbortedError();
@@ -226,6 +278,8 @@ async function runJob(id: string) {
       const group = rec.groups[i];
       group.state = "running";
       await touch();
+      // Each group is one provider, so it carries that provider's values.
+      const body = bodies[target.provider];
 
       for (let at = 0; at < target.inboxes.length; at += UPDATE_CHUNK) {
         check();
@@ -269,7 +323,7 @@ async function runJob(id: string) {
     rec.updatedAt = rec.finishedAt;
     // Nothing sensitive outlives the run.
     m.apiKey = undefined;
-    m.body = undefined;
+    m.bodies = undefined;
     m.targets = undefined;
     await persist(id);
   }

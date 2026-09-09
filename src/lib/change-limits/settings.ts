@@ -8,6 +8,8 @@
 //
 // Pure module — no API, no clock — so all of it is unit-tested.
 
+import type { ProviderBucket } from "@/lib/plusvibe-providers";
+
 /** The form's raw strings, exactly as typed. */
 export interface SettingsInput {
   campaignEmails: string;
@@ -211,4 +213,136 @@ function row(key: SettingsKey, value: string): SettingsRow {
 export function describeSettings(rows: SettingsRow[]): string {
   if (rows.length === 0) return "no settings";
   return rows.map((r) => `${r.label} ${r.value}`).join(" · ");
+}
+
+// ---------------------------------------------------------------------------
+// Per-provider settings
+// ---------------------------------------------------------------------------
+//
+// Google and Microsoft senders rarely want the same ceilings, so each gets its
+// own set of the five values. `sameForAll` keeps the simple case simple: one
+// set applied to everything, which is what the tool did before.
+
+/** Providers that can carry their own settings — the buckets, plus "all". */
+export type SettingsScope = ProviderBucket | "all";
+
+export const SCOPE_LABELS: Record<SettingsScope, string> = {
+  all: "All senders",
+  google: "Google senders",
+  microsoft: "Microsoft senders",
+  other: "Other senders",
+};
+
+export interface SettingsBundle {
+  /** One set of values for every provider. */
+  sameForAll: boolean;
+  /** Used when sameForAll is on. */
+  all: SettingsInput;
+  google: SettingsInput;
+  microsoft: SettingsInput;
+  other: SettingsInput;
+}
+
+export const EMPTY_BUNDLE: SettingsBundle = {
+  sameForAll: true,
+  all: { ...EMPTY_SETTINGS },
+  google: { ...EMPTY_SETTINGS },
+  microsoft: { ...EMPTY_SETTINGS },
+  other: { ...EMPTY_SETTINGS },
+};
+
+/** Which set of values a given sender is governed by. */
+export function settingsFor(
+  bundle: SettingsBundle,
+  provider: ProviderBucket
+): SettingsInput {
+  return bundle.sameForAll ? bundle.all : bundle[provider];
+}
+
+export interface ParsedBundle {
+  byProvider: Record<ProviderBucket, ParsedSettings>;
+  /** True when at least one provider has something valid to apply. */
+  anyOk: boolean;
+  /** True when any field anywhere is filled in but wrong. */
+  anyProblem: boolean;
+  /** The providers that will actually change something. */
+  scopesWithSettings: ProviderBucket[];
+}
+
+export function parseBundle(bundle: SettingsBundle): ParsedBundle {
+  const byProvider = {
+    google: parseSettings(settingsFor(bundle, "google")),
+    microsoft: parseSettings(settingsFor(bundle, "microsoft")),
+    other: parseSettings(settingsFor(bundle, "other")),
+  };
+  const buckets: ProviderBucket[] = ["google", "microsoft", "other"];
+  return {
+    byProvider,
+    anyOk: buckets.some((b) => byProvider[b].ok),
+    anyProblem: buckets.some((b) => Object.keys(byProvider[b].problems).length > 0),
+    scopesWithSettings: buckets.filter((b) => byProvider[b].ok),
+  };
+}
+
+/** One block per provider that will be applied, for the preview and the job. */
+export interface SettingsBlock {
+  scope: SettingsScope;
+  label: string;
+  rows: SettingsRow[];
+}
+
+export function bundleBlocks(bundle: SettingsBundle): SettingsBlock[] {
+  if (bundle.sameForAll) {
+    const parsed = parseSettings(bundle.all);
+    return parsed.ok ? [{ scope: "all", label: SCOPE_LABELS.all, rows: parsed.summary }] : [];
+  }
+  const out: SettingsBlock[] = [];
+  for (const b of ["google", "microsoft", "other"] as ProviderBucket[]) {
+    const parsed = parseSettings(bundle[b]);
+    if (parsed.ok) out.push({ scope: b, label: SCOPE_LABELS[b], rows: parsed.summary });
+  }
+  return out;
+}
+
+/** A one-line description of a whole bundle, for a job label. */
+export function describeBundle(blocks: SettingsBlock[]): string {
+  if (blocks.length === 0) return "no settings";
+  if (blocks.length === 1 && blocks[0].scope === "all") {
+    return describeSettings(blocks[0].rows);
+  }
+  return blocks
+    .map((b) => `${b.label}: ${describeSettings(b.rows)}`)
+    .join(" — ");
+}
+
+/**
+ * Reads whatever is in storage. Before per-provider settings existed this was
+ * a single flat set of five values, so one of those is carried over as the
+ * shared set rather than being thrown away.
+ */
+export function migrateBundle(raw: unknown): SettingsBundle {
+  if (!raw || typeof raw !== "object") return { ...EMPTY_BUNDLE };
+  const obj = raw as Record<string, unknown>;
+  const readInput = (v: unknown): SettingsInput => {
+    const out = { ...EMPTY_SETTINGS };
+    if (!v || typeof v !== "object") return out;
+    const src = v as Record<string, unknown>;
+    for (const f of FIELDS) {
+      const val = src[f.key];
+      if (typeof val === "string" || typeof val === "number") out[f.key] = String(val);
+    }
+    return out;
+  };
+  // The old shape: the five keys at the top level.
+  const looksFlat = FIELDS.some((f) => f.key in obj);
+  if (looksFlat) {
+    return { ...EMPTY_BUNDLE, sameForAll: true, all: readInput(obj) };
+  }
+  return {
+    sameForAll: obj.sameForAll !== false,
+    all: readInput(obj.all),
+    google: readInput(obj.google),
+    microsoft: readInput(obj.microsoft),
+    other: readInput(obj.other),
+  };
 }

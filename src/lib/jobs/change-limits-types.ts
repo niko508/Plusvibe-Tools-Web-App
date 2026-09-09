@@ -1,7 +1,8 @@
 // Shared types for Change Limits jobs (client + API routes + job manager).
 // No server-only imports here.
 
-import type { SettingsInput, SettingsRow } from "@/lib/change-limits/settings";
+import type { SettingsBlock, SettingsBundle } from "@/lib/change-limits/settings";
+import type { ProviderBucket } from "@/lib/plusvibe-providers";
 
 export type ChangeLimitsStatus =
   | "running"
@@ -12,10 +13,12 @@ export type ChangeLimitsStatus =
 
 export type GroupState = "pending" | "running" | "done" | "partial" | "error";
 
-/** One workspace's share of the run. */
+/** One workspace's share of the run, for one provider. */
 export interface ChangeLimitsGroup {
   workspaceId: string;
   workspaceName: string;
+  /** Which senders these are, and so which settings they were given. */
+  provider: ProviderBucket;
   total: number;
   updated: number;
   failed: number;
@@ -38,8 +41,8 @@ export interface ChangeLimitsJob {
   createdAt: number;
   updatedAt: number;
   finishedAt?: number;
-  /** What was applied, resolved server-side from the settings sent. */
-  settings: SettingsRow[];
+  /** What was applied, one block per provider, resolved server-side. */
+  settings: SettingsBlock[];
   groups: ChangeLimitsGroup[];
   progress: ChangeLimitsProgress;
   errors: string[];
@@ -55,11 +58,13 @@ export interface ChangeLimitsInbox {
 export interface ChangeLimitsTarget {
   workspaceId: string;
   workspaceName: string;
+  /** Decides which of the bundle's settings these inboxes are given. */
+  provider: ProviderBucket;
   inboxes: ChangeLimitsInbox[];
 }
 
 export interface ChangeLimitsStartPayload {
-  settings: SettingsInput;
+  settings: SettingsBundle;
   targets: ChangeLimitsTarget[];
 }
 

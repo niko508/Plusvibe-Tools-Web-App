@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 import { resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { ActiveJobError, createJob } from "@/lib/jobs/change-limits";
-import { EMPTY_SETTINGS, type SettingsInput } from "@/lib/change-limits/settings";
+import {
+  EMPTY_SETTINGS,
+  type SettingsBundle,
+  type SettingsInput,
+} from "@/lib/change-limits/settings";
+import type { ProviderBucket } from "@/lib/plusvibe-providers";
 import type { ChangeLimitsTarget } from "@/lib/jobs/change-limits-types";
 
 export const dynamic = "force-dynamic";
@@ -17,19 +22,35 @@ export async function POST(request: Request) {
   try {
     const apiKey = resolveApiKey(request);
     const body = (await request.json()) as {
-      settings?: Partial<SettingsInput>;
+      settings?: Partial<SettingsBundle>;
       targets?: {
         workspaceId?: string;
         workspaceName?: string;
+        provider?: string;
         inboxes?: { id?: string; email?: string }[];
       }[];
     };
 
-    const settings: SettingsInput = { ...EMPTY_SETTINGS };
-    for (const key of Object.keys(EMPTY_SETTINGS) as (keyof SettingsInput)[]) {
-      const v = body.settings?.[key];
-      if (typeof v === "string" || typeof v === "number") settings[key] = String(v);
-    }
+    const readInput = (raw: unknown): SettingsInput => {
+      const out: SettingsInput = { ...EMPTY_SETTINGS };
+      if (!raw || typeof raw !== "object") return out;
+      const src = raw as Record<string, unknown>;
+      for (const key of Object.keys(EMPTY_SETTINGS) as (keyof SettingsInput)[]) {
+        const v = src[key];
+        if (typeof v === "string" || typeof v === "number") out[key] = String(v);
+      }
+      return out;
+    };
+    const settings: SettingsBundle = {
+      sameForAll: body.settings?.sameForAll !== false,
+      all: readInput(body.settings?.all),
+      google: readInput(body.settings?.google),
+      microsoft: readInput(body.settings?.microsoft),
+      other: readInput(body.settings?.other),
+    };
+
+    const asProvider = (v: unknown): ProviderBucket =>
+      v === "google" || v === "microsoft" ? v : "other";
 
     const targets: ChangeLimitsTarget[] = [];
     let inboxCount = 0;
@@ -44,6 +65,7 @@ export async function POST(request: Request) {
       targets.push({
         workspaceId,
         workspaceName: String(t.workspaceName ?? workspaceId),
+        provider: asProvider(t.provider),
         inboxes,
       });
     }

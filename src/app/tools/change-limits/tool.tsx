@@ -38,9 +38,12 @@ import {
 } from "@/lib/change-limits/qualify";
 import { bucketOf } from "@/lib/plusvibe-providers";
 import {
-  EMPTY_SETTINGS,
-  parseSettings,
-  type SettingsInput,
+  EMPTY_BUNDLE,
+  SCOPE_LABELS,
+  bundleBlocks,
+  migrateBundle,
+  parseBundle,
+  type SettingsBundle,
 } from "@/lib/change-limits/settings";
 import { copyToClipboard } from "@/lib/clipboard";
 import { ConnectPrompt } from "@/components/connect-prompt";
@@ -93,7 +96,7 @@ export function ChangeLimitsTool() {
   const [activePreset, setActivePreset] = useState<string | null>(DEFAULT_PRESET);
 
   const [thresholds, setThresholds] = useState<ThresholdsInput>(DEFAULT_THRESHOLDS);
-  const [settings, setSettings] = useState<SettingsInput>(EMPTY_SETTINGS);
+  const [settings, setSettings] = useState<SettingsBundle>(EMPTY_BUNDLE);
   const [prefsLoaded, setPrefsLoaded] = useState(false);
 
   const [rows, setRows] = useState<InboxRow[]>([]);
@@ -119,7 +122,8 @@ export function ChangeLimitsTool() {
       const t = window.localStorage.getItem(THRESHOLDS_KEY);
       if (t) setThresholds({ ...DEFAULT_THRESHOLDS, ...JSON.parse(t) });
       const s = window.localStorage.getItem(SETTINGS_KEY);
-      if (s) setSettings({ ...EMPTY_SETTINGS, ...JSON.parse(s) });
+      // Settings saved before providers had their own values are carried over.
+      if (s) setSettings(migrateBundle(JSON.parse(s)));
     } catch {
       // storage unavailable or corrupt — defaults stand
     }
@@ -185,7 +189,8 @@ export function ChangeLimitsTool() {
 
   // --- Derived -------------------------------------------------------------
   const parsedThresholds = useMemo(() => parseThresholds(thresholds), [thresholds]);
-  const parsedSettings = useMemo(() => parseSettings(settings), [settings]);
+  const parsedSettings = useMemo(() => parseBundle(settings), [settings]);
+  const settingsBlocks = useMemo(() => bundleBlocks(settings), [settings]);
   const rangeProblem = rangeProblemOf(start, end);
 
   const judged = useMemo(() => {
@@ -212,6 +217,24 @@ export function ChangeLimitsTool() {
     () => judged.filter((r) => r.verdict === "qualifies"),
     [judged]
   );
+  // A qualifying inbox can only be updated when its own provider has values
+  // set, so the button counts those rather than promising more than it does.
+  const applicable = useMemo(
+    () => qualifying.filter((r) => parsedSettings.byProvider[r.bucket].ok),
+    [qualifying, parsedSettings]
+  );
+  const unsettled = useMemo(() => {
+    const byProvider = new Map<string, number>();
+    for (const r of qualifying) {
+      if (parsedSettings.byProvider[r.bucket].ok) continue;
+      byProvider.set(r.bucket, (byProvider.get(r.bucket) ?? 0) + 1);
+    }
+    return Array.from(byProvider.entries()).map(([bucket, n]) => ({
+      label: SCOPE_LABELS[bucket as keyof typeof SCOPE_LABELS],
+      count: n,
+    }));
+  }, [qualifying, parsedSettings]);
+
   const visibleRows = qualifyingOnly ? qualifying : judged;
   const loadedRates = judged.filter((r) => r.rates).map((r) => r.rates!);
   const totals = sumTotals(loadedRates);
@@ -389,21 +412,25 @@ export function ChangeLimitsTool() {
 
   // --- Apply ---------------------------------------------------------------
   async function applySettings() {
-    if (qualifying.length === 0 || !parsedSettings.ok) return;
-    const byWorkspace = new Map<string, InboxRow[]>();
-    for (const r of qualifying) {
-      const list = byWorkspace.get(r.workspaceId) ?? [];
+    if (applicable.length === 0 || !parsedSettings.anyOk) return;
+    // One group per workspace AND provider, because each provider carries its
+    // own values and one bulk update sends one set of fields.
+    const groups = new Map<string, InboxRow[]>();
+    for (const r of applicable) {
+      const key = `${r.workspaceId}::${r.bucket}`;
+      const list = groups.get(key) ?? [];
       list.push(r);
-      byWorkspace.set(r.workspaceId, list);
+      groups.set(key, list);
     }
     setStarting(true);
     setError(null);
     try {
       const { jobId } = await startChangeLimits({
         settings,
-        targets: Array.from(byWorkspace.entries()).map(([workspaceId, list]) => ({
-          workspaceId,
+        targets: Array.from(groups.values()).map((list) => ({
+          workspaceId: list[0].workspaceId,
           workspaceName: list[0].workspaceName,
+          provider: list[0].bucket,
           inboxes: list.map((r) => ({ id: r.id, email: r.email })),
         })),
       });
@@ -438,9 +465,12 @@ export function ChangeLimitsTool() {
       <div role="tablist" aria-label="Sections" className="inline-flex rounded-xl border border-border p-1">
         {TABS.map((t) => {
           const active = t.key === tab;
+          // The settings badge counts the values that will actually be sent,
+          // summed across the providers that carry any.
+          const settingsCount = settingsBlocks.reduce((n, b) => n + b.rows.length, 0);
           const badge =
-            t.key === "settings" && parsedSettings.count > 0
-              ? parsedSettings.count
+            t.key === "settings" && settingsCount > 0
+              ? settingsCount
               : t.key === "runs" && jobs.length > 0
                 ? jobs.length
                 : null;
@@ -598,7 +628,7 @@ export function ChangeLimitsTool() {
               {/* Apply bar */}
               <div
                 className={`pv-card p-4 sm:p-5 ${
-                  qualifying.length > 0 && parsedSettings.ok ? "border-accent/40" : ""
+                  applicable.length > 0 ? "border-accent/40" : ""
                 }`}
               >
                 <div className="flex flex-wrap items-start justify-between gap-4">
@@ -606,15 +636,25 @@ export function ChangeLimitsTool() {
                     <h2 className="text-sm font-semibold">
                       Apply the increase settings
                     </h2>
-                    {parsedSettings.ok ? (
-                      <p className="mt-1.5 text-sm text-muted-foreground">
-                        {formatNumber(qualifying.length)} qualifying inbox
-                        {qualifying.length === 1 ? "" : "es"} will be set to{" "}
-                        {parsedSettings.summary
-                          .map((s) => `${s.label.toLowerCase()} ${s.value}`)
-                          .join(", ")}
-                        . Nothing else on them changes.
-                      </p>
+                    {parsedSettings.anyOk ? (
+                      <div className="mt-1.5 space-y-1.5 text-sm text-muted-foreground">
+                        <p>
+                          {formatNumber(applicable.length)} qualifying inbox
+                          {applicable.length === 1 ? "" : "es"} will be updated.
+                          Nothing else on them changes.
+                        </p>
+                        {settingsBlocks.map((b) => (
+                          <p key={b.scope}>
+                            <span className="font-medium text-foreground">
+                              {b.label}
+                            </span>
+                            :{" "}
+                            {b.rows
+                              .map((s) => `${s.label.toLowerCase()} ${s.value}`)
+                              .join(", ")}
+                          </p>
+                        ))}
+                      </div>
                     ) : (
                       <p className="mt-1.5 text-sm text-muted-foreground">
                         Nothing is set yet. Open{" "}
@@ -626,6 +666,14 @@ export function ChangeLimitsTool() {
                           Increase settings
                         </button>{" "}
                         and fill in at least one value.
+                      </p>
+                    )}
+                    {unsettled.length > 0 && (
+                      <p className="mt-2 text-xs text-warning" data-unsettled>
+                        {unsettled
+                          .map((u) => `${formatNumber(u.count)} ${u.label}`)
+                          .join(" and ")}{" "}
+                        qualify but have no settings, so they are left as they are.
                       </p>
                     )}
                     {runningJob && (
@@ -654,8 +702,8 @@ export function ChangeLimitsTool() {
                           : "pv-btn-primary"
                       } disabled:opacity-50`}
                       disabled={
-                        qualifying.length === 0 ||
-                        !parsedSettings.ok ||
+                        applicable.length === 0 ||
+                        !parsedSettings.anyOk ||
                         starting ||
                         !!runningJob
                       }
@@ -663,8 +711,8 @@ export function ChangeLimitsTool() {
                     >
                       {starting ? <Spinner /> : <ZapIcon size={16} />}
                       {armed
-                        ? `Really update ${formatNumber(qualifying.length)}? Click again`
-                        : `Apply to ${formatNumber(qualifying.length)} inbox${qualifying.length === 1 ? "" : "es"}`}
+                        ? `Really update ${formatNumber(applicable.length)}? Click again`
+                        : `Apply to ${formatNumber(applicable.length)} inbox${applicable.length === 1 ? "" : "es"}`}
                     </button>
                   </div>
                 </div>
