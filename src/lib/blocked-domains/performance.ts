@@ -62,6 +62,14 @@ export interface InboxAssessment {
   decision: InboxDecision;
   reason: DecisionReason;
   sent?: number;
+  contacted?: number;
+  replies?: number;
+  oooReplies?: number;
+  /**
+   * Replies ÷ unique leads contacted, the same ratio the domain is judged on.
+   * Falls back to the rate Plusvibe reports only when there is no contacted
+   * count to divide by.
+   */
   replyRate?: number;
   replyRateOoo?: number;
   /** Which mailbox this was, as Plusvibe reported it at the time. */
@@ -128,6 +136,29 @@ export function statsFor(
  * sending. Below it — including an inbox that sent nothing, or that Plusvibe
  * has no figures for — it is stopped.
  */
+/**
+ * One inbox's rates, on the SAME ratio the domain is judged on: replies over
+ * unique leads contacted.
+ *
+ * Plusvibe's own reply_rate fields divide by emails sent. With follow-up
+ * steps each lead gets several emails, so that figure runs several times
+ * lower than the domain's for the same replies — which is how every inbox on
+ * a domain could sit under the 1% inbox bar while the domain cleared 1.5%.
+ * Judging both on one ratio is what makes the two bars comparable.
+ *
+ * The reported rate is used only when there is no contacted count to divide
+ * by, which is the same fallback the domain aggregate makes.
+ */
+export function inboxRates(stats: InboxStats): { replyRate: number; replyRateOoo: number } {
+  if (stats.contacted > 0) {
+    return {
+      replyRate: round((stats.replies / stats.contacted) * 100),
+      replyRateOoo: round(((stats.replies + stats.oooReplies) / stats.contacted) * 100),
+    };
+  }
+  return { replyRate: stats.replyRate, replyRateOoo: stats.replyRateOoo };
+}
+
 export function assessInbox(
   inbox: { id: string; email: string; provider?: string },
   stats: InboxStats | undefined,
@@ -135,9 +166,17 @@ export function assessInbox(
 ): InboxAssessment {
   const base = { id: inbox.id, email: inbox.email, provider: inbox.provider };
   if (!stats) return { ...base, decision: "stop", reason: "no-stats" };
-  const common = { sent: stats.sent, replyRate: stats.replyRate, replyRateOoo: stats.replyRateOoo };
+  const { replyRate, replyRateOoo } = inboxRates(stats);
+  const common = {
+    sent: stats.sent,
+    contacted: stats.contacted,
+    replies: stats.replies,
+    oooReplies: stats.oooReplies,
+    replyRate,
+    replyRateOoo,
+  };
   if (stats.sent <= 0) return { ...base, ...common, decision: "stop", reason: "no-sends" };
-  if (stats.replyRateOoo >= minReplyRateOoo) {
+  if (replyRateOoo >= minReplyRateOoo) {
     return { ...base, ...common, decision: "keep", reason: "performing" };
   }
   return { ...base, ...common, decision: "stop", reason: "under-bar" };

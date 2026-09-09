@@ -52,19 +52,35 @@ eq("…whatever the case", statsFor({ id: "i9", email: "B@ACME.COM" }, INDEX)?.r
 eq("an inbox with no row is not found", statsFor({ id: "zz", email: "z@acme.com" }, INDEX), undefined);
 
 // --- one inbox ------------------------------------------------------------------------------
-const s = (sent, ooo, plain = 0) => ({ id: "i", email: "a@acme.com", sent, contacted: sent, replies: 0, oooReplies: 0, replyRate: plain, replyRateOoo: ooo });
+// Rates are computed from counts on the same ratio as the domain. The rate
+// Plusvibe reports is deliberately set to nonsense (99) in most of these, to
+// prove it is ignored whenever there is a contacted count to divide by.
+const s = (sent, contacted, replies, ooo, reported = { plain: 99, ooo: 99 }) =>
+  ({ id: "i", email: "a@acme.com", sent, contacted, replies, oooReplies: ooo, replyRate: reported.plain, replyRateOoo: reported.ooo });
 const IN = { id: "i", email: "a@acme.com" };
-eq("above the bar keeps sending", assessInbox(IN, s(100, 3), 1).decision, "keep");
-eq("exactly at the bar keeps sending", assessInbox(IN, s(100, 1), 1).decision, "keep");
-eq("just under the bar is stopped", assessInbox(IN, s(100, 0.9), 1), { id: "i", email: "a@acme.com", sent: 100, replyRate: 0, replyRateOoo: 0.9, decision: "stop", reason: "under-bar" });
-eq("zero replies is stopped", assessInbox(IN, s(100, 0), 1).reason, "under-bar");
-eq("nothing sent is stopped, and says so", assessInbox(IN, s(0, 0), 1).reason, "no-sends");
-eq("…even if the rate reads high on no sends", assessInbox(IN, s(0, 50), 1).decision, "stop");
+eq("above the bar keeps sending", assessInbox(IN, s(100, 100, 3, 0), 1).decision, "keep");
+eq("exactly at the bar keeps sending", assessInbox(IN, s(100, 100, 1, 0), 1).decision, "keep");
+eq("just under the bar is stopped, with its figures", assessInbox(IN, s(1000, 1000, 0, 9), 1),
+  { id: "i", email: "a@acme.com", sent: 1000, contacted: 1000, replies: 0, oooReplies: 9, replyRate: 0, replyRateOoo: 0.9, decision: "stop", reason: "under-bar" });
+eq("zero replies is stopped", assessInbox(IN, s(100, 100, 0, 0), 1).reason, "under-bar");
+eq("nothing sent is stopped, and says so", assessInbox(IN, s(0, 0, 0, 0), 1).reason, "no-sends");
+eq("…even if the reported rate reads high on no sends", assessInbox(IN, s(0, 0, 0, 0, { plain: 50, ooo: 50 }), 1).decision, "stop");
 eq("no figures at all is stopped, and says so", assessInbox(IN, undefined, 1), { id: "i", email: "a@acme.com", decision: "stop", reason: "no-stats" });
-eq("the OOO figure is what counts, not the plain one", assessInbox(IN, s(100, 2, 0), 1).decision, "keep");
-eq("…and a good plain rate can't save a low OOO one", assessInbox(IN, s(100, 0.2, 9), 1).decision, "stop");
-eq("a higher bar stops more", assessInbox(IN, s(100, 3), 5).decision, "stop");
-eq("a zero bar keeps anything that sent", assessInbox(IN, s(100, 0), 0).decision, "keep");
+eq("OOO replies count towards the bar", assessInbox(IN, s(100, 100, 0, 2), 1).decision, "keep");
+eq("…and the plain rate is reported separately", assessInbox(IN, s(100, 100, 0, 2), 1).replyRate, 0);
+eq("a higher bar stops more", assessInbox(IN, s(100, 100, 3, 0), 5).decision, "stop");
+eq("a zero bar keeps anything that sent", assessInbox(IN, s(100, 100, 0, 0), 0).decision, "keep");
+// The case that motivated this: with follow-ups, sent runs well above
+// contacted, and a rate divided by sent reads several times lower than the
+// domain's for the same replies.
+eq("follow-ups don't dilute the inbox rate", assessInbox(IN, s(300, 100, 3, 0, { plain: 1, ooo: 1 }), 1),
+  { id: "i", email: "a@acme.com", sent: 300, contacted: 100, replies: 3, oooReplies: 0, replyRate: 3, replyRateOoo: 3, decision: "keep", reason: "performing" });
+eq("…so an inbox and its domain are judged on one ratio",
+  assessInbox(IN, s(300, 100, 3, 0), 1).replyRateOoo === aggregateDomain([s(300, 100, 3, 0)], 1).replyRateOoo, true);
+eq("the reported rate is ignored when there are counts", assessInbox(IN, s(1000, 1000, 0, 0, { plain: 50, ooo: 50 }), 1).decision, "stop");
+eq("…and used only when there is nothing to divide by", assessInbox(IN, s(100, 0, 0, 0, { plain: 0, ooo: 3 }), 1),
+  { id: "i", email: "a@acme.com", sent: 100, contacted: 0, replies: 0, oooReplies: 0, replyRate: 0, replyRateOoo: 3, decision: "keep", reason: "performing" });
+eq("rates are rounded to two places", assessInbox(IN, s(900, 900, 0, 8), 1).replyRateOoo, 0.89);
 
 // --- a whole domain --------------------------------------------------------------------------
 const INBOXES = [
@@ -110,15 +126,15 @@ eq("…where a plain average of the two rates would have said otherwise", (25 + 
 eq("a domain right on the bar is performing", aggregateDomain([row(100, 100, 1, 0)], 1).verdict, "performing");
 // The two bars are independent: 1.2% clears the inbox bar but not the domain one.
 eq("at the default bars, 1.2% is a kept domain's weak inbox territory", [
-  assessInbox(IN, s(1000, 1.2), DEFAULT_MIN_REPLY_RATE_OOO).decision,
+  assessInbox(IN, s(1000, 1000, 12, 0), DEFAULT_MIN_REPLY_RATE_OOO).decision,
   aggregateDomain([row(1000, 1000, 12, 0)], DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO).verdict,
 ], ["keep", "under"]);
 eq("…and 1.6% clears both", [
-  assessInbox(IN, s(1000, 1.6), DEFAULT_MIN_REPLY_RATE_OOO).decision,
+  assessInbox(IN, s(1000, 1000, 16, 0), DEFAULT_MIN_REPLY_RATE_OOO).decision,
   aggregateDomain([row(1000, 1000, 16, 0)], DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO).verdict,
 ], ["keep", "performing"]);
 eq("…while 0.5% fails both", [
-  assessInbox(IN, s(1000, 0.5), DEFAULT_MIN_REPLY_RATE_OOO).decision,
+  assessInbox(IN, s(1000, 1000, 5, 0), DEFAULT_MIN_REPLY_RATE_OOO).decision,
   aggregateDomain([row(1000, 1000, 5, 0)], DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO).verdict,
 ], ["stop", "under"]);
 eq("…just under is not", aggregateDomain([row(100, 100, 0, 0)], 1).verdict, "under");

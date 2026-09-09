@@ -504,7 +504,11 @@ export function JobCard({
                       <span className="text-muted-foreground">
                         {REASON_LABELS[i.reason]}
                         {i.replyRateOoo !== undefined &&
-                          ` · ${i.replyRateOoo}% with OOO · ${i.replyRate}% plain · ${formatNumber(i.sent ?? 0)} sent`}
+                          ` · ${i.replyRateOoo}% with OOO · ${i.replyRate}% plain${
+                            i.contacted
+                              ? ` · ${formatNumber((i.replies ?? 0) + (i.oooReplies ?? 0))} from ${formatNumber(i.contacted)} contacted`
+                              : ""
+                          } · ${formatNumber(i.sent ?? 0)} sent`}
                       </span>
                     </div>
                   ))}
