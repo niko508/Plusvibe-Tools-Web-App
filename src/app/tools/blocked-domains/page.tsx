@@ -5,7 +5,7 @@ import { BlockedDomainsTool } from "./tool";
 export const metadata: Metadata = {
   title: "Blocked Domains (Automation) · Plusvibe Tools",
   description:
-    "Clay flags a blocked sending domain; domains still replying are left alone, the rest are stopped and you confirm the inbox deletion here.",
+    "Clay flags a blocked sending domain; domains above the bar are left sending, the rest are stopped and you confirm the inbox deletion here.",
 };
 
 export default function BlockedDomainsPage() {

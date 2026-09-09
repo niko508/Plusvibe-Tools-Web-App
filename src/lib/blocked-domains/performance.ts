@@ -192,7 +192,7 @@ export function normalizeThreshold(
 }
 
 export const REASON_LABELS: Record<DecisionReason, string> = {
-  performing: "replying — left alone",
+  performing: "above the bar — left sending",
   "under-bar": "under the bar — stopped",
   "no-sends": "nothing sent in the window — stopped",
   "no-stats": "no figures from Plusvibe — stopped",

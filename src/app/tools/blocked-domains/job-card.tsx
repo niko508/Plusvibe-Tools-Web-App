@@ -26,7 +26,7 @@ const STATUS_META: Record<
   { label: string; className: string }
 > = {
   working: { label: "Working", className: "bg-accent/10 text-accent" },
-  kept: { label: "Domain kept — still replying", className: "bg-success/10 text-success" },
+  kept: { label: "Domain kept — still sending", className: "bg-success/10 text-success" },
   awaiting_confirmation: {
     label: "Needs your confirmation",
     className: "bg-warning/10 text-warning",
@@ -101,7 +101,7 @@ export function JobCard({
       if (perf.source === "unavailable") return "no figures — all stopped";
       const kept = job.inboxesKept ?? 0;
       const head = domain ? `domain at ${domain.replyRateOoo}% · ` : "";
-      const tail = `${formatNumber(stopCount)} under ${perf.threshold}%${kept > 0 ? `, ${formatNumber(kept)} still replying` : ""}`;
+      const tail = `${formatNumber(stopCount)} under ${perf.threshold}%${kept > 0 ? `, ${formatNumber(kept)} still sending` : ""}`;
       return `${head}${tail}`;
     }
     if (phase === "sheet" && job.status === "kept") return "domain kept — left alone";
@@ -252,7 +252,7 @@ export function JobCard({
               <>
                 {" "}
                 ({formatNumber(job.inboxesKept ?? 0)} more{" "}
-                {(job.inboxesKept ?? 0) === 1 ? "is" : "are"} still replying and will be left alone)
+                {(job.inboxesKept ?? 0) === 1 ? "is" : "are"} still sending and will be left alone)
               </>
             )}
             {fullyStopped ? (
@@ -523,7 +523,7 @@ export function JobCard({
                       : `${formatNumber(r.inboxesFound)} inbox${r.inboxesFound === 1 ? "" : "es"}${
                           r.domainReplyRateOoo !== undefined ? ` · domain at ${r.domainReplyRateOoo}%` : ""
                         } · ${r.stopped > 0 ? `${formatNumber(r.stopped)} newly stopped` : "nothing new to stop"}${
-                          r.kept > 0 ? `, ${formatNumber(r.kept)} still replying` : ""
+                          r.kept > 0 ? `, ${formatNumber(r.kept)} still sending` : ""
                         }${r.wroteOff ? " · domain written off" : ""}`}
                   </span>
                   {r.trigger === "manual" && <span className="text-muted-foreground">(by hand)</span>}

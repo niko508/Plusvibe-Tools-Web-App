@@ -142,7 +142,7 @@ function BreakdownTable({
               <th className="pb-2 pr-3 text-right font-medium" title="Not Active in the sheet, tenant queued">
                 Written off
               </th>
-              <th className="pb-2 pr-3 text-right font-medium" title="Still replying at or above the domain bar">
+              <th className="pb-2 pr-3 text-right font-medium" title="Left sending: at or above the domain bar">
                 Kept
               </th>
               <th className="pb-2 pr-3 text-right font-medium">Inboxes stopped</th>
