@@ -133,6 +133,9 @@ export function JobCard({
       if (bits.length === 0 && job.status === "kept") return "domain kept — left alone";
       return bits.join(" · ");
     }
+    if (phase === "sheet" && sheet?.revertedTo !== undefined) {
+      return `Not Active, then put back to ${sheet.revertedTo || "(blank)"}`;
+    }
     if (phase === "sheet" && job.status === "kept") return "domain kept — left alone";
     if (phase === "quarantining") {
       if (job.phaseStates?.quarantining === "skipped") return "nothing to stop";
@@ -340,6 +343,19 @@ export function JobCard({
             {stopCount > 0 &&
               ` — but ${formatNumber(stopCount)} of its inboxes ${stopCount === 1 ? "was" : "were"} stopped`}
           </p>
+          {sheet?.revertedTo !== undefined && rj ? (
+            // Kept by a person after re-judging, not by the run: the figure
+            // that justifies it is the re-judgement's, not the original one.
+            <p className="mt-1 text-muted-foreground">
+              Written off by the run, then put back after re-judging: over{" "}
+              {rj.start} … {rj.end} <span className="font-mono">{job.domain}</span> stood at{" "}
+              <span className="font-medium text-foreground">{rj.domain.replyRateOoo}% with OOO</span>
+              {rj.domain.basis === "counts" &&
+                ` (${formatNumber(rj.domain.replies + rj.domain.oooReplies)} replies from ${formatNumber(rj.domain.contacted)} leads contacted)`}
+              . The Domains row is back to {sheet.revertedTo || "blank"} and the domain is watched again.
+              {sheet.manualCleanup && ` ${sheet.manualCleanup}`}
+            </p>
+          ) : (
           <p className="mt-1 text-muted-foreground">
             Over the last 7 days <span className="font-mono">{job.domain}</span> replied at{" "}
             <span className="font-medium text-foreground">{domain?.replyRateOoo ?? 0}% with OOO</span>
@@ -369,6 +385,7 @@ export function JobCard({
                 }; turn them back on in Plusvibe if you disagree.`
               : "Every inbox on it is above the inbox bar too, so none were stopped."}
           </p>
+          )}
         </div>
       )}
 
