@@ -145,6 +145,31 @@ ok("a blank tenant is never 'already queued'",
   !sp.tenantAlreadyQueued(CANCEL_GRID, 0, "   "));
 ok("an empty tab queues nothing", !sp.tenantAlreadyQueued([CANCEL_HEADER], 0, "a@b.com"));
 
+// --- the Google path ---------------------------------------------------------
+// Google Workspace has no tenant: burned inboxes are listed one per row, and
+// the domain goes Not Active only once every inbox is burned.
+eq("the constants match the real tab", [sp.GOOGLE_CANCEL_TAB, sp.COL_GOOGLE_EMAIL], ["🛑 Google Inboxes to Cancel", "Email Address"]);
+const GH = ["Email Address", "Tenant / Inbox Source"];
+eq("a Google inbox row lands under its columns",
+  sp.buildGoogleCancelRow(GH, { email: "a@x.com", source: "Cheap Inboxes" }), ["a@x.com", "Cheap Inboxes"]);
+eq("…whatever the column order",
+  sp.buildGoogleCancelRow(["Tenant / Inbox Source", "Notes", "Email Address"], { email: "a@x.com", source: "S" }), ["S", "", "a@x.com"]);
+eq("…and a tab missing the column gets nothing written into the wrong place",
+  sp.buildGoogleCancelRow(["Notes"], { email: "a@x.com", source: "S" }), [""]);
+// The real tab carries placeholder rows with an empty address and a dash for
+// the source; those must not count as "already listed".
+const GG = [GH, ["old@x.com", "S"], ["", "–"], ["", "–"]];
+eq("only inboxes not yet on the tab are queued, once each",
+  sp.googleInboxesToQueue(GG, 0, ["new@x.com", "OLD@x.com ", "new@x.com", "", "  "]),
+  { toQueue: ["new@x.com"], alreadyQueued: ["old@x.com"] });
+eq("an empty tab queues everything", sp.googleInboxesToQueue([GH], 0, ["a@x.com", "b@x.com"]).toQueue, ["a@x.com", "b@x.com"]);
+eq("a missing column queues nothing as already listed", sp.googleInboxesToQueue(GG, -1, ["old@x.com"]).toQueue, ["old@x.com"]);
+eq("a Google-majority domain takes the Google path", sp.isGoogleDomain({ google: 49, microsoft: 1, other: 0 }), true);
+eq("…a Microsoft one does not", sp.isGoogleDomain({ google: 1, microsoft: 49, other: 0 }), false);
+eq("…nor a tie", sp.isGoogleDomain({ google: 2, microsoft: 2, other: 0 }), false);
+eq("…nor a record from before providers were captured", sp.isGoogleDomain(undefined), false);
+eq("…nor one with no inboxes", sp.isGoogleDomain({ google: 0, microsoft: 0, other: 0 }), false);
+
 // --- Already Not Active -----------------------------------------------------
 // The status and the tenant are separate records. A domain someone already
 // marked Not Active by hand is exactly the case where its tenant is most

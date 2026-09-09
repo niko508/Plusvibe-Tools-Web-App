@@ -259,11 +259,24 @@ export async function appendRow(
   tab: string,
   values: string[]
 ): Promise<void> {
+  await appendRows(spreadsheetId, tab, [values]);
+}
+
+/**
+ * Appends several rows in one call. Sheets accepts a whole block in one
+ * append, so a domain with fifty burned inboxes costs one request, not fifty.
+ */
+export async function appendRows(
+  spreadsheetId: string,
+  tab: string,
+  rows: string[][]
+): Promise<void> {
+  if (rows.length === 0) return;
   const range = encodeURIComponent(quoteTab(tab));
   await sheetsFetch(
     `/${spreadsheetId}/values/${range}:append` +
       `?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
-    { method: "POST", body: { values: [values] } }
+    { method: "POST", body: { values: rows } }
   );
 }
 

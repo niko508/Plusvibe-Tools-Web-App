@@ -20,6 +20,7 @@ import {
 } from "@/components/icons";
 import { describeNext } from "@/lib/blocked-domains/recheck";
 import { bucketOf, describeProviders, PROVIDER_LABELS } from "@/lib/plusvibe-providers";
+import { GOOGLE_CANCEL_TAB } from "@/lib/blocked-domains/sheet-plan";
 
 const STATUS_META: Record<
   BlockedDomainStatus,
@@ -103,6 +104,14 @@ export function JobCard({
       const head = domain ? `domain at ${domain.replyRateOoo}% · ` : "";
       const tail = `${formatNumber(stopCount)} under ${perf.threshold}%${kept > 0 ? `, ${formatNumber(kept)} still sending` : ""}`;
       return `${head}${tail}`;
+    }
+    if (phase === "sheet" && sheet?.googlePath) {
+      const bits: string[] = [];
+      if (sheet.statusUpdated) bits.push("Not Active");
+      const n = sheet.googleQueued?.length ?? 0;
+      if (n > 0) bits.push(`${formatNumber(n)} inbox${n === 1 ? "" : "es"} listed to cancel`);
+      if (bits.length === 0 && job.status === "kept") return "domain kept — left alone";
+      return bits.join(" · ");
     }
     if (phase === "sheet" && job.status === "kept") return "domain kept — left alone";
     if (phase === "quarantining") {
@@ -321,10 +330,23 @@ export function JobCard({
                 {formatNumber(domain.contacted)} leads contacted)
               </>
             )}
-            , at or above the {perf?.domainThreshold ?? 1.5}% domain bar. The Domains tab keeps its status, the tenant
-            was not queued to cancel, and nothing was deleted.{" "}
+            {sheet?.googlePath ? (
+              <>
+                . It runs on Google Workspace, so there is no tenant to cancel: the Domains tab
+                keeps its status until every inbox on it is burned, and nothing was deleted.{" "}
+              </>
+            ) : (
+              <>
+                , at or above the {perf?.domainThreshold ?? 1.5}% domain bar. The Domains tab keeps its status, the tenant
+                was not queued to cancel, and nothing was deleted.{" "}
+              </>
+            )}
             {stopCount > 0
-              ? `The ${formatNumber(stopCount)} inbox${stopCount === 1 ? "" : "es"} under the ${perf?.threshold ?? 1}% inbox bar had their daily limit set to 0 and warmup switched off; turn them back on in Plusvibe if you disagree.`
+              ? `The ${formatNumber(stopCount)} inbox${stopCount === 1 ? "" : "es"} under the ${perf?.threshold ?? 1}% inbox bar had their daily limit set to 0 and warmup switched off${
+                  sheet?.googlePath && (sheet.googleQueued?.length ?? 0) > 0
+                    ? `, and ${formatNumber(sheet.googleQueued!.length)} ${sheet.googleQueued!.length === 1 ? "was" : "were"} added to "${GOOGLE_CANCEL_TAB}"`
+                    : ""
+                }; turn them back on in Plusvibe if you disagree.`
               : "Every inbox on it is above the inbox bar too, so none were stopped."}
           </p>
         </div>
@@ -547,13 +569,34 @@ export function JobCard({
                 value={
                   sheet.statusUpdated
                     ? `row ${sheet.domainRow} · ${sheet.previousStatus || "(blank)"} → Not Active`
-                    : sheet.error || "not updated"
+                    : sheet.error ||
+                      (sheet.googlePath && job.status === "kept"
+                        ? "left alone — Not Active once every inbox is burned"
+                        : "not updated")
                 }
               />
+              {sheet.googlePath && (
+                <Detail
+                  label="Google inboxes"
+                  value={
+                    (sheet.googleQueued?.length ?? 0) > 0
+                      ? `${formatNumber(sheet.googleQueued!.length)} listed on "${GOOGLE_CANCEL_TAB}": ${sheet.googleQueued!.join(", ")}${
+                          (sheet.googleAlreadyQueued?.length ?? 0) > 0
+                            ? ` · ${formatNumber(sheet.googleAlreadyQueued!.length)} already there`
+                            : ""
+                        }`
+                      : (sheet.googleAlreadyQueued?.length ?? 0) > 0
+                        ? `all ${formatNumber(sheet.googleAlreadyQueued!.length)} burned inboxes were already on "${GOOGLE_CANCEL_TAB}"`
+                        : "none burned, so none listed"
+                  }
+                />
+              )}
               <Detail
                 label="Tenant"
                 value={
-                  sheet.tenantEmail
+                  sheet.googlePath
+                    ? "Google Workspace — no tenant to cancel; the inboxes are listed instead"
+                    : sheet.tenantEmail
                     ? `${sheet.tenantEmail}${sheet.tenantSource ? ` · ${sheet.tenantSource}` : ""} — ${
                         sheet.tenantQueued
                           ? "queued to cancel"

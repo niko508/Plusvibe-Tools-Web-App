@@ -294,7 +294,7 @@ export function BlockedDomainsTool() {
             <h2 className="mt-4 text-sm font-semibold">Keep what&apos;s working</h2>
             <p className="mt-1 text-xs text-muted-foreground">
               {view?.settings.checkPerformance
-                ? "Two bars on reply rate with OOO over the last 7 days. Inboxes under theirs are stopped whatever the domain does; a domain at or above its own keeps its sheet status and its tenant, and nothing is deleted."
+                ? "Two bars on reply rate with OOO over the last 7 days. Inboxes under theirs are stopped whatever the domain does; a domain at or above its own keeps its sheet status and its tenant, and nothing is deleted. Google Workspace domains have no tenant: their burned inboxes go onto 🛑 Google Inboxes to Cancel, and the domain is written off only once every inbox on it is burned."
                 : "Every blocked domain is cancelled and all its inboxes stopped, whatever the numbers say."}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-2">

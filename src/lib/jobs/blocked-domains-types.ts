@@ -117,6 +117,16 @@ export interface SheetOutcome {
   client?: string;
   /** The registrar the domain sits with, from the sheet's Domain Host column. */
   domainHost?: string;
+  /**
+   * True when the domain was handled on the Google path: no tenant to cancel,
+   * burned inboxes listed one by one instead, and Not Active only once every
+   * inbox is burned.
+   */
+  googlePath?: boolean;
+  /** Google path: inboxes appended to 🛑 Google Inboxes to Cancel by this run. */
+  googleQueued?: string[];
+  /** Google path: burned inboxes that were already on the tab. */
+  googleAlreadyQueued?: string[];
   /** Set when the sheet could not be read or written at all. */
   error?: string;
 }

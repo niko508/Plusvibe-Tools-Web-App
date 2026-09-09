@@ -6,6 +6,7 @@ import path from "path";
 import { onShutdownFlush } from "@/lib/jobs/shutdown";
 import {
   appendRow,
+  appendRows,
   batchUpdateCells,
   columnLetter,
   envSpreadsheetId,
@@ -21,14 +22,20 @@ import {
   COL_TENANT_SOURCE,
 } from "@/lib/jobs/azure-warmup-types";
 import { normalizeDomain, inboxIsOnDomain } from "@/lib/blocked-domains/domain";
+import { COL_CANCEL_SOURCE } from "@/lib/blocked-domains/sheet-plan";
 import {
   BLOCKED_STATUS,
   CANCEL_TAB,
   COL_CANCEL_TENANT,
   COL_DOMAIN_HOST,
+  COL_GOOGLE_EMAIL,
+  GOOGLE_CANCEL_TAB,
   buildCancelRow,
+  buildGoogleCancelRow,
   findDomainRow,
+  googleInboxesToQueue,
   headerIndex,
+  isGoogleDomain,
   matchWorkspaceByClient,
   tenantAlreadyQueued,
 } from "@/lib/blocked-domains/sheet-plan";
@@ -396,7 +403,25 @@ async function runLocateAndQuarantine(id: string) {
     // Domains tab keeps its status, the tenant is not queued for
     // cancellation, and nothing is deleted. Its weak inboxes are stopped
     // above, which is reversible; writing the domain off is not.
-    if (rec.performance?.domain?.verdict === "performing") {
+    if (isGoogleDomain(rec.providers)) {
+      // Google Workspace has no tenant to cancel — each inbox is its own
+      // seat. The burned inboxes are listed one by one, and the domain is
+      // written off only once every inbox on it is burned; until then it is
+      // kept and watched, whatever its own rate says.
+      const allBurned = plan.keep.length === 0;
+      await runSheetGoogle(rec, { burned: rec.quarantinedEmails ?? [], allBurned });
+      rec.updatedAt = Date.now();
+      await persist(id);
+      if (!allBurned) {
+        rec.phaseStates.deleting = "skipped";
+        rec.status = "kept";
+        rec.phase = "finished";
+        await scheduleRecheck(rec);
+        rec.updatedAt = Date.now();
+        await persist(id);
+        return;
+      }
+    } else if (rec.performance?.domain?.verdict === "performing") {
       rec.phaseStates.sheet = "skipped";
       rec.phaseStates.deleting = "skipped";
       rec.status = "kept";
@@ -407,16 +432,16 @@ async function runLocateAndQuarantine(id: string) {
       rec.updatedAt = Date.now();
       await persist(id);
       return;
+    } else {
+      // --- Phase 4: the sheet --------------------------------------------
+      // Written immediately, not on confirmation. The domain is under its
+      // bar and its weak inboxes are already stopped, so "Not Active" is
+      // simply true — and the tenant needs cancelling either way. Only the
+      // irreversible deletion is worth making someone press a button for.
+      await runSheet(rec);
+      rec.updatedAt = Date.now();
+      await persist(id);
     }
-
-    // --- Phase 4: the sheet ----------------------------------------------
-    // Written immediately, not on confirmation. The domain is under its bar
-    // and its weak inboxes are already stopped, so "Not Active" is simply
-    // true — and the tenant needs cancelling either way. Only the
-    // irreversible deletion is worth making someone press a button for.
-    await runSheet(rec);
-    rec.updatedAt = Date.now();
-    await persist(id);
 
     if (plan.stop.length === 0) {
       // Under the bar as a domain, but every individual inbox is above it —
@@ -460,6 +485,128 @@ async function runLocateAndQuarantine(id: string) {
 
 function emptySheet(): SheetOutcome {
   return { statusUpdated: false, tenantQueued: false };
+}
+
+/**
+ * The Google path of the sheet step.
+ *
+ * Every burned inbox goes onto 🛑 Google Inboxes to Cancel as its own row,
+ * with the source from the domain's row in 📋 Domains. The domain's Status is
+ * set to Not Active only when every inbox on it is burned; a domain with
+ * anything still sending keeps its row as it was. 🚯 Tenants to Cancel is
+ * never touched — there is no tenant.
+ *
+ * Idempotent: an inbox already on the tab is not listed again, which matters
+ * because the same burned inboxes come back through here on every repeat
+ * check.
+ */
+async function runSheetGoogle(
+  rec: BlockedDomainJob,
+  args: { burned: string[]; allBurned: boolean }
+) {
+  rec.phase = "sheet";
+  rec.phaseStates.sheet = "running";
+  const outcome: SheetOutcome = { ...(rec.sheet ?? emptySheet()), googlePath: true };
+  rec.sheet = outcome;
+
+  const sheetId = envSpreadsheetId();
+  if (!sheetId) {
+    outcome.error = "SPREADSHEET_ID is not set, so the sheet was left alone.";
+    rec.phaseStates.sheet = "skipped";
+    pushError(rec, outcome.error);
+    return;
+  }
+  if (!isSheetWritingConfigured()) {
+    outcome.error =
+      "No Google service account configured, so the sheet was left alone.";
+    rec.phaseStates.sheet = "skipped";
+    pushError(rec, outcome.error);
+    return;
+  }
+
+  try {
+    // --- the domain's row ------------------------------------------------
+    const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
+    const header = grid[0] ?? [];
+    const iStatus = headerIndex(header, COL_STATUS);
+    const hit = findDomainRow(grid, rec.domain, {
+      domain: headerIndex(header, COL_DOMAIN),
+      status: iStatus,
+      tenantEmail: headerIndex(header, COL_TENANT_EMAIL),
+      tenantSource: headerIndex(header, COL_TENANT_SOURCE),
+      client: headerIndex(header, "Client"),
+      domainHost: headerIndex(header, COL_DOMAIN_HOST),
+    });
+
+    let source = "";
+    if (!hit.row) {
+      // Not fatal on this path: the inboxes are the thing worth listing, and
+      // they can be listed without a source.
+      pushError(
+        rec,
+        `${rec.domain} isn't in the "${DEFAULT_SHEET_TAB}" tab, so its status was left alone and its inboxes are listed without a source.`
+      );
+    } else {
+      if (hit.matches > 1) {
+        pushError(
+          rec,
+          `${rec.domain} appears ${hit.matches} times in "${DEFAULT_SHEET_TAB}" — only row ${hit.row.rowNumber} was used.`
+        );
+      }
+      outcome.domainRow = hit.row.rowNumber;
+      outcome.previousStatus = hit.row.currentStatus;
+      outcome.tenantEmail = hit.row.tenantEmail || undefined;
+      outcome.tenantSource = hit.row.tenantSource || undefined;
+      outcome.client = hit.row.client || outcome.client;
+      outcome.domainHost = hit.row.domainHost || outcome.domainHost;
+      source = hit.row.tenantSource;
+
+      if (args.allBurned) {
+        if (iStatus < 0) {
+          pushError(rec, `The "${DEFAULT_SHEET_TAB}" tab has no ${COL_STATUS} column.`);
+        } else {
+          await batchUpdateCells(sheetId, [
+            {
+              range: `${quoteTab(DEFAULT_SHEET_TAB)}!${columnLetter(iStatus)}${hit.row.rowNumber}`,
+              value: BLOCKED_STATUS,
+            },
+          ]);
+          outcome.statusUpdated = true;
+        }
+      }
+    }
+
+    // --- the inboxes -----------------------------------------------------
+    if (args.burned.length > 0) {
+      const gGrid = await readTab(sheetId, GOOGLE_CANCEL_TAB);
+      const gHeader = gGrid[0] ?? [COL_GOOGLE_EMAIL, COL_CANCEL_SOURCE];
+      const iEmail = headerIndex(gHeader, COL_GOOGLE_EMAIL);
+      if (iEmail < 0) {
+        // Writing rows the tab can't place would put addresses under the
+        // wrong heading, which is worse than listing nothing and saying so.
+        outcome.error = `The "${GOOGLE_CANCEL_TAB}" tab has no ${COL_GOOGLE_EMAIL} column, so no inboxes were listed there.`;
+        rec.phaseStates.sheet = "error";
+        pushError(rec, outcome.error);
+      } else {
+        const { toQueue, alreadyQueued } = googleInboxesToQueue(gGrid, iEmail, args.burned);
+        if (toQueue.length > 0) {
+          await appendRows(
+            sheetId,
+            GOOGLE_CANCEL_TAB,
+            toQueue.map((email) => buildGoogleCancelRow(gHeader, { email, source }))
+          );
+        }
+        outcome.googleQueued = [...(outcome.googleQueued ?? []), ...toQueue];
+        outcome.googleAlreadyQueued = alreadyQueued;
+      }
+    }
+
+    if (rec.phaseStates.sheet === "running") rec.phaseStates.sheet = "done";
+  } catch (err) {
+    outcome.error = msg(err);
+    rec.phaseStates.sheet = "error";
+    pushError(rec, `Sheet update failed: ${msg(err)}`);
+  }
 }
 
 /** The window the inboxes are judged on: the last 7 days, ending today. */
@@ -992,10 +1139,22 @@ export async function runRecheck(
     rec.quarantinedEmails = plan.stop.map((i) => i.email.trim().toLowerCase());
     quarantinedInboxes.set(id, plan.stop);
 
-    // A domain that has now fallen under its bar gets written off — once.
+    // A domain that has now fallen under its bar gets written off — once. On
+    // the Google path the bar is "every inbox burned": each check lists the
+    // newly burned ones, and the domain goes Not Active when none is left.
     const alreadyWrittenOff = rec.status !== "kept";
-    if (domain?.verdict === "under" && !alreadyWrittenOff) {
-      await runSheet(rec);
+    let wroteOff = false;
+    if (!alreadyWrittenOff) {
+      if (isGoogleDomain(rec.providers)) {
+        const allBurned = plan.keep.length === 0;
+        await runSheetGoogle(rec, { burned: rec.quarantinedEmails ?? [], allBurned });
+        wroteOff = allBurned;
+      } else if (domain?.verdict === "under") {
+        await runSheet(rec);
+        wroteOff = true;
+      }
+    }
+    if (wroteOff) {
       run.wroteOff = true;
       rec.status =
         plan.stop.length > 0 && !settings.autoDelete ? "awaiting_confirmation" : "done";

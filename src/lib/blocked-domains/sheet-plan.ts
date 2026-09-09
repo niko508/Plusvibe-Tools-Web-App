@@ -1,14 +1,24 @@
 // Working out what to write to the Email Infrastructure sheet for a blocked
 // domain, without doing any writing.
 //
-// Two edits per domain:
-//   📋 Domains          the domain's row → Status = "Not Active"
-//   🚯 Tenants to Cancel  a new row → Tenant, Tenant / Inbox Source
+// Two paths, by what kind of mailboxes the domain runs on.
 //
-// Both are planned here from the grids, so the exact cells and row contents are
-// unit-testable and a missing column is reported rather than guessed at.
+// Microsoft (and anything that isn't Google):
+//   📋 Domains             the domain's row → Status = "Not Active"
+//   🚯 Tenants to Cancel   a new row → Tenant, Tenant / Inbox Source
+//
+// Google Workspace has no tenant to cancel — each inbox is its own seat — so:
+//   🛑 Google Inboxes to Cancel  one row per burned inbox → Email Address,
+//                                Tenant / Inbox Source
+//   📋 Domains             Status = "Not Active" only once EVERY inbox on the
+//                          domain is burned; until then the row is left alone
+//
+// All of it is planned here from the grids, so the exact cells and row
+// contents are unit-testable and a missing column is reported rather than
+// guessed at.
 
 import { normalizeDomain } from "@/lib/blocked-domains/domain";
+import { dominantProvider, type ProviderCounts } from "@/lib/plusvibe-providers";
 
 /** The status a blocked domain's row is set to. */
 export const BLOCKED_STATUS = "Not Active";
@@ -19,6 +29,21 @@ export const COL_DOMAIN_HOST = "Domain Host";
 export const CANCEL_TAB = "🚯 Tenants to Cancel";
 export const COL_CANCEL_TENANT = "Tenant";
 export const COL_CANCEL_SOURCE = "Tenant / Inbox Source";
+
+export const GOOGLE_CANCEL_TAB = "🛑 Google Inboxes to Cancel";
+export const COL_GOOGLE_EMAIL = "Email Address";
+
+/**
+ * Whether a domain is handled on the Google path.
+ *
+ * Decided by the provider most of its inboxes are on, so one stray mailbox
+ * of the other kind doesn't flip a whole domain onto the wrong list. A record
+ * from before providers were captured has no counts and takes the tenant
+ * path, as it always did.
+ */
+export function isGoogleDomain(providers: ProviderCounts | undefined): boolean {
+  return !!providers && dominantProvider(providers) === "google";
+}
 
 /** Case-insensitive header lookup, tolerant of stray padding. */
 export function headerIndex(header: string[], name: string): number {
@@ -97,13 +122,58 @@ export function tenantAlreadyQueued(
   tenantColumn: number,
   tenantEmail: string
 ): boolean {
-  const wanted = tenantEmail.trim().toLowerCase();
-  if (!wanted || tenantColumn < 0) return false;
+  return alreadyListed(grid, tenantColumn, tenantEmail);
+}
+
+/** Whether a value already appears in a column, ignoring case and padding. */
+export function alreadyListed(grid: string[][], column: number, value: string): boolean {
+  const wanted = value.trim().toLowerCase();
+  if (!wanted || column < 0) return false;
   for (let r = 1; r < grid.length; r++) {
-    const v = String(grid[r]?.[tenantColumn] ?? "").trim().toLowerCase();
+    const v = String(grid[r]?.[column] ?? "").trim().toLowerCase();
     if (v && v === wanted) return true;
   }
   return false;
+}
+
+/**
+ * Builds the row to append to 🛑 Google Inboxes to Cancel, sized to the tab's
+ * own header for the same reason as the tenant row.
+ */
+export function buildGoogleCancelRow(
+  header: string[],
+  values: { email: string; source: string }
+): string[] {
+  const width = Math.max(header.length, 1);
+  const row = new Array<string>(width).fill("");
+  const iEmail = headerIndex(header, COL_GOOGLE_EMAIL);
+  const iSource = headerIndex(header, COL_CANCEL_SOURCE);
+  if (iEmail >= 0) row[iEmail] = values.email;
+  if (iSource >= 0) row[iSource] = values.source;
+  return row;
+}
+
+/**
+ * Which burned inboxes still need a row: the ones not already on the tab.
+ *
+ * The tab is append-only and a domain is checked again every week, so this is
+ * what keeps a mailbox from being listed once per check.
+ */
+export function googleInboxesToQueue(
+  grid: string[][],
+  emailColumn: number,
+  burned: string[]
+): { toQueue: string[]; alreadyQueued: string[] } {
+  const toQueue: string[] = [];
+  const alreadyQueued: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of burned) {
+    const email = raw.trim().toLowerCase();
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    (alreadyListed(grid, emailColumn, email) ? alreadyQueued : toQueue).push(email);
+  }
+  return { toQueue, alreadyQueued };
 }
 
 /**
