@@ -7,6 +7,7 @@ import type { CopyEdit } from "@/lib/copy-sections/edit";
 import type { TagInput, TagSpec } from "@/lib/tags/bulk-tags";
 import type { CopyReplaceJob, CopyReplaceStartPayload } from "@/lib/jobs/copy-replace-types";
 import type { InboxTagsJob, InboxTagsStartPayload } from "@/lib/jobs/inbox-tags-types";
+import type { ChangeLimitsJob, ChangeLimitsStartPayload } from "@/lib/jobs/change-limits-types";
 import type { CampaignSettingsJob, CampaignSettingsStartPayload } from "@/lib/jobs/campaign-settings-types";
 import type { DomainTagsJob, DomainTagsStartPayload } from "@/lib/jobs/domain-tags-types";
 import type { CatalogTag } from "@/lib/inbox-tags/plan";
@@ -230,6 +231,21 @@ export function abortInboxTagsJob(jobId: string, signal?: AbortSignal) {
 }
 export function deleteInboxTagsJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/inbox-tags/delete", { method: "POST", body: { jobId }, signal });
+}
+
+// --- Change Limits with Best Performing Inboxes -----------------------------
+
+export function startChangeLimits(payload: ChangeLimitsStartPayload, signal?: AbortSignal) {
+  return request<{ jobId: string }>("/api/jobs/change-limits/start", { method: "POST", body: payload, signal });
+}
+export function listChangeLimitsJobs(signal?: AbortSignal) {
+  return request<{ jobs: ChangeLimitsJob[] }>("/api/jobs/change-limits/list", { signal });
+}
+export function abortChangeLimitsJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/change-limits/abort", { method: "POST", body: { jobId }, signal });
+}
+export function deleteChangeLimitsJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/change-limits/delete", { method: "POST", body: { jobId }, signal });
 }
 
 // --- Auto-tag by Domain -----------------------------------------------------

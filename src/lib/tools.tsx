@@ -146,6 +146,16 @@ export const TOOLS: Tool[] = [
     Icon: MailIcon,
   },
   {
+    slug: "change-limits",
+    name: "Change Limits with Best Performing Inboxes",
+    tagline: "Raise the limits on the inboxes that are actually replying",
+    description:
+      "Set a true reply rate for Google and for Microsoft inboxes plus a minimum number of sends, and it finds every inbox in the workspaces you pick that clears its own threshold — then raises their campaign emails, warmup emails, randomised warmup, warmup reply rate and email interval in one background run. Rates are worked out on unique contacts.",
+    status: "active",
+    color: "emerald",
+    Icon: ZapIcon,
+  },
+  {
     slug: "azure-warmup",
     name: "Azure Start Warmup",
     tagline: "Upload the mailbox export and start warmup as inboxes land",
