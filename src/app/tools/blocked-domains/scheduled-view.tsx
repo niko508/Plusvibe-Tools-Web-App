@@ -129,6 +129,11 @@ function ScheduledRow({
       <div className="min-w-[200px] flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-mono text-sm font-medium">{job.domain}</span>
+          {job.workspaceName && (
+            <span className="pv-chip" title="Workspace">
+              {job.workspaceName}
+            </span>
+          )}
           {job.sheet?.domainHost && (
             <span className="pv-chip" title="Domain Host, from the Domains sheet">
               {job.sheet.domainHost}

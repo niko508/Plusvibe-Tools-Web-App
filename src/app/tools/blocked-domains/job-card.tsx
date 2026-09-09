@@ -145,6 +145,11 @@ export function JobCard({
           <span className="truncate font-mono text-sm font-medium">
             {job.domain}
           </span>
+          {job.workspaceName && (
+            <span className="pv-chip shrink-0" title="Workspace">
+              {job.workspaceName}
+            </span>
+          )}
           {host && (
             <span className="pv-chip shrink-0" title="Domain Host, from the Domains sheet">
               {host}
