@@ -285,5 +285,15 @@ export interface BlockedDomainsView {
     sheetWriting: boolean;
     /** The shared secret Clay must send. */
     webhookSecret: boolean;
+    /**
+     * Where the records live and whether that survives a redeploy. Absent on
+     * responses from a build before this was reported.
+     */
+    jobStorage?: {
+      dir: string;
+      configured: boolean;
+      onVolume: boolean | null;
+      mountPoint?: string;
+    };
   };
 }

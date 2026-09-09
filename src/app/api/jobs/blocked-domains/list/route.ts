@@ -4,6 +4,7 @@ import { errorResponse } from "@/lib/api-response";
 import { listJobs, serverApiKey } from "@/lib/jobs/blocked-domains";
 import { loadSettings } from "@/lib/blocked-domains/settings";
 import { envSpreadsheetId, isSheetWritingConfigured } from "@/lib/google-sheets";
+import { jobStorageInfo } from "@/lib/jobs/storage";
 import type { BlockedDomainsView } from "@/lib/jobs/blocked-domains-types";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +33,7 @@ export async function GET(request: Request) {
         sheetWriting: isSheetWritingConfigured(),
         webhookSecret:
           (process.env.BLOCKED_DOMAIN_WEBHOOK_SECRET?.trim() ?? "") !== "",
+        jobStorage: jobStorageInfo(),
       },
     };
     return NextResponse.json(view);

@@ -168,8 +168,11 @@ export function BlockedDomainsTool() {
           "SPREADSHEET_ID — without it the Domains and Tenants to Cancel tabs are left alone",
         !readiness.sheetWriting &&
           "GOOGLE_SERVICE_ACCOUNT_JSON — without it the sheet can be read but not written",
+        readiness.jobStorage?.onVolume === false &&
+          "JOBS_DIR — points at the container's own disk, so every deploy wipes the log of handled domains and their schedules; mount a volume in Railway and set JOBS_DIR to a path inside it",
       ].filter(Boolean as unknown as (v: unknown) => v is string)
     : [];
+  const storage = readiness?.jobStorage;
 
   const watchedCount = watchedJobs(jobs).length;
   const recheck = (id: string, action: "now" | "on" | "off") =>
@@ -391,6 +394,20 @@ export function BlockedDomainsTool() {
               ))}
             </ul>
           </div>
+        )}
+
+        {storage && (
+          <p
+            className={`mt-3 text-xs ${storage.onVolume === false ? "text-warning" : "text-muted-foreground"}`}
+            data-job-storage={String(storage.onVolume)}
+          >
+            Job records: <span className="font-mono">{storage.dir}</span>
+            {storage.onVolume === true
+              ? ` — on a volume${storage.mountPoint ? ` mounted at ${storage.mountPoint}` : ""}, kept across deploys.`
+              : storage.onVolume === false
+                ? " — on the container's own disk, wiped on every deploy."
+                : " — could not tell whether this survives a deploy."}
+          </p>
         )}
       </div>
 
