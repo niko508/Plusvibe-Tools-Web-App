@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
-import { listJobs, serverApiKey } from "@/lib/jobs/blocked-domains";
+import { listJobs, rejudgeAllStatus, serverApiKey } from "@/lib/jobs/blocked-domains";
 import { loadSettings } from "@/lib/blocked-domains/settings";
 import { envSpreadsheetId, isSheetWritingConfigured } from "@/lib/google-sheets";
 import { jobStorageInfo } from "@/lib/jobs/storage";
@@ -19,6 +19,7 @@ export async function GET(request: Request) {
     const [jobs, settings] = await Promise.all([listJobs(), loadSettings()]);
     const view: BlockedDomainsView = {
       jobs,
+      rejudgeAll: rejudgeAllStatus(),
       settings: {
         autoDelete: settings.autoDelete,
         checkPerformance: settings.checkPerformance,

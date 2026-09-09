@@ -1092,6 +1092,31 @@ export function dismissBlockedDomain(jobId: string, signal?: AbortSignal) {
   });
 }
 
+/** Re-judge one domain on the wider window, or every record in the background. */
+export function rejudgeBlockedDomain(target: { jobId: string } | { all: true }, signal?: AbortSignal) {
+  return request<{ ok?: boolean; started?: boolean; total?: number }>(
+    "/api/jobs/blocked-domains/rejudge",
+    { method: "POST", body: target, signal }
+  );
+}
+
+/** Turn the restorable inboxes back on at a daily limit. */
+export function restoreBlockedDomainInboxes(jobId: string, dailyLimit: number, signal?: AbortSignal) {
+  return request<{ ok: boolean; restored: number; error?: string }>(
+    "/api/jobs/blocked-domains/restore",
+    { method: "POST", body: { jobId, dailyLimit }, signal }
+  );
+}
+
+/** Put a written-off domain's Status back and return it to kept. */
+export function undoBlockedDomainWriteOff(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/blocked-domains/undo-write-off", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
 export function rearmBlockedDomain(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/blocked-domains/rearm", {
     method: "POST",

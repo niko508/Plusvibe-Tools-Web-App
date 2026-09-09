@@ -9,6 +9,9 @@ import {
   dismissBlockedDomain,
   rearmBlockedDomain,
   recheckBlockedDomain,
+  rejudgeBlockedDomain,
+  restoreBlockedDomainInboxes,
+  undoBlockedDomainWriteOff,
   deleteBlockedDomainJob,
   ApiClientError,
 } from "@/lib/api-client";
@@ -75,9 +78,9 @@ export function BlockedDomainsTool() {
   useEffect(() => {
     if (pollRef.current) clearTimeout(pollRef.current);
     if (!view) return;
-    const active = view.jobs.some(
-      (j) => j.status === "working" || j.status === "deleting"
-    );
+    const active =
+      view.jobs.some((j) => j.status === "working" || j.status === "deleting") ||
+      view.rejudgeAll?.running === true;
     pollRef.current = setTimeout(
       () => void refresh(),
       active ? POLL_ACTIVE_MS : POLL_IDLE_MS
@@ -177,6 +180,20 @@ export function BlockedDomainsTool() {
   const watchedCount = watchedJobs(jobs).length;
   const recheck = (id: string, action: "now" | "on" | "off") =>
     withBusy(id, () => recheckBlockedDomain(id, action));
+  const rejudge = (id: string) => withBusy(id, () => rejudgeBlockedDomain({ jobId: id }));
+  const restore = (id: string, dailyLimit: number) =>
+    withBusy(id, () => restoreBlockedDomainInboxes(id, dailyLimit));
+  const undo = (id: string) => withBusy(id, () => undoBlockedDomainWriteOff(id));
+  const rejudgeAll = view?.rejudgeAll;
+  async function rejudgeAllNow() {
+    setError(null);
+    try {
+      await rejudgeBlockedDomain({ all: true });
+    } catch (err) {
+      setError(errMessage(err));
+    }
+    await refresh();
+  }
 
   return (
     <div className="space-y-5">
@@ -429,6 +446,28 @@ export function BlockedDomainsTool() {
         </div>
       )}
 
+      {stats.total > 0 && (
+        <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+          <button
+            type="button"
+            className="pv-btn-ghost disabled:opacity-50"
+            disabled={rejudgeAll?.running}
+            onClick={rejudgeAllNow}
+            title="Read every domain again over a wider window and judge it on the current rules. Changes nothing by itself."
+          >
+            {rejudgeAll?.running ? <Spinner size={14} /> : <GaugeIcon size={14} />}
+            Re-judge all
+          </button>
+          <span data-rejudge-all={rejudgeAll?.running ? "running" : rejudgeAll ? "done" : "idle"}>
+            {rejudgeAll?.running
+              ? `Re-judging ${formatNumber(rejudgeAll.done)} of ${formatNumber(rejudgeAll.total)}…`
+              : rejudgeAll
+                ? `Every domain re-judged (${formatNumber(rejudgeAll.total)}). Each card now says what the current rules make of it.`
+                : "Reads every domain again over a window reaching back to before it was flagged, and judges it on the current rules. Changes nothing by itself; Restore and Undo write-off are on each card."}
+          </span>
+        </div>
+      )}
+
       {error && (
         <div className="flex items-start gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
           <AlertIcon size={16} className="mt-0.5 shrink-0" />
@@ -451,6 +490,9 @@ export function BlockedDomainsTool() {
               onRearm={(id) => withBusy(id, () => rearmBlockedDomain(id))}
               onRemove={(id) => withBusy(id, () => deleteBlockedDomainJob(id))}
               onRecheck={recheck}
+              onRejudge={rejudge}
+              onRestore={restore}
+              onUndoWriteOff={undo}
             />
           ))}
         </div>
@@ -493,6 +535,9 @@ export function BlockedDomainsTool() {
               onRearm={(id) => withBusy(id, () => rearmBlockedDomain(id))}
               onRemove={(id) => withBusy(id, () => deleteBlockedDomainJob(id))}
               onRecheck={recheck}
+              onRejudge={rejudge}
+              onRestore={restore}
+              onUndoWriteOff={undo}
             />
           ))}
           </div>

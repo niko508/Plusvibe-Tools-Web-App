@@ -47,8 +47,15 @@ import {
   listInboxes,
   listWorkspaces,
   quarantineInboxes,
+  resumeInboxes,
   type Inbox,
 } from "@/lib/blocked-domains/api";
+import {
+  normalizeLimit,
+  planRejudge,
+  rejudgeWindow,
+  suggestLimit,
+} from "@/lib/blocked-domains/rejudge";
 import {
   aggregateDomain,
   indexStats,
@@ -71,6 +78,7 @@ import type {
   PerformanceOutcome,
   PhaseState,
   RecheckRun,
+  RejudgedInbox,
   SheetOutcome,
 } from "@/lib/jobs/blocked-domains-types";
 import { MAX_RECHECK_RUNS, MAX_STORED_ERRORS } from "@/lib/jobs/blocked-domains-types";
@@ -1278,6 +1286,271 @@ export async function dismissJob(id: string): Promise<boolean> {
  * Only for records that have finished. Re-arming something still in flight or
  * awaiting confirmation would let a second run start alongside the first.
  */
+// --- Re-judging ------------------------------------------------------------
+//
+// Records handled under earlier rules — the per-sent ratio, or before the
+// provider was captured — carry decisions the current rules would not make.
+// Re-judging reads a window that reaches back to before the domain was
+// flagged, so inboxes stopped since still have their real sends in view, and
+// applies the current rules to it. It decides nothing itself: Restore and
+// Undo write-off are separate actions a person takes after seeing the figures.
+
+const rejudging = new Set<string>();
+let rejudgeAllState: { running: boolean; total: number; done: number; startedAt: number } | undefined;
+
+export function rejudgeAllStatus() {
+  return rejudgeAllState;
+}
+
+const lower = (s: string) => s.trim().toLowerCase();
+
+export async function rejudgeJob(id: string): Promise<boolean> {
+  await loadOnce();
+  const rec = records.get(id);
+  if (!rec || !canRecheck(rec) || rejudging.has(id)) return false;
+  const apiKey = serverApiKey();
+  if (!apiKey) {
+    pushError(rec, "PLUSVIBE_API_KEY is not set, so the domain could not be re-judged.");
+    await persist(id);
+    return false;
+  }
+  rejudging.add(id);
+  try {
+    const settings = await loadSettings();
+
+    // --- the inboxes, as they are now ------------------------------------
+    let workspaceId = rec.workspaceId;
+    if (!workspaceId) {
+      const loc = await locate(apiKey, rec);
+      if (!loc.workspaceId) {
+        pushError(rec, `Could not find ${rec.domain}'s inboxes in any workspace, so it was not re-judged.`);
+        await persist(id);
+        return false;
+      }
+      workspaceId = loc.workspaceId;
+      rec.workspaceId = workspaceId;
+      rec.workspaceName = loc.workspaceName ?? undefined;
+    }
+    const all = await listInboxes(apiKey, workspaceId);
+    const onDomain = all.filter((i) => inboxIsOnDomain(i.email, rec.domain));
+    rec.inboxesFound = onDomain.length;
+    rec.inboxesActive = onDomain.filter(isSending).length;
+    rec.providers = countProviders(onDomain);
+    await refreshDomainHost(rec);
+
+    // --- the wider window --------------------------------------------------
+    const w = rejudgeWindow(rec.createdAt, Date.now());
+    const range = { start: toApiDate(new Date(w.start)), end: toApiDate(new Date(w.end)) };
+    let source: "bulk" | "per-inbox" | "unavailable" = "unavailable";
+    let rows: Awaited<ReturnType<typeof fetchInboxStats>>["rows"] = [];
+    if (onDomain.length > 0) {
+      const got = await fetchInboxStats(apiKey, workspaceId, onDomain, range);
+      rows = got.rows;
+      source = got.source;
+      for (const e of got.errors) pushError(rec, e);
+      if (rows.length === 0) source = "unavailable";
+    }
+    const plan = planQuarantine(onDomain, indexStats(rows), settings.minReplyRateOoo);
+    const domain =
+      rows.length > 0
+        ? aggregateDomain(rows, settings.minDomainReplyRateOoo)
+        : unknownDomain(onDomain.length);
+
+    const stopped = new Set((rec.quarantinedEmails ?? []).map(lower));
+    const byEmail = new Map(onDomain.map((i) => [lower(i.email), i]));
+    const inboxes: RejudgedInbox[] = plan.assessments.map((a) => {
+      const live = byEmail.get(lower(a.email));
+      return {
+        ...a,
+        stoppedByUs: stopped.has(lower(a.email)),
+        sendingNow: live ? isSending(live) : false,
+      };
+    });
+    const googlePath = isGoogleDomain(rec.providers);
+    const verdicts = planRejudge({ inboxes, domain, googlePath });
+
+    rec.rejudge = {
+      at: Date.now(),
+      ...range,
+      threshold: settings.minReplyRateOoo,
+      domainThreshold: settings.minDomainReplyRateOoo,
+      source,
+      domain,
+      inboxes,
+      ...verdicts,
+      googlePath,
+      suggestedLimit: suggestLimit(all),
+    };
+    rec.updatedAt = Date.now();
+    await persist(id);
+    return true;
+  } catch (err) {
+    pushError(rec, `Re-judging failed: ${msg(err)}`);
+    rec.updatedAt = Date.now();
+    await persist(id);
+    return false;
+  } finally {
+    rejudging.delete(id);
+  }
+}
+
+/**
+ * Re-judges every record that can be, one after another in the background.
+ * Sequential on purpose: each one lists a whole workspace and reads stats,
+ * and the rate limiter is shared with everything else the app is doing.
+ */
+export async function rejudgeAll(): Promise<{ started: boolean; total: number }> {
+  await loadOnce();
+  if (rejudgeAllState?.running) return { started: false, total: rejudgeAllState.total };
+  const ids = [...records.values()]
+    .filter((r) => canRecheck(r))
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map((r) => r.id);
+  rejudgeAllState = { running: true, total: ids.length, done: 0, startedAt: Date.now() };
+  void (async () => {
+    for (const id of ids) {
+      try {
+        await rejudgeJob(id);
+      } catch {
+        // recorded on the job
+      }
+      if (rejudgeAllState) rejudgeAllState.done += 1;
+    }
+    if (rejudgeAllState) rejudgeAllState.running = false;
+  })();
+  return { started: true, total: ids.length };
+}
+
+/**
+ * Turns the restorable inboxes back on at the given daily limit.
+ *
+ * Only ever the ones the last re-judgement marked restorable — stopped by
+ * this automation, and clearing the bar on the wider window. The record is
+ * brought back in line: they leave the quarantined list, so a later Delete
+ * cannot take them, and the counts on the card follow.
+ */
+export async function restoreInboxes(
+  id: string,
+  rawLimit: unknown
+): Promise<{ ok: boolean; restored: number; error?: string }> {
+  await loadOnce();
+  const rec = records.get(id);
+  if (!rec || !canRecheck(rec)) return { ok: false, restored: 0, error: "Job not found, or mid-run." };
+  const dailyLimit = normalizeLimit(rawLimit);
+  if (dailyLimit === null) return { ok: false, restored: 0, error: "The daily limit must be a whole number from 1 to 500." };
+  const r = rec.rejudge;
+  if (!r || r.restorable.length === 0) {
+    return { ok: false, restored: 0, error: "Nothing to restore — re-judge the domain first." };
+  }
+  const apiKey = serverApiKey();
+  if (!apiKey || !rec.workspaceId) return { ok: false, restored: 0, error: "No API key or workspace." };
+
+  const want = new Set(r.restorable.map(lower));
+  const targets = r.inboxes.filter((i) => want.has(lower(i.email)));
+  const q = await resumeInboxes(apiKey, rec.workspaceId, targets.map((i) => i.id), dailyLimit);
+  const run = { at: Date.now(), emails: targets.map((i) => i.email), dailyLimit } as {
+    at: number; emails: string[]; dailyLimit: number; error?: string;
+  };
+  if (q.errors.length > 0) {
+    run.error = q.errors.join("; ");
+    for (const e of q.errors) pushError(rec, `Could not fully restore: ${e}`);
+  }
+  rec.restores = [run, ...(rec.restores ?? [])];
+
+  // Only a landed limit counts as restored. Warmup failing on its own leaves
+  // the inbox sending, which is the half that matters for the record.
+  if (q.sendingStopped) {
+    const n = targets.length;
+    rec.quarantinedEmails = (rec.quarantinedEmails ?? []).filter((e) => !want.has(lower(e)));
+    rec.inboxesQuarantined = Math.max(0, rec.inboxesQuarantined - n);
+    rec.inboxesActive = (rec.inboxesActive ?? 0) + n;
+    rec.inboxesKept = (rec.inboxesKept ?? 0) + n;
+    const held = quarantinedInboxes.get(id);
+    if (held) quarantinedInboxes.set(id, held.filter((i) => !want.has(lower(i.email))));
+    for (const i of r.inboxes) {
+      if (want.has(lower(i.email))) {
+        i.stoppedByUs = false;
+        i.sendingNow = true;
+      }
+    }
+    r.restorable = [];
+    // A deletion that was waiting on inboxes now sending has nothing left to
+    // take: it is closed rather than left offering to delete nothing.
+    if (rec.status === "awaiting_confirmation" && (rec.quarantinedEmails ?? []).length === 0) {
+      rec.status = "done";
+      rec.phase = "finished";
+      rec.phaseStates.deleting = "skipped";
+    }
+  }
+  rec.updatedAt = Date.now();
+  await persist(id);
+  return { ok: q.sendingStopped, restored: q.sendingStopped ? targets.length : 0, error: run.error };
+}
+
+/**
+ * Puts a written-off domain's Status back to what it was.
+ *
+ * The tenant row and any Google inbox rows cannot be taken off their tabs
+ * safely — they are append-only lists other people work from — so those are
+ * named for a person to remove. The record goes back to "kept" and is
+ * watched again.
+ */
+export async function undoWriteOff(id: string): Promise<{ ok: boolean; error?: string }> {
+  await loadOnce();
+  const rec = records.get(id);
+  if (!rec || !canRecheck(rec)) return { ok: false, error: "Job not found, or mid-run." };
+  const s = rec.sheet;
+  if (!s?.statusUpdated) return { ok: false, error: "The Domains row was not changed by this run, so there is nothing to undo." };
+  const sheetId = envSpreadsheetId();
+  if (!sheetId || !isSheetWritingConfigured()) return { ok: false, error: "The sheet is not configured for writing." };
+
+  try {
+    const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
+    const header = grid[0] ?? [];
+    const iStatus = headerIndex(header, COL_STATUS);
+    const hit = findDomainRow(grid, rec.domain, {
+      domain: headerIndex(header, COL_DOMAIN),
+      status: iStatus,
+      tenantEmail: headerIndex(header, COL_TENANT_EMAIL),
+      tenantSource: headerIndex(header, COL_TENANT_SOURCE),
+      client: headerIndex(header, "Client"),
+      domainHost: headerIndex(header, COL_DOMAIN_HOST),
+    });
+    if (!hit.row || iStatus < 0) {
+      return { ok: false, error: `${rec.domain} is no longer in the "${DEFAULT_SHEET_TAB}" tab, so its status could not be put back.` };
+    }
+    const to = s.previousStatus ?? "";
+    await batchUpdateCells(sheetId, [
+      { range: `${quoteTab(DEFAULT_SHEET_TAB)}!${columnLetter(iStatus)}${hit.row.rowNumber}`, value: to },
+    ]);
+    s.statusUpdated = false;
+    s.revertedTo = to;
+    s.revertedAt = Date.now();
+
+    const cleanup: string[] = [];
+    if (s.tenantQueued && s.tenantEmail) {
+      cleanup.push(`remove ${s.tenantEmail} from "${CANCEL_TAB}"`);
+    }
+    if ((s.googleQueued?.length ?? 0) > 0) {
+      cleanup.push(`remove ${s.googleQueued!.join(", ")} from "${GOOGLE_CANCEL_TAB}"`);
+    }
+    s.manualCleanup = cleanup.length > 0 ? `By hand: ${cleanup.join("; ")}.` : undefined;
+
+    rec.status = "kept";
+    rec.phase = "finished";
+    rec.phaseStates.deleting = "skipped";
+    quarantinedInboxes.delete(id);
+    await scheduleRecheck(rec);
+    rec.updatedAt = Date.now();
+    await persist(id);
+    return { ok: true };
+  } catch (err) {
+    pushError(rec, `Undo write-off failed: ${msg(err)}`);
+    await persist(id);
+    return { ok: false, error: msg(err) };
+  }
+}
+
 export async function rearmJob(id: string): Promise<boolean> {
   await loadOnce();
   const rec = records.get(id);

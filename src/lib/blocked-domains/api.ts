@@ -250,6 +250,53 @@ export async function quarantineInboxes(
   return result;
 }
 
+/**
+ * Turns stopped inboxes back on: daily limit up, warmup active.
+ *
+ * The exact reverse of quarantineInboxes, and attempted in the same two
+ * independent halves, so a warmup call that fails still leaves the limit
+ * restored rather than the inbox half-on with nothing reported.
+ */
+export async function resumeInboxes(
+  apiKey: string,
+  workspaceId: string,
+  ids: string[],
+  dailyLimit: number
+): Promise<QuarantineResult> {
+  const result: QuarantineResult = {
+    sendingStopped: false,
+    warmupStopped: false,
+    errors: [],
+  };
+  if (ids.length === 0) return result;
+
+  try {
+    await acquireSlot();
+    await plusvibePut({
+      apiKey,
+      path: "/account/bulk-update",
+      body: { workspace_id: workspaceId, ids, daily_limit: dailyLimit },
+    });
+    result.sendingStopped = true;
+  } catch (err) {
+    result.errors.push(`daily limit: ${err instanceof Error ? err.message : "failed"}`);
+  }
+
+  try {
+    await acquireSlot();
+    await plusvibePatch({
+      apiKey,
+      path: "/account/bulk-update-warmup",
+      body: { workspace_id: workspaceId, ids, warmup_status: "ACTIVE" },
+    });
+    result.warmupStopped = true;
+  } catch (err) {
+    result.errors.push(`warmup: ${err instanceof Error ? err.message : "failed"}`);
+  }
+
+  return result;
+}
+
 /** Deletes one inbox. Plusvibe deletes by address, not id. */
 export async function deleteInbox(
   apiKey: string,

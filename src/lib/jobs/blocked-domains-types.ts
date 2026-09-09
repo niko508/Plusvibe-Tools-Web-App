@@ -129,6 +129,54 @@ export interface SheetOutcome {
   googleAlreadyQueued?: string[];
   /** Set when the sheet could not be read or written at all. */
   error?: string;
+  /** Undo write-off: the Status the row was put back to, and when. */
+  revertedTo?: string;
+  revertedAt?: number;
+  /** Something the automation could not undo itself and a person must. */
+  manualCleanup?: string;
+}
+
+/** One inbox as re-judged on the wider window. */
+export interface RejudgedInbox extends InboxAssessment {
+  /** This automation stopped it. */
+  stoppedByUs: boolean;
+  /** Daily limit above 0 when re-judged. */
+  sendingNow: boolean;
+}
+
+/**
+ * What the current rules say about a domain handled under earlier ones, read
+ * over a window that reaches back to before it was flagged. Decides nothing:
+ * Restore and Undo write-off are separate, explicit actions.
+ */
+export interface RejudgeOutcome {
+  at: number;
+  /** The window read, as YYYY-MM-DD. */
+  start: string;
+  end: string;
+  threshold: number;
+  domainThreshold: number;
+  source: "bulk" | "per-inbox" | "unavailable";
+  domain: DomainPerformance;
+  inboxes: RejudgedInbox[];
+  /** Stopped by us, but clear the bar on the wider window. */
+  restorable: string[];
+  /** Under the bar on the wider window. */
+  stillUnder: string[];
+  /** Whether the current rules would write the domain off. */
+  wouldWriteOff: boolean;
+  googlePath: boolean;
+  /** A daily limit to offer for restoring, from the workspace's sending inboxes. */
+  suggestedLimit?: number;
+}
+
+/** Inboxes turned back on by a person, after re-judging. */
+export interface RestoreRun {
+  at: number;
+  emails: string[];
+  dailyLimit: number;
+  /** Set when either half (limit or warmup) did not land for some inbox. */
+  error?: string;
 }
 
 export interface PerformanceOutcome {
@@ -261,12 +309,19 @@ export interface BlockedDomainJob {
    */
   recheck?: RecheckState;
 
+  /** The last re-judgement, when someone asked for one. */
+  rejudge?: RejudgeOutcome;
+  /** Inboxes turned back on after re-judging, newest first. */
+  restores?: RestoreRun[];
+
   errors: string[];
   errorsTruncated?: boolean;
 }
 
 export interface BlockedDomainsView {
   jobs: BlockedDomainJob[];
+  /** A "Re-judge all" in progress, or the last one. */
+  rejudgeAll?: { running: boolean; total: number; done: number; startedAt: number };
   settings: {
     autoDelete: boolean;
     checkPerformance: boolean;

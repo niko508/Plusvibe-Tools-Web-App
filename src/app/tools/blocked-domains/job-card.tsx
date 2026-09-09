@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   BlockedDomainJob,
   BlockedDomainStatus,
@@ -19,6 +19,7 @@ import {
   RefreshIcon,
 } from "@/components/icons";
 import { describeNext } from "@/lib/blocked-domains/recheck";
+import { normalizeLimit } from "@/lib/blocked-domains/rejudge";
 import { bucketOf, describeProviders, PROVIDER_LABELS } from "@/lib/plusvibe-providers";
 import { GOOGLE_CANCEL_TAB } from "@/lib/blocked-domains/sheet-plan";
 
@@ -46,6 +47,9 @@ export function JobCard({
   onRearm,
   onRemove,
   onRecheck,
+  onRejudge,
+  onRestore,
+  onUndoWriteOff,
   busy,
 }: {
   job: BlockedDomainJob;
@@ -54,9 +58,19 @@ export function JobCard({
   onRearm: (id: string) => void | Promise<void>;
   onRemove: (id: string) => void | Promise<void>;
   onRecheck: (id: string, action: "now" | "on" | "off") => void | Promise<void>;
+  onRejudge: (id: string) => void | Promise<void>;
+  onRestore: (id: string, dailyLimit: number) => void | Promise<void>;
+  onUndoWriteOff: (id: string) => void | Promise<void>;
   busy: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const rj = job.rejudge;
+  // The limit to restore at: prefilled from what the workspace's sending
+  // inboxes use, editable, and re-seeded whenever a new re-judgement lands.
+  const [limit, setLimit] = useState(String(rj?.suggestedLimit ?? 30));
+  useEffect(() => {
+    if (rj?.suggestedLimit !== undefined) setLimit(String(rj.suggestedLimit));
+  }, [rj?.at, rj?.suggestedLimit]);
   const status = STATUS_META[job.status] ?? STATUS_META.error;
   const active = job.status === "working" || job.status === "deleting";
   const awaiting = job.status === "awaiting_confirmation";
@@ -79,9 +93,15 @@ export function JobCard({
   // total would claim a fully-stopped domain is still sending.
   const activeCount = job.inboxesActive ?? Math.max(0, job.inboxesFound - job.inboxesQuarantined);
   const sendingLabel = `${formatNumber(activeCount)}/${formatNumber(job.inboxesFound)} sending`;
-  // How many inboxes this run is actually acting on. Records from before the
-  // performance check existed acted on every inbox found.
-  const stopCount = perf ? perf.inboxes.filter((i) => i.decision === "stop").length : job.inboxesFound;
+  // How many inboxes this run is actually acting on: the quarantined list is
+  // kept current by every run, repeat check and restore, so it is what a
+  // Delete would take. Records from before it was kept fall back to the
+  // assessment, and before that to every inbox found.
+  const stopCount = job.quarantinedEmails
+    ? job.quarantinedEmails.length
+    : perf
+      ? perf.inboxes.filter((i) => i.decision === "stop").length
+      : job.inboxesFound;
   // Both halves of the quarantine have to have landed before the card is
   // allowed to say the domain is stopped.
   const fullyStopped = job.sendingStopped === true && job.warmupStopped === true;
@@ -375,6 +395,87 @@ export function JobCard({
         </div>
       )}
 
+      {rj && (
+        <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 p-3 text-xs" data-rejudge>
+          <p className="font-medium">
+            Re-judged on the current rules over {rj.start} … {rj.end}
+          </p>
+          <p className="mt-1 text-muted-foreground">
+            Domain at{" "}
+            <span className="font-medium text-foreground">{rj.domain.replyRateOoo}% with OOO</span>
+            {rj.domain.basis === "counts" &&
+              ` (${formatNumber(rj.domain.replies + rj.domain.oooReplies)} replies from ${formatNumber(rj.domain.contacted)} contacted)`}
+            {" — "}
+            {rj.googlePath
+              ? rj.wouldWriteOff
+                ? "every inbox is burned, so it would be written off."
+                : `${formatNumber(rj.inboxes.length - rj.stillUnder.length)} of ${formatNumber(rj.inboxes.length)} inboxes clear the ${rj.threshold}% bar, so it would be kept.`
+              : rj.wouldWriteOff
+                ? `under the ${rj.domainThreshold}% domain bar, so it would be written off.`
+                : `at or above the ${rj.domainThreshold}% domain bar, so it would be kept.`}{" "}
+            {rj.restorable.length > 0
+              ? `${formatNumber(rj.restorable.length)} of the inboxes this automation stopped clear${rj.restorable.length === 1 ? "s" : ""} the ${rj.threshold}% inbox bar on this window and can be turned back on.`
+              : "None of the inboxes this automation stopped clears the inbox bar on this window."}
+            {rj.stillUnder.length > 0 &&
+              ` ${formatNumber(rj.stillUnder.length)} ${rj.stillUnder.length === 1 ? "is" : "are"} under it.`}
+          </p>
+          {rj.source === "unavailable" && (
+            <p className="mt-1 text-warning">
+              No figures came back for this window, so nothing here should be acted on.
+            </p>
+          )}
+          {rj.restorable.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="pv-btn-primary disabled:opacity-50"
+                disabled={busy || normalizeLimit(limit) === null}
+                onClick={() => onRestore(job.id, Number(limit))}
+                title="Daily limit back up and warmup on, for these inboxes only"
+              >
+                {busy ? <Spinner /> : <RefreshIcon size={16} />}
+                Restore {formatNumber(rj.restorable.length)} inbox{rj.restorable.length === 1 ? "" : "es"}
+              </button>
+              <label className="flex items-center gap-1.5 text-muted-foreground">
+                at
+                <input
+                  type="number"
+                  className="pv-input w-20 py-1 text-xs"
+                  min={1}
+                  max={500}
+                  step={1}
+                  value={limit}
+                  onChange={(e) => setLimit(e.target.value)}
+                  aria-label="Daily limit to restore to"
+                />
+                a day
+              </label>
+            </div>
+          )}
+          {sheet?.statusUpdated && !rj.wouldWriteOff && (
+            <div className="mt-2">
+              <button
+                type="button"
+                className="pv-btn-ghost disabled:opacity-50"
+                disabled={busy}
+                onClick={() => onUndoWriteOff(job.id)}
+                title="Put the Domains row's Status back to what it was, and keep the domain"
+              >
+                Undo write-off
+              </button>
+            </div>
+          )}
+          {sheet?.manualCleanup && <p className="mt-2 text-warning">{sheet.manualCleanup}</p>}
+          {job.restores?.[0] && (
+            <p className="mt-2 text-muted-foreground">
+              Restored {formatNumber(job.restores[0].emails.length)} at {job.restores[0].dailyLimit} a day{" "}
+              {relativeTime(job.restores[0].at)}: {job.restores[0].emails.join(", ")}
+              {job.restores[0].error && ` — ${job.restores[0].error}`}
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="mt-4 flex flex-wrap items-center gap-2">
         {awaiting && (
           <>
@@ -436,6 +537,19 @@ export function JobCard({
               {recheck.enabled ? "Stop watching" : "Watch again"}
             </button>
           </>
+        )}
+
+        {!active && (
+          <button
+            type="button"
+            className="pv-btn-ghost disabled:opacity-50"
+            disabled={busy}
+            onClick={() => onRejudge(job.id)}
+            title="Read a wider window — back to before it was flagged — and judge it on the current rules. Changes nothing by itself."
+          >
+            {busy ? <Spinner /> : <GaugeIcon size={16} />}
+            Re-judge
+          </button>
         )}
 
         {/* Available on every card, including one waiting for confirmation —
@@ -538,6 +652,32 @@ export function JobCard({
               )}
             </>
           )}
+          {rj && rj.inboxes.length > 0 && (
+            <div className="space-y-1 pt-1">
+              <span className="text-muted-foreground">
+                Re-judged over {rj.start} … {rj.end}, at {rj.threshold}%+ with OOO:
+              </span>
+              {rj.inboxes.map((i) => (
+                <div key={`rj-${i.id || i.email}`} className="flex flex-wrap items-baseline gap-x-2">
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[11px] ${
+                      i.decision === "keep" ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {i.decision === "keep" ? "clears the bar" : "under the bar"}
+                  </span>
+                  <span className="break-all font-mono">{i.email}</span>
+                  <span className="text-muted-foreground">
+                    {i.stoppedByUs ? "stopped by this automation" : i.sendingNow ? "sending" : "stopped, not by this automation"}
+                    {i.replyRateOoo !== undefined &&
+                      ` · ${i.replyRateOoo}% with OOO${
+                        i.contacted ? ` · ${formatNumber((i.replies ?? 0) + (i.oooReplies ?? 0))} from ${formatNumber(i.contacted)} contacted` : ""
+                      } · ${formatNumber(i.sent ?? 0)} sent`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
           {job.bounceReason && (
             <Detail label="Bounce reason" value={job.bounceReason} />
           )}
@@ -569,6 +709,8 @@ export function JobCard({
                 value={
                   sheet.statusUpdated
                     ? `row ${sheet.domainRow} · ${sheet.previousStatus || "(blank)"} → Not Active`
+                    : sheet.revertedTo !== undefined
+                      ? `row ${sheet.domainRow} · Not Active → ${sheet.revertedTo || "(blank)"} (put back ${relativeTime(sheet.revertedAt ?? 0)})`
                     : sheet.error ||
                       (sheet.googlePath && job.status === "kept"
                         ? "left alone — Not Active once every inbox is burned"
