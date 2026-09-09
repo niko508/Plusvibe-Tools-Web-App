@@ -56,6 +56,7 @@ import {
   rejudgeWindow,
   suggestLimit,
 } from "@/lib/blocked-domains/rejudge";
+import { wasWrittenOff } from "@/lib/blocked-domains/stats";
 import {
   aggregateDomain,
   indexStats,
@@ -424,7 +425,7 @@ async function runLocateAndQuarantine(id: string) {
         rec.phaseStates.deleting = "skipped";
         rec.status = "kept";
         rec.phase = "finished";
-        await scheduleRecheck(rec);
+        if (!(await autoDeleteStopped(rec, settings))) await scheduleRecheck(rec);
         rec.updatedAt = Date.now();
         await persist(id);
         return;
@@ -436,7 +437,7 @@ async function runLocateAndQuarantine(id: string) {
       rec.phase = "finished";
       // A kept domain is exactly the case worth watching: it is flagged, and
       // its inboxes are the likeliest to fall under the bar next week.
-      await scheduleRecheck(rec);
+      if (!(await autoDeleteStopped(rec, settings))) await scheduleRecheck(rec);
       rec.updatedAt = Date.now();
       await persist(id);
       return;
@@ -493,6 +494,42 @@ async function runLocateAndQuarantine(id: string) {
 
 function emptySheet(): SheetOutcome {
   return { statusUpdated: false, tenantQueued: false };
+}
+
+/**
+ * With Auto-delete on, every inbox the automation stops is deleted as soon as
+ * it is stopped — on the first pass and on every repeat check, kept domains
+ * included. This is that hand-off for the paths that don't write the domain
+ * off (those hand off to deletion themselves).
+ *
+ * A domain someone chose to keep ("Keep them") is left alone: that was a
+ * decision about its inboxes, and a later check must not quietly reverse it.
+ * A kept domain stays kept afterwards — losing its dead inboxes is not a
+ * write-off. Returns true when a deletion ran, in which case the schedule has
+ * already been dealt with.
+ */
+async function autoDeleteStopped(
+  rec: BlockedDomainJob,
+  settings: { autoDelete: boolean }
+): Promise<boolean> {
+  if (!settings.autoDelete) return false;
+  if ((rec.quarantinedEmails ?? []).length === 0) return false;
+  if (rec.status === "dismissed" || rec.status === "error") return false;
+  // runDelete runs the sheet step first when it hasn't happened, which would
+  // be a write-off; a run that never got that far is not auto-cleaned.
+  if (rec.phaseStates.sheet === "pending" || rec.phaseStates.sheet === "waiting") return false;
+
+  const wasKept = rec.status === "kept";
+  const errorsBefore = rec.errors.length;
+  rec.autoDeleted = true;
+  rec.confirmedAt = Date.now();
+  await runDelete(rec.id);
+  if (wasKept && rec.errors.length === errorsBefore) {
+    rec.status = "kept";
+    rec.phase = "finished";
+    await persist(rec.id);
+  }
+  return true;
 }
 
 /**
@@ -847,10 +884,13 @@ async function runDelete(id: string) {
     }
   }
 
+  const gone = new Set<string>();
+  const deletedBefore = rec.inboxesDeleted;
   for (const inbox of inboxes) {
     try {
       await deleteInbox(apiKey, rec.workspaceId, inbox.email);
       rec.inboxesDeleted += 1;
+      gone.add(lower(inbox.email));
     } catch (err) {
       pushError(rec, `${inbox.email}: ${msg(err)}`);
     }
@@ -860,11 +900,17 @@ async function runDelete(id: string) {
     }
   }
   quarantinedInboxes.delete(id);
+  // The quarantined list is "stopped and still there": what was deleted
+  // leaves it, so nothing offers to delete it a second time.
+  rec.quarantinedEmails = (rec.quarantinedEmails ?? []).filter((e) => !gone.has(lower(e)));
   // `inboxesFound` means "on the domain as of the last look", so the ones just
-  // deleted are no longer among them.
-  rec.inboxesFound = Math.max(0, rec.inboxesFound - rec.inboxesDeleted);
-  rec.phaseStates.deleting =
-    rec.inboxesDeleted === inboxes.length ? "done" : "error";
+  // deleted are no longer among them. THIS run's count, not the record's
+  // total: a record can delete more than once (a kept domain's stragglers,
+  // Auto-delete on a repeat check), and subtracting the total again would
+  // count the earlier deletions twice.
+  const deletedNow = rec.inboxesDeleted - deletedBefore;
+  rec.inboxesFound = Math.max(0, rec.inboxesFound - deletedNow);
+  rec.phaseStates.deleting = deletedNow === inboxes.length ? "done" : "error";
 
   finish(rec);
   // Inboxes that were kept are still sending, so the domain stays watched;
@@ -1047,11 +1093,14 @@ async function refreshDomainHost(rec: BlockedDomainJob) {
 /** Arms the repeat checks for a record, if there is anything left to watch. */
 async function scheduleRecheck(rec: BlockedDomainJob) {
   const settings = await loadSettings();
-  const writtenOff = rec.status !== "kept";
+  // `inboxesFound` is already net of deletions — runDelete takes them off as
+  // it goes — so it is used as is. Subtracting the total deleted again, as
+  // this once did, read a domain with survivors as empty after any deletion
+  // and ended its schedule while inboxes were still sending.
   const end = endOfTheLine({
-    inboxesFound: Math.max(0, rec.inboxesFound - rec.inboxesDeleted),
+    inboxesFound: rec.inboxesFound,
     keptInboxes: rec.inboxesKept ?? 0,
-    writtenOff,
+    writtenOff: wasWrittenOff(rec),
   });
   const existing = rec.recheck;
   if (end.reason) {
@@ -1150,7 +1199,9 @@ export async function runRecheck(
     // A domain that has now fallen under its bar gets written off — once. On
     // the Google path the bar is "every inbox burned": each check lists the
     // newly burned ones, and the domain goes Not Active when none is left.
-    const alreadyWrittenOff = rec.status !== "kept";
+    // From the sheet outcome, not the status: a domain put back by Undo is
+    // not written off, whatever else is going on with it.
+    const alreadyWrittenOff = wasWrittenOff(rec);
     let wroteOff = false;
     if (!alreadyWrittenOff) {
       if (isGoogleDomain(rec.providers)) {
@@ -1162,6 +1213,15 @@ export async function runRecheck(
         wroteOff = true;
       }
     }
+    // Not the write-off moment, but with Auto-delete on, whatever is stopped
+    // goes now — a kept domain's weak inboxes, a straggler on a domain whose
+    // deletion is long done, or a deletion that was waiting when the setting
+    // was switched on.
+    if (!wroteOff && (await autoDeleteStopped(rec, settings))) {
+      // runDelete has scheduled the next check, or ended the schedule.
+      return true;
+    }
+
     if (wroteOff) {
       run.wroteOff = true;
       if (plan.stop.length === 0) {
@@ -1190,7 +1250,7 @@ export async function runRecheck(
     const end = endOfTheLine({
       inboxesFound: inboxes.length,
       keptInboxes: plan.keep.length,
-      writtenOff: rec.status !== "kept",
+      writtenOff: wasWrittenOff(rec),
     });
     if (end.reason) {
       state.enabled = false;
@@ -1557,6 +1617,54 @@ export async function undoWriteOff(id: string): Promise<{ ok: boolean; error?: s
     await persist(id);
     return { ok: false, error: msg(err) };
   }
+}
+
+/**
+ * Deletes the inboxes this automation has stopped on a domain that is not
+ * waiting on a deletion already — a kept domain whose weak inboxes were
+ * stopped, or a written-off one whose deletion was declined or done before a
+ * later check stopped a straggler.
+ *
+ * Only ever the quarantined list. The domain, its sheet row and its sending
+ * inboxes are left alone: a kept domain stays kept.
+ */
+export async function deleteStoppedInboxes(
+  id: string
+): Promise<{ ok: boolean; deleted: number; error?: string }> {
+  await loadOnce();
+  const rec = records.get(id);
+  if (!rec || !canRecheck(rec)) return { ok: false, deleted: 0, error: "Job not found, or mid-run." };
+  if (rec.status === "awaiting_confirmation") {
+    return { ok: false, deleted: 0, error: "This deletion is already waiting — use Delete on the card." };
+  }
+  if (rec.phaseStates.sheet === "pending" || rec.phaseStates.sheet === "waiting") {
+    // runDelete would run the sheet step first, which is a write-off. A run
+    // that never reached the sheet is re-run, not cleaned up piecemeal.
+    return { ok: false, deleted: 0, error: "This run stopped before the sheet step. Allow a re-run instead." };
+  }
+  const stopped = rec.quarantinedEmails ?? [];
+  if (stopped.length === 0) {
+    return { ok: false, deleted: 0, error: "Nothing to delete — this automation has no stopped inboxes left on this domain." };
+  }
+
+  const wasKept = rec.status === "kept";
+  const before = rec.inboxesDeleted;
+  const errorsBefore = rec.errors.length;
+  rec.confirmedAt = Date.now();
+  await runDelete(id);
+  // Losing its dead inboxes is not a write-off: a kept domain stays kept,
+  // unless the deletion itself went wrong.
+  if (wasKept && rec.errors.length === errorsBefore) {
+    rec.status = "kept";
+    rec.updatedAt = Date.now();
+    await persist(id);
+  }
+  const deleted = rec.inboxesDeleted - before;
+  return {
+    ok: deleted > 0,
+    deleted,
+    error: deleted === 0 ? "None of the stopped inboxes could be deleted — see the card." : undefined,
+  };
 }
 
 export async function rearmJob(id: string): Promise<boolean> {

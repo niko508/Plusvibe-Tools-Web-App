@@ -12,6 +12,7 @@ import {
   rejudgeBlockedDomain,
   restoreBlockedDomainInboxes,
   undoBlockedDomainWriteOff,
+  deleteStoppedBlockedDomainInboxes,
   deleteBlockedDomainJob,
   ApiClientError,
 } from "@/lib/api-client";
@@ -184,6 +185,7 @@ export function BlockedDomainsTool() {
   const restore = (id: string, dailyLimit: number) =>
     withBusy(id, () => restoreBlockedDomainInboxes(id, dailyLimit));
   const undo = (id: string) => withBusy(id, () => undoBlockedDomainWriteOff(id));
+  const deleteStopped = (id: string) => withBusy(id, () => deleteStoppedBlockedDomainInboxes(id));
   const rejudgeAll = view?.rejudgeAll;
   async function rejudgeAllNow() {
     setError(null);
@@ -292,7 +294,7 @@ export function BlockedDomainsTool() {
             <h2 className="text-sm font-semibold">Full automation</h2>
             <p className="mt-1 text-xs text-muted-foreground">
               {view?.settings.autoDelete
-                ? "Blocked domains are deleted as they arrive, with no confirmation."
+                ? "Every inbox the automation stops is deleted straight away, with no confirmation — on the first pass and on every repeat check, kept domains included. Only a domain you chose to keep is left alone."
                 : "Sending, warmup and both sheet updates happen straight away; only the deletion waits for you here."}
             </p>
             <button
@@ -493,6 +495,7 @@ export function BlockedDomainsTool() {
               onRejudge={rejudge}
               onRestore={restore}
               onUndoWriteOff={undo}
+              onDeleteStopped={deleteStopped}
             />
           ))}
         </div>
@@ -538,6 +541,7 @@ export function BlockedDomainsTool() {
               onRejudge={rejudge}
               onRestore={restore}
               onUndoWriteOff={undo}
+              onDeleteStopped={deleteStopped}
             />
           ))}
           </div>

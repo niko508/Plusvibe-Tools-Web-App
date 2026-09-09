@@ -1108,6 +1108,14 @@ export function restoreBlockedDomainInboxes(jobId: string, dailyLimit: number, s
   );
 }
 
+/** Delete the inboxes the automation stopped on a domain not already waiting on a deletion. */
+export function deleteStoppedBlockedDomainInboxes(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean; deleted: number; error?: string }>(
+    "/api/jobs/blocked-domains/delete-stopped",
+    { method: "POST", body: { jobId }, signal }
+  );
+}
+
 /** Put a written-off domain's Status back and return it to kept. */
 export function undoBlockedDomainWriteOff(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/blocked-domains/undo-write-off", {

@@ -63,7 +63,10 @@ export function providerKeyOf(job: BlockedDomainJob): string {
 /** Whether the run wrote the domain off in the sheet. */
 export function wasWrittenOff(job: BlockedDomainJob): boolean {
   if (job.status === "kept") return false;
-  if (job.sheet?.statusUpdated) return true;
+  // The sheet outcome is the truth: a row set to Not Active. A Google domain
+  // reaches the sheet step to list its inboxes without being written off,
+  // and an undone write-off clears the flag, so the step alone says nothing.
+  if (job.sheet) return job.sheet.statusUpdated === true;
   // Records from before the sheet outcome was recorded in detail: anything
   // that reached the sheet step and wasn't a kept domain counts.
   return job.phaseStates?.sheet === "done";

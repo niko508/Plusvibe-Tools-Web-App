@@ -50,6 +50,7 @@ export function JobCard({
   onRejudge,
   onRestore,
   onUndoWriteOff,
+  onDeleteStopped,
   busy,
 }: {
   job: BlockedDomainJob;
@@ -61,6 +62,7 @@ export function JobCard({
   onRejudge: (id: string) => void | Promise<void>;
   onRestore: (id: string, dailyLimit: number) => void | Promise<void>;
   onUndoWriteOff: (id: string) => void | Promise<void>;
+  onDeleteStopped: (id: string) => void | Promise<void>;
   busy: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -102,6 +104,11 @@ export function JobCard({
     : perf
       ? perf.inboxes.filter((i) => i.decision === "stop").length
       : job.inboxesFound;
+  // What the run itself stopped, for the lines that describe the run. Stays
+  // put when those inboxes are later restored or deleted.
+  const stoppedByRun = perf
+    ? perf.inboxes.filter((i) => i.decision === "stop").length
+    : job.inboxesFound;
   // Both halves of the quarantine have to have landed before the card is
   // allowed to say the domain is stopped.
   const fullyStopped = job.sendingStopped === true && job.warmupStopped === true;
@@ -122,7 +129,7 @@ export function JobCard({
       if (perf.source === "unavailable") return "no figures — all stopped";
       const kept = job.inboxesKept ?? 0;
       const head = domain ? `domain at ${domain.replyRateOoo}% · ` : "";
-      const tail = `${formatNumber(stopCount)} under ${perf.threshold}%${kept > 0 ? `, ${formatNumber(kept)} still sending` : ""}`;
+      const tail = `${formatNumber(stoppedByRun)} under ${perf.threshold}%${kept > 0 ? `, ${formatNumber(kept)} still sending` : ""}`;
       return `${head}${tail}`;
     }
     if (phase === "sheet" && sheet?.googlePath) {
@@ -140,7 +147,7 @@ export function JobCard({
     if (phase === "quarantining") {
       if (job.phaseStates?.quarantining === "skipped") return "nothing to stop";
       if (job.phaseStates?.quarantining === "pending") return "";
-      if (fullyStopped) return `${formatNumber(stopCount)} stopped`;
+      if (fullyStopped) return `${formatNumber(stoppedByRun)} stopped`;
       const done = [
         job.sendingStopped ? "sending" : null,
         job.warmupStopped ? "warmup" : null,
@@ -340,8 +347,8 @@ export function JobCard({
         <div className="mt-3 rounded-xl border border-success/30 bg-success/5 p-3 text-xs">
           <p className="font-medium text-success">
             The domain was not written off
-            {stopCount > 0 &&
-              ` — but ${formatNumber(stopCount)} of its inboxes ${stopCount === 1 ? "was" : "were"} stopped`}
+            {stoppedByRun > 0 &&
+              ` — but ${formatNumber(stoppedByRun)} of its inboxes ${stoppedByRun === 1 ? "was" : "were"} stopped`}
           </p>
           {sheet?.revertedTo !== undefined && rj ? (
             // Kept by a person after re-judging, not by the run: the figure
@@ -377,8 +384,8 @@ export function JobCard({
                 was not queued to cancel, and nothing was deleted.{" "}
               </>
             )}
-            {stopCount > 0
-              ? `The ${formatNumber(stopCount)} inbox${stopCount === 1 ? "" : "es"} under the ${perf?.threshold ?? 1}% inbox bar had their daily limit set to 0 and warmup switched off${
+            {stoppedByRun > 0
+              ? `The ${formatNumber(stoppedByRun)} inbox${stoppedByRun === 1 ? "" : "es"} under the ${perf?.threshold ?? 1}% inbox bar had their daily limit set to 0 and warmup switched off${
                   sheet?.googlePath && (sheet.googleQueued?.length ?? 0) > 0
                     ? `, and ${formatNumber(sheet.googleQueued!.length)} ${sheet.googleQueued!.length === 1 ? "was" : "were"} added to "${GOOGLE_CANCEL_TAB}"`
                     : ""
@@ -554,6 +561,17 @@ export function JobCard({
               {recheck.enabled ? "Stop watching" : "Watch again"}
             </button>
           </>
+        )}
+
+        {/* A domain not waiting on a deletion can still have dead inboxes on
+            it: stopped by a kept domain's run, or by a later check after the
+            deletion was declined or done. This takes exactly those. */}
+        {!active && !awaiting && stopCount > 0 && (
+          <ArmedDelete
+            count={stopCount}
+            busy={busy}
+            onConfirm={() => onDeleteStopped(job.id)}
+          />
         )}
 
         {!active && (
@@ -771,6 +789,49 @@ export function JobCard({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Two clicks to delete the stopped inboxes: the first arms it, the second
+ * confirms, and it disarms itself after a few seconds. The waiting-for-you
+ * flow already put the person through a confirmation; this one hasn't.
+ */
+function ArmedDelete({
+  count,
+  busy,
+  onConfirm,
+}: {
+  count: number;
+  busy: boolean;
+  onConfirm: () => void | Promise<void>;
+}) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 5000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  return (
+    <button
+      type="button"
+      className={`${armed ? "pv-btn-primary" : "pv-btn-ghost text-danger"} disabled:opacity-50`}
+      disabled={busy}
+      onClick={() => {
+        if (!armed) {
+          setArmed(true);
+          return;
+        }
+        setArmed(false);
+        void onConfirm();
+      }}
+      title="Delete only the inboxes this automation stopped. The domain, its sheet row and its sending inboxes are left alone. Cannot be undone."
+    >
+      {busy ? <Spinner /> : <TrashIcon size={16} />}
+      {armed
+        ? `Really delete ${formatNumber(count)}? Click again`
+        : `Delete ${formatNumber(count)} stopped inbox${count === 1 ? "" : "es"}`}
+    </button>
   );
 }
 

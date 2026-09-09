@@ -38,6 +38,12 @@ eq("a kept domain was not written off", wasWrittenOff(job("a.co", { status: "kep
 eq("a sheet write means written off", wasWrittenOff(job("a.co", host("x"))), true);
 eq("an old record that reached the sheet step counts", wasWrittenOff(job("a.co", { phaseStates: { sheet: "done" } })), true);
 eq("…but one that never did doesn't", wasWrittenOff(job("a.co", { phaseStates: { sheet: "skipped" }, sheet: { statusUpdated: false } })), false);
+// A Google domain reaches the sheet step to list its inboxes without being
+// written off; and a write-off that was undone clears the flag.
+eq("a Google domain that only listed inboxes is not written off",
+  wasWrittenOff(job("a.co", { status: "done", phaseStates: { sheet: "done" }, sheet: { statusUpdated: false, tenantQueued: false, googlePath: true, googleQueued: ["x@a.co"] } })), false);
+eq("an undone write-off is not written off",
+  wasWrittenOff(job("a.co", { status: "awaiting_confirmation", phaseStates: { sheet: "done" }, sheet: { statusUpdated: false, tenantQueued: true, revertedTo: "Warming Up" } })), false);
 
 // --- the breakdowns ------------------------------------------------------------
 const JOBS = [
