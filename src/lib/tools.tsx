@@ -136,6 +136,16 @@ export const TOOLS: Tool[] = [
     Icon: GaugeIcon,
   },
   {
+    slug: "inbox-performance",
+    name: "Inbox Performance Monitoring",
+    tagline: "Compare every sending inbox — in one workspace or across all of them",
+    description:
+      "Break email stats down by sending inbox over any date range — sent volume, reply rates on unique contacts, positive replies and bounces — for one workspace or every workspace at once. Nothing is fetched until you choose what to pull.",
+    status: "active",
+    color: "blue",
+    Icon: MailIcon,
+  },
+  {
     slug: "azure-warmup",
     name: "Azure Start Warmup",
     tagline: "Upload the mailbox export and start warmup as inboxes land",

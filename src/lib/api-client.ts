@@ -526,6 +526,41 @@ export function fetchEmailStats(params: EmailStatsParams, signal?: AbortSignal) 
   );
 }
 
+export interface EmailStatsBulkParams {
+  workspace_id: string;
+  start_date: string;
+  end_date: string;
+  /** Comma-separated, at most 100. Omit for every mailbox in the workspace, paged. */
+  email_acc_ids?: string;
+  include_chart?: boolean;
+  page?: number;
+  limit?: number;
+}
+
+export interface EmailStatsBulkResponse {
+  page?: number;
+  limit?: number;
+  total_accounts?: number;
+  has_more?: boolean;
+  accounts?: Array<Record<string, unknown>>;
+}
+
+/** Stats for every sending mailbox individually, 100 per call. */
+export function fetchEmailStatsBulk(params: EmailStatsBulkParams, signal?: AbortSignal) {
+  const qs = new URLSearchParams({
+    workspace_id: params.workspace_id,
+    start_date: params.start_date,
+    end_date: params.end_date,
+    include_chart: params.include_chart === false ? "false" : "true",
+  });
+  if (params.email_acc_ids) qs.set("email_acc_ids", params.email_acc_ids);
+  if (params.page) qs.set("page", String(params.page));
+  if (params.limit) qs.set("limit", String(params.limit));
+  return request<EmailStatsBulkResponse>(`/api/plusvibe/email-stats-bulk?${qs.toString()}`, {
+    signal,
+  });
+}
+
 // --- Bulk-delete (Remove Inboxes) background jobs ---------------------------
 
 export function startBulkDelete(payload: StartJobPayload, signal?: AbortSignal) {
