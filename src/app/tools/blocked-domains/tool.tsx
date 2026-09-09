@@ -18,6 +18,7 @@ import { EmptyState, Spinner } from "@/components/ui";
 import {
   AlertIcon,
   CheckIcon,
+  ChevronDownIcon,
   ClockIcon,
   CopyIcon,
   FireIcon,
@@ -46,6 +47,7 @@ export function BlockedDomainsTool() {
   const { hasKey, ready } = useApiKey();
 
   const [section, setSection] = useState<Section>("home");
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [view, setView] = useState<BlockedDomainsView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -439,15 +441,31 @@ export function BlockedDomainsTool() {
 
       {rest.length > 0 ? (
         <div className="space-y-3">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-sm font-semibold">
+          {/* Closed by default: the log grows without bound and the cards
+              are tall, so an open history pushes anything waiting for
+              confirmation off the screen. */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <button
+              type="button"
+              className="flex items-center gap-2 text-sm font-semibold"
+              onClick={() => setHistoryOpen((v) => !v)}
+              aria-expanded={historyOpen}
+              aria-controls="blocked-domains-history"
+            >
+              <ChevronDownIcon
+                size={16}
+                className={`transition-transform ${historyOpen ? "" : "-rotate-90"}`}
+              />
               History ({formatNumber(rest.length)})
-            </h2>
+            </button>
             <span className="text-xs text-muted-foreground">
-              Every run is kept. &quot;Allow re-run&quot; lets a domain trigger
-              again without losing its record.
+              {historyOpen
+                ? "Every run is kept. “Allow re-run” lets a domain trigger again without losing its record."
+                : "Every run is kept. Open to see them."}
             </span>
           </div>
+          {historyOpen && (
+          <div id="blocked-domains-history" className="space-y-3">
           {rest.map((job) => (
             <JobCard
               key={job.id}
@@ -460,6 +478,8 @@ export function BlockedDomainsTool() {
               onRecheck={recheck}
             />
           ))}
+          </div>
+          )}
         </div>
       ) : (
         awaiting.length === 0 && (

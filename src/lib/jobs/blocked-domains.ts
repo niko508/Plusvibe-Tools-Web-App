@@ -57,6 +57,7 @@ import {
   nextRunAt,
   startRecheck,
 } from "@/lib/blocked-domains/recheck";
+import { countProviders } from "@/lib/plusvibe-providers";
 import { daysAgo, toApiDate } from "@/lib/format";
 import type {
   BlockedDomainJob,
@@ -311,6 +312,7 @@ async function runLocateAndQuarantine(id: string) {
     rec.workspacesScanned = scanned;
     rec.inboxesFound = inboxes.length;
     rec.inboxesActive = inboxes.filter(isSending).length;
+    rec.providers = countProviders(inboxes);
     if (client || domainHost) {
       rec.sheet = { ...(rec.sheet ?? emptySheet()), client, domainHost };
     }
@@ -948,6 +950,7 @@ export async function runRecheck(
     run.inboxesFound = inboxes.length;
     rec.inboxesFound = inboxes.length;
     rec.inboxesActive = inboxes.filter(isSending).length;
+    rec.providers = countProviders(inboxes);
     run.inboxesActive = rec.inboxesActive;
 
     if (inboxes.length === 0) {

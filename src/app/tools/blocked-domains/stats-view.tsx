@@ -6,9 +6,11 @@ import {
   byTld,
   byHost,
   byHostAndTld,
+  byProvider,
   percent,
   UNKNOWN_HOST,
   UNKNOWN_TLD,
+  UNKNOWN_PROVIDER,
   type Breakdown,
   type BreakdownRow,
 } from "@/lib/blocked-domains/stats";
@@ -34,6 +36,7 @@ export function StatsView({ jobs }: { jobs: BlockedDomainJob[] }) {
   const tld = byTld(jobs);
   const host = byHost(jobs);
   const pair = byHostAndTld(jobs);
+  const provider = byProvider(jobs);
   const distinct = new Set(jobs.map((j) => j.domain)).size;
   const hostsKnown = jobs.filter((j) => j.sheet?.domainHost?.trim()).length;
 
@@ -65,6 +68,12 @@ export function StatsView({ jobs }: { jobs: BlockedDomainJob[] }) {
         what="host"
         breakdown={host}
         intro="The registrar each blocked domain sits with, from the Domain Host column of the Domains sheet."
+      />
+      <BreakdownTable
+        title="By mailbox provider"
+        what="provider"
+        breakdown={provider}
+        intro="Google Workspace, Microsoft 365 or other, from what Plusvibe reports for the domain's inboxes. A domain is counted under the provider most of its inboxes were on."
       />
       <BreakdownTable
         title="By host and ending"
@@ -165,7 +174,7 @@ function Row({ row }: { row: BreakdownRow }) {
   return (
     <tr className="border-t border-border">
       <td className="py-2 pr-3 font-medium">
-        <span className={row.key.includes(UNKNOWN_HOST) || row.key.includes(UNKNOWN_TLD) ? "text-muted-foreground" : ""}>
+        <span className={row.key.includes(UNKNOWN_HOST) || row.key.includes(UNKNOWN_TLD) || row.key === UNKNOWN_PROVIDER ? "text-muted-foreground" : ""}>
           {row.key}
         </span>
         {row.domains !== row.count && (

@@ -28,6 +28,11 @@ export interface Inbox {
   /** Campaign sends per day. 0 is a stopped inbox. */
   dailyLimit?: number;
   warmupStatus?: string;
+  /**
+   * GOOGLE_WORKSPACE, MICROSOFT365, or whatever else Plusvibe reports for a
+   * plain SMTP mailbox. Read through bucketOf rather than compared directly.
+   */
+  provider?: string;
 }
 
 /**
@@ -102,6 +107,7 @@ export async function listInboxes(
         status: a.status ? String(a.status) : undefined,
         dailyLimit: readLimit(a, payload),
         warmupStatus: a.warmup_status ? String(a.warmup_status) : undefined,
+        provider: a.provider ? String(a.provider) : undefined,
       });
     }
     if (raw.length < PAGE_SIZE) break;

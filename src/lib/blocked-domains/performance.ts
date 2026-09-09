@@ -64,6 +64,8 @@ export interface InboxAssessment {
   sent?: number;
   replyRate?: number;
   replyRateOoo?: number;
+  /** Which mailbox this was, as Plusvibe reported it at the time. */
+  provider?: string;
 }
 
 function num(v: unknown): number {
@@ -127,11 +129,11 @@ export function statsFor(
  * has no figures for — it is stopped.
  */
 export function assessInbox(
-  inbox: { id: string; email: string },
+  inbox: { id: string; email: string; provider?: string },
   stats: InboxStats | undefined,
   minReplyRateOoo: number
 ): InboxAssessment {
-  const base = { id: inbox.id, email: inbox.email };
+  const base = { id: inbox.id, email: inbox.email, provider: inbox.provider };
   if (!stats) return { ...base, decision: "stop", reason: "no-stats" };
   const common = { sent: stats.sent, replyRate: stats.replyRate, replyRateOoo: stats.replyRateOoo };
   if (stats.sent <= 0) return { ...base, ...common, decision: "stop", reason: "no-sends" };
@@ -147,7 +149,7 @@ export interface QuarantinePlan {
   keep: { id: string; email: string }[];
 }
 
-export function planQuarantine<T extends { id: string; email: string }>(
+export function planQuarantine<T extends { id: string; email: string; provider?: string }>(
   inboxes: T[],
   index: Map<string, InboxStats>,
   minReplyRateOoo: number

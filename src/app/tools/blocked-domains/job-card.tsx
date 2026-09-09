@@ -19,6 +19,7 @@ import {
   RefreshIcon,
 } from "@/components/icons";
 import { describeNext } from "@/lib/blocked-domains/recheck";
+import { bucketOf, describeProviders, PROVIDER_LABELS } from "@/lib/plusvibe-providers";
 
 const STATUS_META: Record<
   BlockedDomainStatus,
@@ -68,6 +69,9 @@ export function JobCard({
   const domain = perf?.domain;
   const recheck = job.recheck;
   const host = sheet?.domainHost;
+  // Records from before the provider was captured have no counts; the chip is
+  // left off rather than claiming a domain had no mailboxes.
+  const providerMix = job.providers ? describeProviders(job.providers) : "";
   // "12/50 sending" — how much of the domain is still going out. Records from
   // before this was tracked carry no count, so it is derived from what they do
   // record: everything found, minus what this run stopped. Falling back to the
@@ -144,6 +148,14 @@ export function JobCard({
           {host && (
             <span className="pv-chip shrink-0" title="Domain Host, from the Domains sheet">
               {host}
+            </span>
+          )}
+          {providerMix && (
+            <span
+              className="pv-chip shrink-0"
+              title="The mailboxes this domain was running on, as Plusvibe reports them"
+            >
+              {providerMix}
             </span>
           )}
           {job.inboxesFound > 0 && (
@@ -435,6 +447,7 @@ export function JobCard({
             )} above the inbox bar · ${formatNumber(job.inboxesDeleted)} deleted`}
           />
           {host && <Detail label="Domain host" value={`${host} — from the Domains sheet`} />}
+          {providerMix && <Detail label="Mailboxes" value={providerMix} />}
           {perf && (
             <>
               {domain && domain.basis !== "none" && (
@@ -475,6 +488,11 @@ export function JobCard({
                         {i.decision === "keep" ? "kept" : "stopped"}
                       </span>
                       <span className="break-all font-mono">{i.email}</span>
+                      {i.provider && (
+                        <span className="text-muted-foreground/70">
+                          {PROVIDER_LABELS[bucketOf(i.provider)]}
+                        </span>
+                      )}
                       {/* The reason is always shown: an inbox stopped for
                           sending nothing reads as "0%", which looks like a
                           judgement on its copy rather than on its silence. */}

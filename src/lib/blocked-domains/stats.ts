@@ -8,9 +8,12 @@
 
 import { tldOf } from "@/lib/tags/domain-tags";
 import type { BlockedDomainJob } from "@/lib/jobs/blocked-domains-types";
+import { dominantProvider, PROVIDER_LABELS } from "@/lib/plusvibe-providers";
 
 export const UNKNOWN_HOST = "Unknown host";
 export const UNKNOWN_TLD = "(no ending)";
+export const UNKNOWN_PROVIDER = "Unknown mailbox";
+export const MIXED_PROVIDER = "Mixed";
 
 export interface BreakdownRow {
   key: string;
@@ -42,6 +45,19 @@ export function tldKeyOf(domain: string): string {
 export function hostKeyOf(job: BlockedDomainJob): string {
   const h = job.sheet?.domainHost?.trim();
   return h ? h : UNKNOWN_HOST;
+}
+
+/**
+ * The mailbox provider a domain was running on: the one most of its inboxes
+ * were with, "Mixed" for a genuine tie, or a placeholder for records from
+ * before this was captured.
+ */
+export function providerKeyOf(job: BlockedDomainJob): string {
+  if (!job.providers) return UNKNOWN_PROVIDER;
+  const total = job.providers.google + job.providers.microsoft + job.providers.other;
+  if (total === 0) return UNKNOWN_PROVIDER;
+  const top = dominantProvider(job.providers);
+  return top ? PROVIDER_LABELS[top] : MIXED_PROVIDER;
 }
 
 /** Whether the run wrote the domain off in the sheet. */
@@ -89,6 +105,11 @@ export function byTld(jobs: BlockedDomainJob[]): Breakdown {
 
 export function byHost(jobs: BlockedDomainJob[]): Breakdown {
   return group(jobs, hostKeyOf);
+}
+
+/** By the mailbox provider the domain was running on. */
+export function byProvider(jobs: BlockedDomainJob[]): Breakdown {
+  return group(jobs, providerKeyOf);
 }
 
 /** Host and ending together — "Spaceship · .co" — the combination that blocks. */

@@ -42,8 +42,9 @@ import type {
   DomainVerdict,
   InboxAssessment,
 } from "@/lib/blocked-domains/performance";
+import type { ProviderCounts } from "@/lib/plusvibe-providers";
 
-export type { DomainPerformance, DomainVerdict, InboxAssessment };
+export type { DomainPerformance, DomainVerdict, InboxAssessment, ProviderCounts };
 
 export const MAX_STORED_ERRORS = 30;
 
@@ -206,6 +207,14 @@ export interface BlockedDomainJob {
    * Plusvibe too, not just the ones this automation stopped.
    */
   inboxesActive?: number;
+  /**
+   * Google / Microsoft / other, counted over the inboxes found on the domain.
+   *
+   * Recorded because the kind of tenant a blocked domain was running on is
+   * part of the same question as its registrar and its ending: which setups
+   * keep producing blocks.
+   */
+  providers?: ProviderCounts;
   /** What the last 7 days said, per inbox. */
   performance?: PerformanceOutcome;
   /**
