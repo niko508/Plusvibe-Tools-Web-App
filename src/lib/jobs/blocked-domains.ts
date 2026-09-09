@@ -1156,10 +1156,26 @@ export async function runRecheck(
     }
     if (wroteOff) {
       run.wroteOff = true;
-      rec.status =
-        plan.stop.length > 0 && !settings.autoDelete ? "awaiting_confirmation" : "done";
-      rec.phase = plan.stop.length > 0 && !settings.autoDelete ? "deleting" : "finished";
-      rec.phaseStates.deleting = plan.stop.length > 0 && !settings.autoDelete ? "waiting" : "skipped";
+      if (plan.stop.length === 0) {
+        // Written off with nothing stopped: nothing to delete.
+        rec.status = "done";
+        rec.phase = "finished";
+        rec.phaseStates.deleting = "skipped";
+      } else if (settings.autoDelete) {
+        // The same hand-off the first pass makes. Marking the record done
+        // here without deleting — which is what happened before — left the
+        // stopped inboxes in Plusvibe with a log that said otherwise.
+        rec.autoDeleted = true;
+        rec.confirmedAt = Date.now();
+        await persist(id);
+        await runDelete(id);
+        // runDelete schedules the next check, or ends the schedule, itself.
+        return true;
+      } else {
+        rec.status = "awaiting_confirmation";
+        rec.phase = "deleting";
+        rec.phaseStates.deleting = "waiting";
+      }
     }
 
     // Schedule the next one, or stop if there is nothing left to learn.
@@ -1187,8 +1203,11 @@ export async function runRecheck(
     return false;
   } finally {
     rechecking.delete(id);
-    state.runs.unshift(run);
-    if (state.runs.length > MAX_RECHECK_RUNS) state.runs.length = MAX_RECHECK_RUNS;
+    // The deletion hand-off can replace rec.recheck (scheduleRecheck ends the
+    // schedule with a fresh object), so the run goes onto whatever is live.
+    const live = rec.recheck ?? state;
+    live.runs.unshift(run);
+    if (live.runs.length > MAX_RECHECK_RUNS) live.runs.length = MAX_RECHECK_RUNS;
     rec.updatedAt = Date.now();
     await persist(id);
   }
