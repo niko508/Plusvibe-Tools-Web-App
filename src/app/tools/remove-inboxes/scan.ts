@@ -29,9 +29,12 @@ export async function buildDomainIndex(
   index: Map<string, IndexEntry[]>;
   workspaceNames: Record<string, string>;
   excludedMaster: number;
+  /** Addresses left out because they are Master Inboxes, lower-cased. */
+  masterEmails: Set<string>;
 }> {
   const index = new Map<string, IndexEntry[]>();
   const workspaceNames: Record<string, string> = {};
+  const masterEmails = new Set<string>();
   let excludedMaster = 0;
   let done = 0;
   let inboxes = 0;
@@ -64,6 +67,8 @@ export async function buildDomainIndex(
           inboxes += 1;
           if (masterIds.size > 0 && acc.tags?.some((id) => masterIds.has(id))) {
             excludedMaster += 1;
+            // Remembered so naming one by address says "protected", not "missing".
+            if (acc.email) masterEmails.add(acc.email.trim().toLowerCase());
             continue;
           }
           const domain = domainFromEmail(acc.email);
@@ -72,6 +77,7 @@ export async function buildDomainIndex(
             workspace_id: ws._id,
             workspaceName: ws.name,
             email: acc.email,
+            domain,
             accountId: acc.id,
           };
           const arr = index.get(domain);
@@ -89,5 +95,5 @@ export async function buildDomainIndex(
     { concurrency: opts.concurrency, minSpacingMs: opts.spacingMs, signal: opts.signal }
   );
 
-  return { index, workspaceNames, excludedMaster };
+  return { index, workspaceNames, excludedMaster, masterEmails };
 }

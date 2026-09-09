@@ -195,6 +195,7 @@ export async function createJob(
     },
     domains: Array.from(domainIndex.values()),
     notFound: payload.notFound ?? [],
+    mode: payload.mode === "inbox" ? "inbox" : "domain",
     errors: [],
   };
 

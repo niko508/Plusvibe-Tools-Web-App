@@ -28,14 +28,60 @@ import {
   RefreshIcon,
   ChevronDownIcon,
   SheetIcon,
+  UploadIcon,
 } from "@/components/icons";
 import { buildDomainIndex } from "./scan";
-import { parseDomains, matchDomains } from "./parse";
+import {
+  parseDomains,
+  parseEmails,
+  domainsOfEmails,
+  matchDomains,
+  matchEmails,
+} from "./parse";
 import { exportNotFound, exportErrors } from "./export";
 import { isDefaultExcluded } from "./constants";
-import type { Phase, ScanResult, IndexEntry } from "./types";
+import type { Phase, Mode, ScanResult, IndexEntry } from "./types";
 
 const MAX_TABLE_ROWS = 200;
+
+/** Everything that differs between the two list modes, in one place. */
+const MODE_COPY: Record<
+  Mode,
+  {
+    tab: string;
+    label: string;
+    placeholder: string;
+    unit: string;
+    unitPlural: string;
+    matchedStat: string;
+    notFoundStat: string;
+    emptyPrompt: string;
+    hint: string;
+  }
+> = {
+  domain: {
+    tab: "By domain",
+    label: "Domains to remove",
+    placeholder: "acme.com\nacme.io\nmail.acme.co\n…",
+    unit: "domain",
+    unitPlural: "domains",
+    matchedStat: "Domains matched",
+    notFoundStat: "Domains not found",
+    emptyPrompt: "Paste at least one domain first.",
+    hint: "Every inbox on these domains is removed.",
+  },
+  inbox: {
+    tab: "By inbox address",
+    label: "Inboxes to remove",
+    placeholder: "joe.d@acme.com\nsara@acme.io\n…",
+    unit: "address",
+    unitPlural: "addresses",
+    matchedStat: "Inboxes matched",
+    notFoundStat: "Addresses not found",
+    emptyPrompt: "Paste at least one inbox address first.",
+    hint: "Only these exact mailboxes are removed. Others on the same domain are left alone.",
+  },
+};
 
 export function RemoveInboxesTool() {
   const { hasKey, ready } = useApiKey();
@@ -46,8 +92,28 @@ export function RemoveInboxesTool() {
   const [scopeIds, setScopeIds] = useState<string[]>([]);
   const [scopeOpen, setScopeOpen] = useState(false);
 
+  const [mode, setMode] = useState<Mode>("domain");
   const [raw, setRaw] = useState("");
-  const parsed = useMemo(() => parseDomains(raw), [raw]);
+  const copy = MODE_COPY[mode];
+
+  // Domain mode reads the paste as domains; inbox mode as addresses, keeping
+  // the domains behind them for the sheet lookup and the scan.
+  const parsedDomains = useMemo(
+    () => (mode === "domain" ? parseDomains(raw) : []),
+    [raw, mode]
+  );
+  const parsedEmails = useMemo(
+    () => (mode === "inbox" ? parseEmails(raw) : { emails: [], skipped: [] }),
+    [raw, mode]
+  );
+  const entryCount =
+    mode === "domain" ? parsedDomains.length : parsedEmails.emails.length;
+  // What the scan has to look for, either way.
+  const scanDomains = useMemo(
+    () =>
+      mode === "domain" ? parsedDomains : domainsOfEmails(parsedEmails.emails),
+    [mode, parsedDomains, parsedEmails.emails]
+  );
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [scanProgress, setScanProgress] = useState({ done: 0, total: 0, inboxes: 0 });
@@ -106,8 +172,8 @@ export function RemoveInboxesTool() {
   // --- Scan ----------------------------------------------------------------
   async function handleScan() {
     setError(null);
-    if (parsed.length === 0) {
-      setError("Paste at least one domain first.");
+    if (entryCount === 0) {
+      setError(copy.emptyPrompt);
       return;
     }
     const scoped = workspaces.filter((w) => scopeIds.includes(w._id));
@@ -143,7 +209,7 @@ export function RemoveInboxesTool() {
           const wsByName = new Map<string, Workspace>();
           for (const w of scoped) wsByName.set(w.name.trim().toLowerCase(), w);
           const targetSet = new Map<string, Workspace>();
-          for (const d of parsed) {
+          for (const d of scanDomains) {
             const client = sheet.map[d];
             if (!client) continue;
             const w = wsByName.get(client.trim().toLowerCase());
@@ -165,6 +231,12 @@ export function RemoveInboxesTool() {
 
       const combinedIndex = new Map<string, IndexEntry[]>();
       const workspaceNames: Record<string, string> = {};
+      const masterEmails = new Set<string>();
+      // One matcher for both modes, so the two phases below stay identical.
+      const match = (index: Map<string, IndexEntry[]>) =>
+        mode === "domain"
+          ? matchDomains(parsedDomains, index)
+          : matchEmails(parsedEmails.emails, index, masterEmails);
 
       // 2) Scan the targeted (or full) set of workspaces.
       setScanLabel(
@@ -182,9 +254,10 @@ export function RemoveInboxesTool() {
       );
       mergeIndex(combinedIndex, first.index);
       Object.assign(workspaceNames, first.workspaceNames);
+      for (const e of first.masterEmails) masterEmails.add(e);
       let excludedMaster = first.excludedMaster;
 
-      let { matched, notFound } = matchDomains(parsed, combinedIndex);
+      let { matched, notFound, protectedMaster } = match(combinedIndex);
 
       // 3) Fallback — full-scan the remaining workspaces for anything the sheet
       //    couldn't place (unlisted domain, blank client, or drift).
@@ -195,8 +268,8 @@ export function RemoveInboxesTool() {
           setScanLabel(
             `Full-scanning ${remaining.length} more workspace${
               remaining.length === 1 ? "" : "s"
-            } for ${notFound.length} unmatched domain${
-              notFound.length === 1 ? "" : "s"
+            } for ${notFound.length} unmatched ${
+              notFound.length === 1 ? copy.unit : copy.unitPlural
             }…`
           );
           setScanProgress({ done: 0, total: remaining.length, inboxes: 0 });
@@ -207,15 +280,18 @@ export function RemoveInboxesTool() {
           );
           mergeIndex(combinedIndex, second.index);
           Object.assign(workspaceNames, second.workspaceNames);
+          for (const e of second.masterEmails) masterEmails.add(e);
           excludedMaster += second.excludedMaster;
-          ({ matched, notFound } = matchDomains(parsed, combinedIndex));
+          ({ matched, notFound, protectedMaster } = match(combinedIndex));
         }
       }
 
       const totalInboxes = matched.reduce((s, m) => s + m.inboxes.length, 0);
       setScanResult({
+        mode,
         matched,
         notFound,
+        protectedMaster,
         totalInboxes,
         workspaceNames,
         excludedMaster,
@@ -258,9 +334,13 @@ export function RemoveInboxesTool() {
     setError(null);
     try {
       const { jobId } = await startBulkDelete({
-        label: `${scanResult.matched.length} domains · ${formatNumber(tasks.length)} inboxes`,
+        label:
+          scanResult.mode === "inbox"
+            ? `${formatNumber(tasks.length)} inboxes by address`
+            : `${scanResult.matched.length} domains · ${formatNumber(tasks.length)} inboxes`,
         workspaceNames: scanResult.workspaceNames,
         notFound: scanResult.notFound,
+        mode: scanResult.mode,
         tasks,
       });
       setHighlightJobId(jobId);
@@ -304,27 +384,52 @@ export function RemoveInboxesTool() {
     <div className="space-y-5">
       {/* Input */}
       <div className="pv-card space-y-4 p-4 sm:p-5">
+        <ModeTabs
+          mode={mode}
+          onChange={(next) => {
+            setMode(next);
+            // The pasted list means something different now, so drop the scan.
+            setScanResult(null);
+            setPhase("idle");
+            setError(null);
+          }}
+        />
+
         <div>
-          <label className="mb-1.5 block text-sm font-medium">
-            Domains to remove
-          </label>
+          <div className="mb-1.5 flex items-center justify-between gap-3">
+            <label className="block text-sm font-medium">{copy.label}</label>
+            <UploadButton onText={(text) => setRaw((v) => joinLists(v, text))} />
+          </div>
           <textarea
             className="pv-input pv-scroll resize-none font-mono text-sm leading-6"
             rows={14}
-            placeholder={"acme.com\nacme.io\nmail.acme.co\n…"}
+            placeholder={copy.placeholder}
             value={raw}
             onChange={(e) => setRaw(e.target.value)}
             spellCheck={false}
           />
-          <div className="mt-2 text-xs">
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
             <span className="font-medium text-muted-foreground">
-              {formatNumber(parsed.length)} domain{parsed.length === 1 ? "" : "s"}
+              {formatNumber(entryCount)}{" "}
+              {entryCount === 1 ? copy.unit : copy.unitPlural}
             </span>
+            <span className="text-muted-foreground">· {copy.hint}</span>
+            {mode === "inbox" && parsedEmails.skipped.length > 0 && (
+              <span
+                className="text-warning"
+                title={parsedEmails.skipped.slice(0, 20).join("\n")}
+              >
+                · {formatNumber(parsedEmails.skipped.length)} line
+                {parsedEmails.skipped.length === 1 ? "" : "s"} ignored (not an
+                email address)
+              </span>
+            )}
           </div>
           {hasSheet ? (
             <div className="mt-2 flex items-center gap-1.5 text-xs text-success">
               <SheetIcon size={13} />
-              Sheet synced — scans target only the workspaces your domains map to.
+              Sheet synced — scans target only the workspaces your{" "}
+              {mode === "inbox" ? "addresses" : "domains"} map to.
             </div>
           ) : (
             <div className="mt-2 text-xs text-muted-foreground">
@@ -353,7 +458,7 @@ export function RemoveInboxesTool() {
             type="button"
             className="pv-btn-primary"
             onClick={handleScan}
-            disabled={scanning || parsed.length === 0}
+            disabled={scanning || entryCount === 0}
           >
             {scanning ? <Spinner /> : <RefreshIcon size={16} />}
             {scanning ? "Scanning…" : "Scan"}
@@ -409,6 +514,98 @@ export function RemoveInboxesTool() {
       />
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Mode tabs + list upload
+// ---------------------------------------------------------------------------
+
+function ModeTabs({
+  mode,
+  onChange,
+}: {
+  mode: Mode;
+  onChange: (m: Mode) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="What the list names"
+      className="inline-flex rounded-xl border border-border p-1"
+    >
+      {(Object.keys(MODE_COPY) as Mode[]).map((m) => {
+        const active = m === mode;
+        return (
+          <button
+            key={m}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(m)}
+            className={`rounded-lg px-3 py-1.5 text-sm transition ${
+              active
+                ? "bg-accent/10 font-medium text-accent"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {MODE_COPY[m].tab}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Reads a pasted-in list from a file. Anything text-shaped works — a one-column
+ * CSV export is just lines with commas, which the parsers already split on.
+ */
+function UploadButton({ onText }: { onText: (text: string) => void }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [name, setName] = useState<string | null>(null);
+
+  return (
+    <div className="flex items-center gap-2">
+      {name && (
+        <span className="max-w-[160px] truncate text-xs text-muted-foreground">
+          {name}
+        </span>
+      )}
+      <button
+        type="button"
+        className="pv-chip"
+        onClick={() => inputRef.current?.click()}
+      >
+        <UploadIcon size={13} />
+        Upload list
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".txt,.csv,.tsv,text/plain,text/csv"
+        className="hidden"
+        aria-label="Upload a list file"
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          const text = await file.text();
+          onText(text);
+          setName(file.name);
+          // Let the same file be picked again after an edit.
+          e.target.value = "";
+        }}
+      />
+    </div>
+  );
+}
+
+/** Appends an uploaded list to whatever is already in the box. */
+function joinLists(existing: string, added: string): string {
+  const left = existing.trimEnd();
+  const right = added.trim();
+  if (!left) return right;
+  if (!right) return existing;
+  return `${left}\n${right}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -522,7 +719,13 @@ function PreviewPanel({
   onCancel: () => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const copy = MODE_COPY[result.mode];
+  const byInbox = result.mode === "inbox";
   const shown = result.matched.slice(0, MAX_TABLE_ROWS);
+  // Inbox mode lists the mailboxes themselves rather than a domain rollup.
+  const shownInboxes = result.matched
+    .flatMap((m) => m.inboxes)
+    .slice(0, MAX_TABLE_ROWS);
   const workspaceCount = new Set(
     result.matched.flatMap((m) => m.workspaces)
   ).size;
@@ -537,10 +740,30 @@ function PreviewPanel({
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard label="Domains matched" value={formatNumber(result.matched.length)} />
+        <StatCard
+          label={byInbox ? "Domains touched" : copy.matchedStat}
+          value={formatNumber(result.matched.length)}
+        />
         <StatCard label="Inboxes to delete" value={formatNumber(result.totalInboxes)} />
-        <StatCard label="Domains not found" value={formatNumber(result.notFound.length)} />
+        <StatCard label={copy.notFoundStat} value={formatNumber(result.notFound.length)} />
       </div>
+
+      {result.protectedMaster.length > 0 && (
+        <div className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+          <AlertIcon size={14} className="mt-0.5 shrink-0" />
+          <span>
+            {formatNumber(result.protectedMaster.length)} pasted address
+            {result.protectedMaster.length === 1 ? " is a" : "es are"}{" "}
+            &ldquo;Master Inbox&rdquo; mailbox
+            {result.protectedMaster.length === 1 ? "" : "es"} and will not be
+            deleted: {result.protectedMaster.slice(0, 5).join(", ")}
+            {result.protectedMaster.length > 5
+              ? `, +${result.protectedMaster.length - 5} more`
+              : ""}
+            .
+          </span>
+        </div>
+      )}
 
       {result.excludedMaster > 0 && (
         <div className="flex items-center gap-1.5 text-xs text-success">
@@ -556,37 +779,73 @@ function PreviewPanel({
             <table className="w-full min-w-[560px] text-sm">
               <thead>
                 <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="px-4 py-3 text-left font-medium">Domain</th>
-                  <th className="px-4 py-3 text-right font-medium">Inboxes</th>
-                  <th className="px-4 py-3 text-left font-medium">Workspaces</th>
+                  {byInbox ? (
+                    <>
+                      <th className="px-4 py-3 text-left font-medium">Inbox</th>
+                      <th className="px-4 py-3 text-left font-medium">Domain</th>
+                      <th className="px-4 py-3 text-left font-medium">Workspace</th>
+                    </>
+                  ) : (
+                    <>
+                      <th className="px-4 py-3 text-left font-medium">Domain</th>
+                      <th className="px-4 py-3 text-right font-medium">Inboxes</th>
+                      <th className="px-4 py-3 text-left font-medium">Workspaces</th>
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody>
-                {shown.map((m) => (
-                  <tr key={m.domain} className="border-b border-border/70 last:border-0">
-                    <td className="px-4 py-2.5 font-medium">{m.domain}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">
-                      {formatNumber(m.inboxes.length)}
-                    </td>
-                    <td className="px-4 py-2.5 text-muted-foreground">
-                      {m.workspaces.join(", ")}
-                    </td>
-                  </tr>
-                ))}
+                {byInbox
+                  ? shownInboxes.map((i) => (
+                      <tr
+                        key={`${i.workspace_id}:${i.email}`}
+                        className="border-b border-border/70 last:border-0"
+                      >
+                        <td className="px-4 py-2.5 font-medium">{i.email}</td>
+                        <td className="px-4 py-2.5 text-muted-foreground">
+                          {i.domain}
+                        </td>
+                        <td className="px-4 py-2.5 text-muted-foreground">
+                          {i.workspaceName}
+                        </td>
+                      </tr>
+                    ))
+                  : shown.map((m) => (
+                      <tr
+                        key={m.domain}
+                        className="border-b border-border/70 last:border-0"
+                      >
+                        <td className="px-4 py-2.5 font-medium">{m.domain}</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums">
+                          {formatNumber(m.inboxes.length)}
+                        </td>
+                        <td className="px-4 py-2.5 text-muted-foreground">
+                          {m.workspaces.join(", ")}
+                        </td>
+                      </tr>
+                    ))}
               </tbody>
             </table>
           </div>
-          {result.matched.length > shown.length && (
-            <div className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
-              + {formatNumber(result.matched.length - shown.length)} more domains
-              (all included in the delete)
-            </div>
-          )}
+          {byInbox
+            ? result.totalInboxes > shownInboxes.length && (
+                <div className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
+                  + {formatNumber(result.totalInboxes - shownInboxes.length)} more
+                  inboxes (all included in the delete)
+                </div>
+              )
+            : result.matched.length > shown.length && (
+                <div className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
+                  + {formatNumber(result.matched.length - shown.length)} more
+                  domains (all included in the delete)
+                </div>
+              )}
         </div>
       ) : (
         <EmptyState title="No matching inboxes">
-          None of the pasted domains have inboxes in the selected workspaces.
-          Nothing to delete.
+          {byInbox
+            ? "None of the pasted addresses exist in the selected workspaces. Nothing to delete."
+            : "None of the pasted domains have inboxes in the selected workspaces. Nothing to delete."}
         </EmptyState>
       )}
 
@@ -594,8 +853,9 @@ function PreviewPanel({
         <div className="pv-card px-4 py-3">
           <div className="flex items-center justify-between text-sm">
             <span className="font-medium">
-              {formatNumber(result.notFound.length)} domain
-              {result.notFound.length === 1 ? "" : "s"} not found
+              {formatNumber(result.notFound.length)}{" "}
+              {result.notFound.length === 1 ? copy.unit : copy.unitPlural} not
+              found
             </span>
             <span className="flex gap-2">
               <button type="button" className="pv-chip" onClick={copyNotFound}>
@@ -605,7 +865,7 @@ function PreviewPanel({
               <button
                 type="button"
                 className="pv-chip"
-                onClick={() => exportNotFound(result.notFound)}
+                onClick={() => exportNotFound(result.notFound, result.mode)}
               >
                 <DownloadIcon size={13} />
                 Export
@@ -690,7 +950,7 @@ function JobsPanel({
       <h2 className="text-sm font-semibold">Jobs</h2>
       {jobs.length === 0 ? (
         <EmptyState icon={<TrashIcon />} title="No jobs yet">
-          Scan some domains and start a removal — it&apos;ll appear here and keep
+          Scan a list and start a removal — it&apos;ll appear here and keep
           running even if you close the app.
         </EmptyState>
       ) : (
@@ -739,6 +999,9 @@ function JobCard({
   const domainsDeleted = job.domains.filter(
     (d) => d.deleted + d.skipped > 0
   ).length;
+  // Jobs made before inbox mode existed carry no mode; those were domain runs.
+  const jobMode = job.mode ?? "domain";
+  const byInbox = jobMode === "inbox";
 
   return (
     <div
@@ -783,9 +1046,17 @@ function JobCard({
 
       {/* Result counts */}
       <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Domains removed" value={domainsDeleted} tone="default" />
+        <Metric
+          label={byInbox ? "Domains touched" : "Domains removed"}
+          value={domainsDeleted}
+          tone="default"
+        />
         <Metric label="Inboxes deleted" value={p.inboxesDeleted} tone="success" />
-        <Metric label="Not found" value={job.notFound.length} tone="muted" />
+        <Metric
+          label={byInbox ? "Addresses not found" : "Not found"}
+          value={job.notFound.length}
+          tone="muted"
+        />
         <Metric
           label="Errors"
           value={p.inboxesErrored}
@@ -829,7 +1100,7 @@ function JobCard({
           <button
             type="button"
             className="pv-btn-ghost"
-            onClick={() => exportNotFound(job.notFound)}
+            onClick={() => exportNotFound(job.notFound, jobMode)}
           >
             <DownloadIcon size={16} />
             Not found

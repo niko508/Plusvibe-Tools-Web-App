@@ -1,4 +1,4 @@
-import type { JobError } from "@/lib/jobs/types";
+import type { JobError, JobMode } from "@/lib/jobs/types";
 
 // Triggers a browser download of the given text as a file.
 function download(filename: string, content: string, mime: string) {
@@ -13,8 +13,12 @@ function download(filename: string, content: string, mime: string) {
   URL.revokeObjectURL(url);
 }
 
-export function exportNotFound(domains: string[]) {
-  download("not-found-domains.txt", domains.join("\n"), "text/plain;charset=utf-8;");
+export function exportNotFound(entries: string[], mode: JobMode = "domain") {
+  download(
+    mode === "inbox" ? "not-found-inboxes.txt" : "not-found-domains.txt",
+    entries.join("\n"),
+    "text/plain;charset=utf-8;"
+  );
 }
 
 function csvCell(value: string): string {

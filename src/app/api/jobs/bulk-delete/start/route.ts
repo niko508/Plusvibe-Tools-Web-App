@@ -53,6 +53,7 @@ export async function POST(request: Request) {
           ? body.workspaceNames
           : {},
       notFound: Array.isArray(body.notFound) ? body.notFound.map(String) : [],
+      mode: body.mode === "inbox" ? "inbox" : "domain",
       tasks: clean,
     };
 

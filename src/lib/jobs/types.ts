@@ -1,6 +1,9 @@
 // Shared bulk-delete job types, used by the client tool, the API routes, and
 // the server-side job manager. No server-only imports so the client can use it.
 
+/** What the user pasted to build this job: sending domains, or single inboxes. */
+export type JobMode = "domain" | "inbox";
+
 export type JobStatus =
   | "running"
   | "done"
@@ -60,7 +63,10 @@ export interface JobRecord {
   scopeWorkspaces: string[]; // workspace names, for display
   progress: JobProgress;
   domains: JobDomainRow[];
-  notFound: string[]; // pasted domains with no matching inbox
+  /** Pasted entries with no matching inbox: domains, or addresses in inbox mode. */
+  notFound: string[];
+  /** Absent on jobs made before inbox mode existed; read those as "domain". */
+  mode?: JobMode;
   errors: JobError[]; // capped
   errorsTruncated?: boolean;
 }
@@ -71,6 +77,7 @@ export interface StartJobPayload {
   label: string;
   workspaceNames: Record<string, string>;
   notFound: string[];
+  mode?: JobMode;
   tasks: DeleteTask[];
 }
 

@@ -5,7 +5,7 @@ import { RemoveInboxesTool } from "./tool";
 export const metadata: Metadata = {
   title: "Remove Inboxes · Plusvibe Tools",
   description:
-    "Bulk-delete inboxes by sending domain across all your Plusvibe workspaces, with a background job you can leave running.",
+    "Bulk-delete inboxes by sending domain or by exact address across all your Plusvibe workspaces, with a background job you can leave running.",
 };
 
 export default function RemoveInboxesPage() {
@@ -18,9 +18,10 @@ export default function RemoveInboxesPage() {
             Remove Inboxes
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground sm:text-base">
-            Paste a list of sending domains. The tool scans your workspaces to
-            find every inbox on those domains, shows you exactly what will be
-            removed, then deletes them in a background job you can leave running.
+            Paste or upload a list of sending domains, or the exact inbox
+            addresses. The tool scans your workspaces to find them, shows you
+            exactly what will be removed, then deletes them in a background job
+            you can leave running.
           </p>
         </div>
         <RemoveInboxesTool />
