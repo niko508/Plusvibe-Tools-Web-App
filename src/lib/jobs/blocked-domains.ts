@@ -1536,10 +1536,18 @@ export async function undoWriteOff(id: string): Promise<{ ok: boolean; error?: s
     }
     s.manualCleanup = cleanup.length > 0 ? `By hand: ${cleanup.join("; ")}.` : undefined;
 
-    rec.status = "kept";
-    rec.phase = "finished";
-    rec.phaseStates.deleting = "skipped";
-    quarantinedInboxes.delete(id);
+    // Undoing the sheet is not a decision about the stopped inboxes. A
+    // deletion that was waiting stays offered — someone can put the domain
+    // back AND still clear out its dead inboxes, in either order. Only when
+    // nothing was waiting does the record go straight to kept.
+    const deletionPending =
+      rec.status === "awaiting_confirmation" && (rec.quarantinedEmails ?? []).length > 0;
+    if (!deletionPending) {
+      rec.status = "kept";
+      rec.phase = "finished";
+      rec.phaseStates.deleting = "skipped";
+      quarantinedInboxes.delete(id);
+    }
     await scheduleRecheck(rec);
     rec.updatedAt = Date.now();
     await persist(id);

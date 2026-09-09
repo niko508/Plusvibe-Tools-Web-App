@@ -476,7 +476,7 @@ export function JobCard({
                 className="pv-btn-ghost disabled:opacity-50"
                 disabled={busy}
                 onClick={() => onUndoWriteOff(job.id)}
-                title="Put the Domains row's Status back to what it was, and keep the domain"
+                title="Put the Domains row's Status back to what it was and keep the domain. A Delete that is waiting stays offered — the stopped inboxes are a separate decision."
               >
                 Undo write-off
               </button>
