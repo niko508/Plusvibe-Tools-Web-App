@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BlockedDomainsView } from "@/lib/jobs/blocked-domains-types";
+import type {
+  BlockedDomainJob,
+  BlockedDomainsView,
+} from "@/lib/jobs/blocked-domains-types";
 import {
   fetchBlockedDomains,
   setBlockedDomainSettings,
@@ -143,13 +146,19 @@ export function BlockedDomainsTool() {
   if (!hasKey) return <ConnectPrompt onConnected={refresh} />;
 
   const jobs = view?.jobs ?? [];
-  const awaiting = jobs.filter((j) => j.status === "awaiting_confirmation");
-  const rest = jobs.filter((j) => j.status !== "awaiting_confirmation");
+  // A domain stays at the top of the page until there is nothing left to
+  // decide on it, whether or not it was written off: a kept domain still
+  // stops its weak inboxes and still offers to delete them. That offer used
+  // to sit inside a closed history where nobody ever saw it. Deleting those
+  // inboxes empties the list and the card drops into History.
+  const fresh = jobs.filter(needsYou);
+  const rest = jobs.filter((j) => !needsYou(j));
+  const freshStopped = fresh.reduce((n, j) => n + stoppedCount(j), 0);
   // Every run is kept, so the log doubles as the record of which domains have
   // been dealt with. These counts are what makes that scannable.
   const stats = {
     total: jobs.length,
-    waiting: awaiting.length,
+    waiting: fresh.length,
     deleted: jobs.filter((j) => j.inboxesDeleted > 0).length,
     // Domains nothing was done to: still performing, or someone declined the
     // deletion.
@@ -477,12 +486,21 @@ export function BlockedDomainsTool() {
         </div>
       )}
 
-      {awaiting.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-sm font-semibold text-warning">
-            Waiting for you ({awaiting.length})
-          </h2>
-          {awaiting.map((job) => (
+      {fresh.length > 0 && (
+        <div className="space-y-3" data-new-domains>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-sm font-semibold text-warning">
+              New Blocked Domains ({fresh.length})
+            </h2>
+            <span className="text-xs text-muted-foreground">
+              Kept or written off, these still have something for you.
+              {freshStopped > 0
+                ? ` ${formatNumber(freshStopped)} stopped inbox${freshStopped === 1 ? "" : "es"} can be deleted.`
+                : ""}{" "}
+              Once you have dealt with a domain it moves to History.
+            </span>
+          </div>
+          {fresh.map((job) => (
             <JobCard
               key={job.id}
               job={job}
@@ -548,7 +566,7 @@ export function BlockedDomainsTool() {
           )}
         </div>
       ) : (
-        awaiting.length === 0 && (
+        fresh.length === 0 && (
           <EmptyState icon={<FireIcon />} title="No blocked domains yet">
             Nothing has come through from Clay. When a bounce reason shows one
             of your sending domains is blocked, it lands here.
@@ -609,6 +627,31 @@ function Bar({
       % <span className="text-muted-foreground/70">— {hint}</span>
     </label>
   );
+}
+
+/**
+ * Inboxes this run has stopped and not yet deleted — exactly what the card's
+ * "Delete N stopped inboxes" button would take, worked out the same way.
+ */
+function stoppedCount(job: BlockedDomainJob): number {
+  if (job.quarantinedEmails) return job.quarantinedEmails.length;
+  const perf = job.performance;
+  if (perf) return perf.inboxes.filter((i) => i.decision === "stop").length;
+  return job.inboxesFound;
+}
+
+/**
+ * True when a person still has something to decide on this domain: either the
+ * deletion of a written-off domain is waiting, or the domain was kept but is
+ * holding stopped inboxes that can be deleted.
+ *
+ * This mirrors the two buttons on the card. A run still going has nothing to
+ * decide yet.
+ */
+function needsYou(job: BlockedDomainJob): boolean {
+  if (job.status === "awaiting_confirmation") return true;
+  if (job.status === "working" || job.status === "deleting") return false;
+  return stoppedCount(job) > 0;
 }
 
 function errMessage(err: unknown): string {
