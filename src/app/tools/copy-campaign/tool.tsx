@@ -233,7 +233,7 @@ export function CopyCampaignTool() {
     <div className="space-y-5">
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_auto_1fr]">
         {/* Source */}
-        <div className="pv-card p-4 sm:p-5">
+        <div className="pv-card min-w-0 p-4 sm:p-5">
           <h2 className="text-sm font-semibold">Copy from</h2>
           <p className="mt-1 text-xs text-muted-foreground">
             The campaign whose email copy you want.
@@ -281,9 +281,10 @@ export function CopyCampaignTool() {
               <ul className="mt-2 space-y-1 text-xs">
                 {sourceDetail.steps.map((s) => (
                   <li key={s.step} className="flex items-center justify-between gap-3">
-                    <span className="truncate text-muted-foreground">
+                    {/* No subject line here: a spintax subject runs to
+                        thousands of characters and would widen the page. */}
+                    <span className="min-w-0 truncate text-muted-foreground">
                       Step {s.step}
-                      {s.subject ? ` · ${s.subject}` : ""}
                     </span>
                     <span className="shrink-0 tabular-nums">
                       {s.variations.length}
@@ -305,7 +306,7 @@ export function CopyCampaignTool() {
         </div>
 
         {/* Destination */}
-        <div className="pv-card p-4 sm:p-5">
+        <div className="pv-card min-w-0 p-4 sm:p-5">
           <h2 className="text-sm font-semibold">Copy into</h2>
           <p className="mt-1 text-xs text-muted-foreground">
             The campaign whose settings and sub-sequences the copy is built on.
