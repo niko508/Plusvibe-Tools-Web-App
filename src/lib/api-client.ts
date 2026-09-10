@@ -233,6 +233,37 @@ export function deleteInboxTagsJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/inbox-tags/delete", { method: "POST", body: { jobId }, signal });
 }
 
+// --- Copy Campaign to Other Workspace ---------------------------------------
+
+export interface CopyCampaignPayload {
+  sourceWorkspaceId: string;
+  sourceCampaignId: string;
+  destWorkspaceId: string;
+  destCampaignId: string;
+  name: string;
+  duplicateSubsequences?: boolean;
+}
+
+export interface CopyCampaignResponse {
+  createdId: string;
+  name: string;
+  stepsCopied: number;
+  variationsCopied: number;
+  droppedDeleted: number;
+  subsequences: number;
+  verified: boolean;
+  problems: string[];
+  warnings: string[];
+}
+
+export function runCopyCampaign(payload: CopyCampaignPayload, signal?: AbortSignal) {
+  return request<CopyCampaignResponse>("/api/copy-campaign/run", {
+    method: "POST",
+    body: payload,
+    signal,
+  });
+}
+
 // --- Change Limits with Best Performing Inboxes -----------------------------
 
 export function startChangeLimits(payload: ChangeLimitsStartPayload, signal?: AbortSignal) {

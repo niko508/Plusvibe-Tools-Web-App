@@ -10,6 +10,7 @@ import {
   ZapIcon,
   ScissorsIcon,
   MoveIcon,
+  CopyIcon,
 } from "@/components/icons";
 
 // Registry of tools shown on the landing page. Adding a new tool = add an entry
@@ -144,6 +145,16 @@ export const TOOLS: Tool[] = [
     status: "active",
     color: "blue",
     Icon: MailIcon,
+  },
+  {
+    slug: "copy-campaign",
+    name: "Copy Campaign to Other Workspace",
+    tagline: "Move a campaign's copy across, on another campaign's settings",
+    description:
+      "Pick the campaign whose email copy you want and a campaign in the destination workspace to take the settings from. The destination campaign is duplicated where it already lives — keeping its settings, schedule, sender accounts and sub-sequences — and the new campaign's own copy is replaced with the source's.",
+    status: "active",
+    color: "violet",
+    Icon: CopyIcon,
   },
   {
     slug: "change-limits",
