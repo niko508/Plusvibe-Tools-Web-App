@@ -211,8 +211,6 @@ const { DEFAULT_TLD_TAGS, DEFAULT_PLATFORM_TAGS } = await importTs("@/lib/tags/d
 // --- settings ---------------------------------------------------------------
 const all = parseOutreachSettings({
   campaignEmails: "30",
-  startingEmails: "5",
-  rampUp: "3",
   warmupEmails: "40",
   randomize: "20",
   warmupReplyRate: "46",
@@ -221,8 +219,6 @@ const all = parseOutreachSettings({
 eq("every field goes out under its API name", all.body, {
   warmup_max_daily_limit: 40,
   daily_limit: 30,
-  bulk_rampup_daily_limit: 5,
-  bulk_rampup_daily_inc: 3,
   warmup_randomize: "yes",
   warmup_randomize_num: 20,
   warmup_reply_rate: 0.46,
@@ -240,7 +236,8 @@ eq("blank fields are left alone, only the switches go", none.body, { bulk_is_slo
 eq("…which is still a valid run", none.ok, true);
 eq("randomize 0 is said as off", parseOutreachSettings({ ...EMPTY_OUTREACH_SETTINGS, randomize: "0" }).body.warmup_randomize, "no");
 eq("a reply rate is a 0–1 fraction on the wire", parseOutreachSettings({ ...EMPTY_OUTREACH_SETTINGS, warmupReplyRate: "12.5" }).body.warmup_reply_rate, 0.125);
-eq("a bad number is named", parseOutreachSettings({ ...EMPTY_OUTREACH_SETTINGS, rampUp: "0" }).problems.rampUp, "Ramp-up must be between 1 and 2000 per day.");
+eq("a bad number is named", parseOutreachSettings({ ...EMPTY_OUTREACH_SETTINGS, intervalMinutes: "0" }).problems.intervalMinutes, "Email interval must be between 1 and 1440 minutes.");
+eq("the ramp-up values are not asked for", Object.keys(EMPTY_OUTREACH_SETTINGS), ["campaignEmails", "warmupEmails", "randomize", "warmupReplyRate", "intervalMinutes"]);
 eq("…and so is text", parseOutreachSettings({ ...EMPTY_OUTREACH_SETTINGS, warmupEmails: "lots" }).problems.warmupEmails, "Warmup emails must be a number.");
 eq("a fraction where a whole number is due is refused", parseOutreachSettings({ ...EMPTY_OUTREACH_SETTINGS, intervalMinutes: "2.5" }).ok, false);
 

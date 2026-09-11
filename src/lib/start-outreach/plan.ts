@@ -26,8 +26,6 @@ import {
 /** The form's raw strings, exactly as typed. Blank means "leave it alone". */
 export interface OutreachSettingsInput {
   campaignEmails: string;
-  startingEmails: string;
-  rampUp: string;
   warmupEmails: string;
   randomize: string;
   warmupReplyRate: string;
@@ -36,8 +34,6 @@ export interface OutreachSettingsInput {
 
 export const EMPTY_OUTREACH_SETTINGS: OutreachSettingsInput = {
   campaignEmails: "",
-  startingEmails: "",
-  rampUp: "",
   warmupEmails: "",
   randomize: "",
   warmupReplyRate: "",
@@ -61,8 +57,6 @@ export interface OutreachFieldSpec {
 export const OUTREACH_FIELDS: OutreachFieldSpec[] = [
   { key: "warmupEmails", label: "Warmup emails", apiField: "warmup_max_daily_limit", unit: "per day", min: 1, max: 1000, integer: true },
   { key: "campaignEmails", label: "Campaign emails", apiField: "daily_limit", unit: "per day", min: 0, max: 2000, integer: true },
-  { key: "startingEmails", label: "Starting emails", apiField: "bulk_rampup_daily_limit", unit: "per day", min: 1, max: 2000, integer: true },
-  { key: "rampUp", label: "Ramp-up", apiField: "bulk_rampup_daily_inc", unit: "per day", min: 1, max: 2000, integer: true },
   { key: "randomize", label: "Randomized Warm-Up Limit", apiField: "warmup_randomize_num", unit: "%", min: 0, max: 100, integer: true },
   { key: "warmupReplyRate", label: "Warmup reply rate", apiField: "warmup_reply_rate", unit: "%", min: 0, max: 100, integer: false },
   { key: "intervalMinutes", label: "Email interval", apiField: "interval_limit_in_min", unit: "minutes", min: 1, max: 1440, integer: true },
