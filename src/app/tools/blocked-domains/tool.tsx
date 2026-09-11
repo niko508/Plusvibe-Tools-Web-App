@@ -59,6 +59,8 @@ export function BlockedDomainsTool() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [savingToggle, setSavingToggle] = useState(false);
+  /** Said after the gap between checks changes, so the effect is visible. */
+  const [rescheduled, setRescheduled] = useState<{ count: number; days: number } | null>(null);
   const [copied, setCopied] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -122,7 +124,11 @@ export function BlockedDomainsTool() {
     setSavingToggle(true);
     setError(null);
     try {
-      await setBlockedDomainSettings(patch);
+      const res = await setBlockedDomainSettings(patch);
+      if (patch.recheckDays !== undefined) {
+        setRescheduled({ count: res.rescheduled ?? 0, days: res.settings.recheckDays });
+        setTimeout(() => setRescheduled(null), 8000);
+      }
     } catch (err) {
       setError(errMessage(err));
     } finally {
@@ -383,6 +389,13 @@ export function BlockedDomainsTool() {
                   />
                   days
                 </label>
+              )}
+              {rescheduled && (
+                <span className="text-xs text-success" data-rescheduled>
+                  {rescheduled.count > 0
+                    ? `${formatNumber(rescheduled.count)} watched domain${rescheduled.count === 1 ? "" : "s"} moved onto ${rescheduled.days} days, keeping the time already served.`
+                    : `Saved. No watched domain needed moving.`}
+                </span>
               )}
             </div>
 

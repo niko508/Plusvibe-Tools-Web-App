@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { MAX_RECHECK_DAYS, loadSettings, saveSettings } from "@/lib/blocked-domains/settings";
+import { applyRecheckInterval } from "@/lib/jobs/blocked-domains";
 
 export const dynamic = "force-dynamic";
 
@@ -60,7 +61,15 @@ export async function PUT(request: Request) {
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: "Nothing to change." }, { status: 400 });
     }
-    return NextResponse.json({ settings: await saveSettings(patch) });
+    const settings = await saveSettings(patch);
+    // The gap is a setting for the whole automation, so a change to it has to
+    // reach the domains already being watched, not just the next one to
+    // arrive. Elapsed time is kept: see rebaseNextAt.
+    const rescheduled =
+      patch.recheckDays === undefined
+        ? 0
+        : await applyRecheckInterval(settings.recheckDays);
+    return NextResponse.json({ settings, rescheduled });
   } catch (err) {
     return errorResponse(err);
   }

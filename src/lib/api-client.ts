@@ -1132,7 +1132,9 @@ export function setBlockedDomainSettings(
   },
   signal?: AbortSignal
 ) {
-  return request<{ settings: BlockedDomainsView["settings"] }>(
+  // `rescheduled` counts the watched domains moved onto a new gap between
+  // checks — only ever non-zero when recheckDays changed.
+  return request<{ settings: BlockedDomainsView["settings"]; rescheduled?: number }>(
     "/api/jobs/blocked-domains/settings",
     { method: "PUT", body: patch, signal }
   );

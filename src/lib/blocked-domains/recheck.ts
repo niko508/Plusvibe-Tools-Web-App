@@ -79,6 +79,31 @@ export function startRecheck(now: number, everyDays: number, enabled: boolean): 
   };
 }
 
+/**
+ * Moves an already-scheduled check onto a new interval.
+ *
+ * The gap is a setting for the whole automation, so changing it has to reach
+ * the domains already being watched — otherwise each one keeps its old gap
+ * until its next check happens to run, and the number on the page means
+ * nothing for anything already flagged.
+ *
+ * Elapsed time is kept rather than restarted: a domain scheduled five days ago
+ * on a 7-day gap had two days left, and on a 21-day gap it is due in sixteen,
+ * not in twenty-one. Shortening the gap below the time already served leaves
+ * the check due now, which is what being overdue means.
+ */
+export function rebaseNextAt(
+  state: Pick<RecheckState, "enabled" | "everyDays" | "nextAt">,
+  newEveryDays: number,
+  now: number
+): number | undefined {
+  if (!state.enabled) return undefined;
+  if (state.nextAt === undefined) return nextRunAt(now, newEveryDays);
+  // When the current check was last scheduled.
+  const scheduledAt = state.nextAt - state.everyDays * DAY_MS;
+  return scheduledAt + newEveryDays * DAY_MS;
+}
+
 /** "in 7 days" / "in 4 hours" / "due now" — how the next check reads. */
 export function describeNext(nextAt: number | undefined, now: number): string {
   if (nextAt === undefined) return "not scheduled";

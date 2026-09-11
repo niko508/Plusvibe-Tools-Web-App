@@ -70,6 +70,7 @@ import {
   endOfTheLine,
   isRecheckDue,
   nextRunAt,
+  rebaseNextAt,
   startRecheck,
 } from "@/lib/blocked-domains/recheck";
 import { countProviders } from "@/lib/plusvibe-providers";
@@ -1687,6 +1688,34 @@ export async function rearmJob(id: string): Promise<boolean> {
   rec.updatedAt = rec.rearmedAt;
   await persist(id);
   return true;
+}
+
+/**
+ * Puts every watched domain onto a new gap between checks.
+ *
+ * Each record carries its own `everyDays`, snapshotted when it was scheduled,
+ * so changing the setting alone would leave every already-flagged domain on
+ * the old gap until its next check happened to run. That made the number on
+ * the page a promise about new domains only.
+ *
+ * Records whose schedule has ended keep their history untouched: there is no
+ * next check to move.
+ */
+export async function applyRecheckInterval(everyDays: number): Promise<number> {
+  await loadOnce();
+  const now = Date.now();
+  let changed = 0;
+  for (const [id, rec] of records) {
+    const state = rec.recheck;
+    if (!state || !state.enabled) continue;
+    if (state.everyDays === everyDays) continue;
+    state.nextAt = rebaseNextAt(state, everyDays, now);
+    state.everyDays = everyDays;
+    rec.updatedAt = now;
+    changed += 1;
+    await persist(id);
+  }
+  return changed;
 }
 
 /** Removes a record from the log entirely. */

@@ -18,7 +18,7 @@ const eq = (label, got, want) => {
 
 const m = await importTs("@/lib/blocked-domains/recheck");
 const {
-  DAY_MS, nextRunAt, isRecheckDue, canRecheck, endOfTheLine, startRecheck, describeNext,
+  DAY_MS, nextRunAt, isRecheckDue, canRecheck, endOfTheLine, startRecheck, describeNext, rebaseNextAt,
   DEFAULT_RECHECK_DAYS, MAX_RECHECK_DAYS, normalizeRecheckDays,
 } = m;
 
@@ -75,6 +75,38 @@ eq("days out", describeNext(NOW + 7 * DAY_MS, NOW), "in 7 days");
 eq("hours out", describeNext(NOW + 4 * 3_600_000, NOW), "in 4h");
 eq("past due", describeNext(NOW - 1000, NOW), "due now");
 eq("unscheduled", describeNext(undefined, NOW), "not scheduled");
+
+// --- changing the gap reaches the domains already being watched ---------------------------
+// Scheduled 5 days ago on a 7-day gap: 2 days left. On a 21-day gap it is due
+// in 16, not in 21 — the 5 days already served still count.
+const served5 = { enabled: true, everyDays: 7, nextAt: NOW + 2 * DAY_MS };
+eq("a longer gap keeps the time already served", rebaseNextAt(served5, 21, NOW), NOW + 16 * DAY_MS);
+eq("…and a shorter one does too", rebaseNextAt(served5, 3, NOW), NOW - 2 * DAY_MS);
+eq(
+  "…so shortening below the time served leaves it due now",
+  describeNext(rebaseNextAt(served5, 3, NOW), NOW),
+  "due now"
+);
+eq(
+  "a freshly scheduled domain simply gets the new gap",
+  rebaseNextAt({ enabled: true, everyDays: 7, nextAt: NOW + 7 * DAY_MS }, 21, NOW),
+  NOW + 21 * DAY_MS
+);
+eq(
+  "one that is watched but unscheduled starts from now",
+  rebaseNextAt({ enabled: true, everyDays: 7, nextAt: undefined }, 21, NOW),
+  NOW + 21 * DAY_MS
+);
+eq(
+  "a domain no longer watched is left unscheduled",
+  rebaseNextAt({ enabled: false, everyDays: 7, nextAt: NOW + 2 * DAY_MS }, 21, NOW),
+  undefined
+);
+eq(
+  "the same gap is a no-op",
+  rebaseNextAt(served5, 7, NOW),
+  NOW + 2 * DAY_MS
+);
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);
