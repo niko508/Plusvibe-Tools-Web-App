@@ -36,38 +36,14 @@ import {
   type InboxLike,
 } from "./filter";
 import type { ApplyRow, SignatureFields } from "./types";
-
-const COMPANY_SLOTS = 3;
-const PHONE_SLOTS = 5;
-const ADDRESS_SLOTS = 3;
-const TITLE_SLOTS = 5;
-
-// Default pool of roles; the 5 title slots start pre-filled with a random 5.
-const DEFAULT_ROLES = [
-  "Account Executive",
-  "Key Account Executive",
-  "Growth Manager",
-  "Business Development",
-  "Head of Growth",
-  "Growth Director",
-  "Growth Lead",
-  "Head of Business Development",
-  "BDR Manager",
-  "BDR",
-  "Business Development Representative",
-  "Partnerships Manager",
-];
-
-function pickRandomRoles(n: number): string[] {
-  const pool = [...DEFAULT_ROLES];
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
-  }
-  const picked = pool.slice(0, n);
-  while (picked.length < n) picked.push("");
-  return picked;
-}
+import {
+  ADDRESS_SLOTS,
+  COMPANY_SLOTS,
+  PHONE_SLOTS,
+  SlotGroup,
+  TITLE_SLOTS,
+  pickRandomRoles,
+} from "./slots";
 
 export function AddSignaturesTool() {
   const { hasKey, ready } = useApiKey();
@@ -853,53 +829,6 @@ function Toast({
         >
           ✕
         </button>
-      </div>
-    </div>
-  );
-}
-
-function SlotGroup({
-  label,
-  hint,
-  values,
-  onChange,
-  placeholder,
-  headerAction,
-}: {
-  label: string;
-  hint?: string;
-  values: string[];
-  onChange: (v: string[]) => void;
-  placeholder: string;
-  headerAction?: React.ReactNode;
-}) {
-  const filled = values.filter((v) => v.trim()).length;
-  return (
-    <div>
-      <div className="mb-1.5 flex items-center justify-between">
-        <label className="text-xs font-medium text-muted-foreground">
-          {label}{" "}
-          <span className="text-muted-foreground/70">
-            ({filled}/{values.length}
-            {hint ? ` · ${hint}` : ""})
-          </span>
-        </label>
-        {headerAction}
-      </div>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        {values.map((v, i) => (
-          <input
-            key={i}
-            className="pv-input"
-            placeholder={i === 0 ? placeholder : `${placeholder} (alt ${i})`}
-            value={v}
-            onChange={(e) => {
-              const next = [...values];
-              next[i] = e.target.value;
-              onChange(next);
-            }}
-          />
-        ))}
       </div>
     </div>
   );

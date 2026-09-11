@@ -69,11 +69,17 @@ export type StartSource = "sheet" | "plusvibe" | "none";
 export interface SheetWarmup {
   started?: string;
   days?: string | number;
+  /** The "Domain Host" cell (registrar), used for the platform tag. */
+  host?: string;
+  /** The "Client" cell as it is now, before a move writes the new one. */
+  client?: string;
 }
 
 export const SHEET_COL_DOMAIN = "Domain";
 export const SHEET_COL_WARMUP_STARTED = "Warmup Started";
 export const SHEET_COL_WARMUP_DAYS = "Warmup Days";
+export const SHEET_COL_DOMAIN_HOST = "Domain Host";
+export const SHEET_COL_CLIENT = "Client";
 
 function headerIndex(header: string[], name: string): number {
   const want = name.trim().toLowerCase();
@@ -114,6 +120,8 @@ export function warmupFromGrid(grid: string[][]): {
   const iDomain = headerIndex(header, SHEET_COL_DOMAIN);
   const iStarted = headerIndex(header, SHEET_COL_WARMUP_STARTED);
   const iDays = headerIndex(header, SHEET_COL_WARMUP_DAYS);
+  const iHost = headerIndex(header, SHEET_COL_DOMAIN_HOST);
+  const iClient = headerIndex(header, SHEET_COL_CLIENT);
   if (iDomain === -1) return { byDomain, problem: `No "${SHEET_COL_DOMAIN}" column.` };
   if (iStarted === -1 && iDays === -1) {
     return {
@@ -121,13 +129,20 @@ export function warmupFromGrid(grid: string[][]): {
       problem: `No "${SHEET_COL_WARMUP_STARTED}" or "${SHEET_COL_WARMUP_DAYS}" column.`,
     };
   }
+  const cell = (row: string[], i: number) => (i === -1 ? "" : String(row[i] ?? "").trim());
+  // A dash is how the sheet says "none".
+  const value = (s: string) => (s && s !== "-" && s !== "–" ? s : undefined);
   for (const row of grid.slice(1)) {
     const domain = normalizeDomain(row[iDomain]);
     if (!domain || byDomain.has(domain)) continue; // first row wins
-    const started = iStarted === -1 ? "" : String(row[iStarted] ?? "").trim();
-    const days = iDays === -1 ? "" : String(row[iDays] ?? "").trim();
-    if (!started && !days) continue;
-    byDomain.set(domain, { started: started || undefined, days: days || undefined });
+    // A row with blank cells is still a row: the domain is in the sheet, it
+    // just has no date (so Plusvibe's is used) and no host or client yet.
+    byDomain.set(domain, {
+      started: value(cell(row, iStarted)),
+      days: value(cell(row, iDays)),
+      host: value(cell(row, iHost)),
+      client: value(cell(row, iClient)),
+    });
   }
   return { byDomain, problem: null };
 }

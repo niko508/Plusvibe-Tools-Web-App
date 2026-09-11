@@ -92,18 +92,25 @@ eq("a domain is matched however it is written", normalizeDomain("  https://www.A
 eq("a trailing dot is dropped", normalizeDomain("acme.com."), "acme.com");
 
 const grid = [
-  ["Domain", "Tenant Email Address", "Status", "Warmup Started", "Warmup Days", "Domain Host"],
-  ["grimmont.org", "admin@x.onmicrosoft.com", "Warming Up", "2026-08-28", "14", "Dynadot"],
-  ["feneo.co", "admin@y.onmicrosoft.com", "Warming Up", "2026-08-24", "18", "Dynadot"],
-  ["drepurke.co", "admin@z.onmicrosoft.com", "Warming Up", "", "", "Dynadot"],
-  ["daysonly.co", "", "Warming Up", "", "9", ""],
-  ["GRIMMONT.ORG", "", "Warming Up", "2020-01-01", "", ""],
+  ["Domain", "Tenant Email Address", "Status", "Warmup Started", "Warmup Days", "Domain Host", "Client"],
+  ["grimmont.org", "admin@x.onmicrosoft.com", "Warming Up", "2026-08-28", "14", "Dynadot", "Acme"],
+  ["feneo.co", "admin@y.onmicrosoft.com", "Warming Up", "2026-08-24", "18", "Dynadot", "-"],
+  ["drepurke.co", "admin@z.onmicrosoft.com", "Warming Up", "", "", "Dynadot", ""],
+  ["daysonly.co", "", "Warming Up", "", "9", "", ""],
+  ["blank.co", "", "", "", "", "", ""],
+  ["GRIMMONT.ORG", "", "Warming Up", "2020-01-01", "", "", ""],
 ];
 const sheet = warmupFromGrid(grid);
 eq("the tab reads without complaint", sheet.problem, null);
-eq("a domain with a start date is read", sheet.byDomain.get("grimmont.org"), { started: "2026-08-28", days: "14" });
+eq(
+  "a domain with a start date is read, with its host and client",
+  sheet.byDomain.get("grimmont.org"),
+  { started: "2026-08-28", days: "14", host: "Dynadot", client: "Acme" }
+);
 eq("…the first row wins over a repeat", sheet.byDomain.get("grimmont.org").started, "2026-08-28");
-eq("a domain with blank cells is simply absent", sheet.byDomain.has("drepurke.co"), false);
+eq("a dash in a cell reads as nothing", sheet.byDomain.get("feneo.co").client, undefined);
+eq("a domain with only a host is kept for the platform tag", sheet.byDomain.get("drepurke.co"), { host: "Dynadot" });
+eq("a row with blank cells is still in the sheet, with nothing in it", sheet.byDomain.get("blank.co"), {});
 eq("days alone is still kept", sheet.byDomain.get("daysonly.co"), { started: undefined, days: "9" });
 eq("a tab with no Domain column says so", warmupFromGrid([["Foo", "Bar"]]).problem, 'No "Domain" column.');
 eq(
@@ -183,6 +190,102 @@ eq("picking domains adds up their ready inboxes", [picked.domains, picked.inboxe
 eq("…and lists them", picked.emails, ["a@big.co", "b@big.co", "d@big.co", "a@small.co"]);
 eq("picking nothing is nothing", selectionTotals(groups, new Set()).inboxes, 0);
 eq("picking a domain with nothing ready moves nothing", selectionTotals(groups, new Set(["young.co"])).inboxes, 0);
+
+// ===========================================================================
+// Phase 2: what the move does in the client workspace (plan.ts)
+// ===========================================================================
+const {
+  EMPTY_OUTREACH_SETTINGS,
+  parseOutreachSettings,
+  signatureFieldsUsable,
+  planSignatures,
+  previewDomainTags,
+  countsInWords,
+  previewClientColumn,
+  planClientWrites,
+  describeRun,
+  domainsOf,
+} = await importTs("@/lib/start-outreach/plan");
+const { DEFAULT_TLD_TAGS, DEFAULT_PLATFORM_TAGS } = await importTs("@/lib/tags/domain-tags");
+
+// --- settings ---------------------------------------------------------------
+const all = parseOutreachSettings({
+  campaignEmails: "30",
+  startingEmails: "5",
+  rampUp: "3",
+  warmupEmails: "40",
+  randomize: "20",
+  warmupReplyRate: "46",
+  intervalMinutes: "5",
+});
+eq("every field goes out under its API name", all.body, {
+  warmup_max_daily_limit: 40,
+  daily_limit: 30,
+  bulk_rampup_daily_limit: 5,
+  bulk_rampup_daily_inc: 3,
+  warmup_randomize: "yes",
+  warmup_randomize_num: 20,
+  warmup_reply_rate: 0.46,
+  interval_limit_in_min: 5,
+  bulk_is_slow_rampup: "no",
+  bulk_warmup_is_slow_rampup: "no",
+});
+eq("…and both ramp-ups are always off", all.summary.slice(-2).map((r) => `${r.label}: ${r.value}`), [
+  "Campaign email ramp-up: Off",
+  "Warmup email ramp-up: Off",
+]);
+eq("…reading fine", all.ok, true);
+const none = parseOutreachSettings(EMPTY_OUTREACH_SETTINGS);
+eq("blank fields are left alone, only the switches go", none.body, { bulk_is_slow_rampup: "no", bulk_warmup_is_slow_rampup: "no" });
+eq("…which is still a valid run", none.ok, true);
+eq("randomize 0 is said as off", parseOutreachSettings({ ...EMPTY_OUTREACH_SETTINGS, randomize: "0" }).body.warmup_randomize, "no");
+eq("a reply rate is a 0–1 fraction on the wire", parseOutreachSettings({ ...EMPTY_OUTREACH_SETTINGS, warmupReplyRate: "12.5" }).body.warmup_reply_rate, 0.125);
+eq("a bad number is named", parseOutreachSettings({ ...EMPTY_OUTREACH_SETTINGS, rampUp: "0" }).problems.rampUp, "Ramp-up must be between 1 and 2000 per day.");
+eq("…and so is text", parseOutreachSettings({ ...EMPTY_OUTREACH_SETTINGS, warmupEmails: "lots" }).problems.warmupEmails, "Warmup emails must be a number.");
+eq("a fraction where a whole number is due is refused", parseOutreachSettings({ ...EMPTY_OUTREACH_SETTINGS, intervalMinutes: "2.5" }).ok, false);
+
+// --- signatures -------------------------------------------------------------
+eq("signatures need a title and a company", signatureFieldsUsable({ titles: ["AE"], companies: [""], phones: [], addresses: [] }), false);
+eq("…and are usable with both", signatureFieldsUsable({ titles: ["AE"], companies: ["Acme"], phones: [], addresses: [] }), true);
+eq("nothing is not usable", signatureFieldsUsable(null), false);
+const moving = [
+  { id: "1", email: "a@x.co", domain: "x.co", provider: "MICROSOFT365", firstName: "Alice", lastName: "Ford" },
+  { id: "2", email: "b@x.co", domain: "x.co", provider: "MICROSOFT365", firstName: "alice", lastName: "ford" },
+  { id: "3", email: "c@y.org", domain: "y.org", provider: "GOOGLE_WORKSPACE", firstName: "Bob" },
+  { id: "4", email: "d@y.org", domain: "y.org", provider: "GOOGLE_WORKSPACE", firstName: "" },
+];
+const sp = planSignatures(moving);
+eq("inboxes are grouped by the person named on them", sp.people.map((p) => [p.key, p.ids]), [["alice ford", ["1", "2"]], ["bob", ["3"]]]);
+eq("…counting who can be signed and who cannot", [sp.withName, sp.noName], [3, 1]);
+
+// --- tags -------------------------------------------------------------------
+const tp = previewDomainTags(moving, { "x.co": "Porkbun.com", "y.org": "GoDaddy" }, DEFAULT_TLD_TAGS, DEFAULT_PLATFORM_TAGS);
+eq("each domain gets its TLD tag", tp.rows.map((r) => [r.domain, r.tldTag]), [["x.co", ".co"], ["y.org", ".org"]]);
+eq("…and the platform tag its host matches", tp.rows.map((r) => r.platformTag), ["porkbun", undefined]);
+eq("…counting inboxes per tag", [countsInWords(tp.tldCounts), countsInWords(tp.platformCounts)], [".co ×2, .org ×2", "porkbun ×2"]);
+eq("a host with no tag is counted", tp.hostNoTag, 1);
+eq("a domain the sheet has no host for is counted", previewDomainTags(moving, {}, DEFAULT_TLD_TAGS, DEFAULT_PLATFORM_TAGS).notInSheet, 2);
+eq("an unknown TLD is counted, not guessed", previewDomainTags([{ ...moving[0], domain: "x.xyz" }], {}, DEFAULT_TLD_TAGS, []).tldNoTag, 1);
+
+// --- the sheet's Client column ---------------------------------------------
+const cp = previewClientColumn(["x.co", "y.org", "z.net"], { "x.co": { client: "Acme" }, "y.org": { client: "" } }, "Acme");
+eq("domains in the sheet are told from the rest", [cp.inSheet.map((r) => r.domain), cp.notInSheet], [["x.co", "y.org"], ["z.net"]]);
+eq("…and rows that already say the client are counted", cp.alreadySet, 1);
+
+const clientGrid = [
+  ["Domain", "Status", "Client"],
+  ["x.co", "Warming Up", "acme"],
+  ["Y.ORG", "Warming Up", "Old"],
+  ["w.co", "Warming Up", ""],
+];
+const cw = planClientWrites(clientGrid, ["x.co", "y.org", "z.net"], "Acme");
+eq("only rows that do not already say it are written", cw.writes, [{ domain: "y.org", row: 3, column: 2 }]);
+eq("…the rest is reported", [cw.alreadySet, cw.notInSheet], [["x.co"], ["z.net"]]);
+eq("a tab without the column says so", planClientWrites([["Domain", "Status"]], ["x.co"], "Acme").problem, 'No "Client" column in the Domains tab.');
+eq("an empty tab says so", planClientWrites([], ["x.co"], "Acme").problem, "The Domains tab is empty.");
+
+eq("domains are counted once, however spelled", domainsOf([{ domain: "X.co" }, { domain: "x.co." }, { domain: "y.org" }]), ["x.co", "y.org"]);
+eq("a run reads as a sentence", describeRun({ inboxes: 3, domains: 2, source: "Warming", destination: "Client A" }), "3 inboxes on 2 domains · Warming → Client A");
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

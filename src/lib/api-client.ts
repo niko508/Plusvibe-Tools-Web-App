@@ -10,6 +10,7 @@ import type { InboxTagsJob, InboxTagsStartPayload } from "@/lib/jobs/inbox-tags-
 import type { ChangeLimitsJob, ChangeLimitsStartPayload } from "@/lib/jobs/change-limits-types";
 import type { CampaignSettingsJob, CampaignSettingsStartPayload } from "@/lib/jobs/campaign-settings-types";
 import type { DomainTagsJob, DomainTagsStartPayload } from "@/lib/jobs/domain-tags-types";
+import type { StartOutreachJob, StartOutreachStartPayload } from "@/lib/jobs/start-outreach-types";
 import type { CatalogTag } from "@/lib/inbox-tags/plan";
 import type { FollowUpTemplate } from "@/lib/follow-ups/templates";
 import type {
@@ -236,8 +237,8 @@ export function deleteInboxTagsJob(jobId: string, signal?: AbortSignal) {
 // --- Start Outreach with New Inboxes ----------------------------------------
 
 export interface WarmupDatesResponse {
-  /** domain → the sheet's Warmup Started / Warmup Days cells. */
-  byDomain: Record<string, { started?: string; days?: string | number }>;
+  /** domain → the sheet's Warmup Started / Warmup Days / Domain Host / Client cells. */
+  byDomain: Record<string, { started?: string; days?: string | number; host?: string; client?: string }>;
   rows: number;
   /** Which sheet was read, in words, or null when none could be. */
   source: string | null;
@@ -254,6 +255,19 @@ export function fetchWarmupDates(
     body: params,
     signal,
   });
+}
+
+export function startStartOutreach(payload: StartOutreachStartPayload, signal?: AbortSignal) {
+  return request<{ jobId: string }>("/api/jobs/start-outreach/start", { method: "POST", body: payload, signal });
+}
+export function listStartOutreachJobs(signal?: AbortSignal) {
+  return request<{ jobs: StartOutreachJob[] }>("/api/jobs/start-outreach/list", { signal });
+}
+export function abortStartOutreachJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/start-outreach/abort", { method: "POST", body: { jobId }, signal });
+}
+export function deleteStartOutreachJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/start-outreach/delete", { method: "POST", body: { jobId }, signal });
 }
 
 // --- Copy Campaign to Other Workspace ---------------------------------------

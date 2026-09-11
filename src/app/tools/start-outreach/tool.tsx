@@ -44,6 +44,8 @@ import {
   type StartSource,
   type Verdict,
 } from "@/lib/start-outreach/readiness";
+import type { MovingInbox } from "@/lib/start-outreach/plan";
+import { OutreachSetup } from "./setup";
 
 // Start Outreach with New Inboxes — step 1: find the domains whose inboxes
 // have warmed long enough, and pick the ones to move.
@@ -71,6 +73,8 @@ interface Row {
   warmupHealth?: number;
   campaignIds: string[];
   plusvibeEnabledAt?: string;
+  firstName?: string;
+  lastName?: string;
 }
 
 interface Judged extends Row {
@@ -288,6 +292,25 @@ export function StartOutreachTool() {
   // A selection only ever means ready inboxes, so a rule change that makes a
   // domain unready quietly drops it from the total rather than counting it.
   const totals = useMemo(() => selectionTotals(groups, selected), [groups, selected]);
+  // What a run would move: the ready inboxes on the ticked domains.
+  const moving: MovingInbox[] = useMemo(
+    () =>
+      judged
+        .filter((r) => r.verdict === "ready" && selected.has(r.domain))
+        .map((r) => ({
+          id: r.id,
+          email: r.email,
+          domain: r.domain,
+          provider: r.provider,
+          firstName: r.firstName,
+          lastName: r.lastName,
+        })),
+    [judged, selected]
+  );
+  const sourceWorkspace = useMemo(() => {
+    const w = workspaces.find((x) => x._id === ws);
+    return w && fetchedFor ? { id: w._id, name: w.name } : null;
+  }, [workspaces, ws, fetchedFor]);
   const inboxesByDomain = useMemo(() => {
     const m = new Map<string, Judged[]>();
     for (const r of judged) {
@@ -619,6 +642,15 @@ export function StartOutreachTool() {
               Lower the days, or untick the campaign filter.
             </EmptyState>
           )}
+
+          <OutreachSetup
+            source={sourceWorkspace}
+            workspaces={workspaces}
+            inboxes={moving}
+            sheetDates={sheetDates}
+            sheetConfig={sheetConfig}
+            hasSheet={hasSheet}
+          />
         </>
       )}
     </div>
@@ -753,6 +785,8 @@ function toRow(a: EmailAccount): Row | null {
     warmupHealth: a.warmup_health,
     campaignIds: a.campaign_ids ?? [],
     plusvibeEnabledAt: a.warmup_enabled_at,
+    firstName: a.first_name,
+    lastName: a.last_name,
   };
 }
 
