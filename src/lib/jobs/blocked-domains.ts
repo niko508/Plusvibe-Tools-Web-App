@@ -28,15 +28,13 @@ import {
   CANCEL_TAB,
   COL_CANCEL_TENANT,
   COL_DOMAIN_HOST,
-  COL_GOOGLE_EMAIL,
   GOOGLE_CANCEL_TAB,
   buildCancelRow,
-  buildGoogleCancelRow,
   findDomainRow,
-  googleInboxesToQueue,
   headerIndex,
   isGoogleDomain,
-  googleInboxesToList,
+  googleBurnedInboxes,
+  planGoogleTabWrites,
   matchWorkspaceByClient,
   tenantAlreadyQueued,
 } from "@/lib/blocked-domains/sheet-plan";
@@ -671,26 +669,32 @@ async function listGoogleInboxes(
     }
   }
   const gGrid = await readTab(sheetId, GOOGLE_CANCEL_TAB);
-  const gHeader = gGrid[0] ?? [COL_GOOGLE_EMAIL, COL_CANCEL_SOURCE];
-  const iEmail = headerIndex(gHeader, COL_GOOGLE_EMAIL);
-  if (iEmail < 0) {
+  const plan = planGoogleTabWrites(gGrid, emails, src);
+  if (plan.problem) {
     // Writing rows the tab can't place would put addresses under the wrong
     // heading, which is worse than listing nothing and saying so.
-    outcome.error = `The "${GOOGLE_CANCEL_TAB}" tab has no ${COL_GOOGLE_EMAIL} column, so no inboxes were listed there.`;
+    outcome.error = plan.problem;
     pushError(rec, outcome.error);
     return { ok: false, queued: [], already: [] };
   }
-  const { toQueue, alreadyQueued } = googleInboxesToQueue(gGrid, iEmail, emails);
-  if (toQueue.length > 0) {
-    await appendRows(
+  // The blank rows at the top first — that is where the tab is read from —
+  // and Sheets' append only when the tab has no blank row left.
+  if (plan.updates.length > 0) {
+    await batchUpdateCells(
       sheetId,
-      GOOGLE_CANCEL_TAB,
-      toQueue.map((email) => buildGoogleCancelRow(gHeader, { email, source: src }))
+      plan.updates.map((u) => ({
+        range: `${quoteTab(GOOGLE_CANCEL_TAB)}!${columnLetter(u.column)}${u.row}`,
+        value: u.value,
+      }))
     );
   }
-  outcome.googleQueued = [...(outcome.googleQueued ?? []), ...toQueue];
-  outcome.googleAlreadyQueued = alreadyQueued;
-  return { ok: true, queued: toQueue, already: alreadyQueued };
+  if (plan.append.length > 0) await appendRows(sheetId, GOOGLE_CANCEL_TAB, plan.append);
+  // A row moved up from the bottom counts as listed by this run: until now it
+  // was on the tab in name only.
+  const queued = [...plan.queued, ...plan.moved];
+  outcome.googleQueued = Array.from(new Set([...(outcome.googleQueued ?? []), ...queued]));
+  outcome.googleAlreadyQueued = plan.already;
+  return { ok: true, queued, already: plan.already };
 }
 
 /** The window the inboxes are judged on: the last 7 days, ending today. */
@@ -1747,9 +1751,12 @@ export async function listGoogleInboxesForJob(
         : "The mailbox type is not known for this run yet — Re-judge it first.",
     };
   }
-  const emails = googleInboxesToList(rec);
+  // Every burned inbox, not just the unlisted ones: a row the tab already
+  // holds is left where it is, unless it is stranded below a blank row, in
+  // which case this is what moves it up.
+  const emails = googleBurnedInboxes(rec);
   if (emails.length === 0) {
-    return { ok: false, listed: 0, already: 0, error: `Nothing to list — every burned inbox is already on "${GOOGLE_CANCEL_TAB}".` };
+    return { ok: false, listed: 0, already: 0, error: "Nothing to list — this run stopped no inboxes." };
   }
   const sheetId = envSpreadsheetId();
   if (!sheetId || !isSheetWritingConfigured()) {

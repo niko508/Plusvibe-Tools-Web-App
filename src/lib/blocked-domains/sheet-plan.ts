@@ -66,11 +66,16 @@ export function googleInboxesToList(rec: GoogleListable): string[] {
       e.trim().toLowerCase()
     )
   );
+  return googleBurnedInboxes(rec).filter((e) => !listed.has(e));
+}
+
+/** Every inbox the automation stopped or deleted on the domain, listed or not. */
+export function googleBurnedInboxes(rec: GoogleListable): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   const add = (raw: string) => {
     const email = raw.trim().toLowerCase();
-    if (!email || seen.has(email) || listed.has(email)) return;
+    if (!email || seen.has(email)) return;
     seen.add(email);
     out.push(email);
   };
@@ -186,6 +191,93 @@ export function buildGoogleCancelRow(
   if (iEmail >= 0) row[iEmail] = values.email;
   if (iSource >= 0) row[iSource] = values.source;
   return row;
+}
+
+export interface GoogleTabWrite {
+  /** 1-based row and 0-based column. */
+  row: number;
+  column: number;
+  value: string;
+}
+
+export interface GoogleTabPlan {
+  /** Cells to write in place: new rows in the first blank slots, and moves. */
+  updates: GoogleTabWrite[];
+  /** Rows to append when the tab has no blank slot left. */
+  append: string[][];
+  /** Newly listed, in place or appended. */
+  queued: string[];
+  /** Already on the tab, where they belong. */
+  already: string[];
+  /** Found stranded below blank rows and moved up into them. */
+  moved: string[];
+  problem?: string;
+}
+
+/**
+ * Where each burned inbox goes on 🛑 Google Inboxes to Cancel.
+ *
+ * The tab is laid out in advance: many rows with a blank Email Address and a
+ * source dropdown, waiting to be filled from the top. Sheets' own "append"
+ * treats those rows as part of the table and writes below them, out of
+ * sight — so this fills the first blank Email Address rows instead, appends
+ * only when none is left, and pulls any row already stranded below a blank
+ * one back up into it.
+ */
+export function planGoogleTabWrites(
+  grid: string[][],
+  emails: string[],
+  source: string
+): GoogleTabPlan {
+  const header = grid[0] ?? [COL_GOOGLE_EMAIL, COL_CANCEL_SOURCE];
+  const iEmail = headerIndex(header, COL_GOOGLE_EMAIL);
+  const iSource = headerIndex(header, COL_CANCEL_SOURCE);
+  const out: GoogleTabPlan = { updates: [], append: [], queued: [], already: [], moved: [] };
+  if (iEmail < 0) {
+    out.problem = `The "${GOOGLE_CANCEL_TAB}" tab has no ${COL_GOOGLE_EMAIL} column, so no inboxes were listed there.`;
+    return out;
+  }
+  const cell = (r: number, c: number) => String(grid[r - 1]?.[c] ?? "").trim();
+  const rowOf = new Map<string, number>();
+  const blanks: number[] = [];
+  for (let r = 2; r <= grid.length; r++) {
+    const e = cell(r, iEmail).toLowerCase();
+    if (!e) blanks.push(r);
+    else if (!rowOf.has(e)) rowOf.set(e, r);
+  }
+  const firstBlank = blanks[0] ?? Infinity;
+  const place = (email: string, slot: number) => {
+    out.updates.push({ row: slot, column: iEmail, value: email });
+    if (iSource >= 0 && source) out.updates.push({ row: slot, column: iSource, value: source });
+  };
+  const seen = new Set<string>();
+  for (const raw of emails) {
+    const email = raw.trim().toLowerCase();
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    const existing = rowOf.get(email);
+    if (existing !== undefined && existing < firstBlank) {
+      out.already.push(email);
+      continue;
+    }
+    const slot = blanks.shift();
+    if (existing !== undefined) {
+      // Stranded below a blank row: into the slot, and the old cells cleared.
+      if (slot === undefined) {
+        out.already.push(email);
+        continue;
+      }
+      place(email, slot);
+      out.updates.push({ row: existing, column: iEmail, value: "" });
+      if (iSource >= 0) out.updates.push({ row: existing, column: iSource, value: "" });
+      out.moved.push(email);
+      continue;
+    }
+    if (slot !== undefined) place(email, slot);
+    else out.append.push(buildGoogleCancelRow(header, { email, source }));
+    out.queued.push(email);
+  }
+  return out;
 }
 
 /**

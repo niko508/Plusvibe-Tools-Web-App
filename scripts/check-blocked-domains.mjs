@@ -180,6 +180,23 @@ eq("…and what is already on the tab is left out",
   sp.googleInboxesToList({ quarantinedEmails: ["a@x.com", "b@x.com"], sheet: { googleQueued: ["A@x.com"], googleAlreadyQueued: ["b@x.com"] } }),
   []);
 eq("a record with nothing stopped has nothing to list", sp.googleInboxesToList({}), []);
+// The tab is laid out in advance with blank rows: new inboxes fill the first
+// blank Email Address rows, and only when none is left are rows appended.
+const laid = [GH, ["old@x.com", "S"], ["", "–"], ["", "–"], ["far@x.com", "S"]];
+const tp = sp.planGoogleTabWrites(laid, ["new@x.com", "old@x.com", "far@x.com", "extra@x.com"], "Src");
+eq("a new inbox goes into the first blank row, with its source",
+  tp.updates.slice(0, 2), [{ row: 3, column: 0, value: "new@x.com" }, { row: 3, column: 1, value: "Src" }]);
+eq("…one already in place is left alone", tp.already, ["old@x.com"]);
+eq("…one stranded below a blank row is moved up into it and its old cells cleared",
+  [tp.moved, tp.updates.slice(2)],
+  [["far@x.com"], [
+    { row: 4, column: 0, value: "far@x.com" }, { row: 4, column: 1, value: "Src" },
+    { row: 5, column: 0, value: "" }, { row: 5, column: 1, value: "" },
+  ]]);
+eq("…and with no blank row left the rest is appended", [tp.append, tp.queued], [[["extra@x.com", "Src"]], ["new@x.com", "extra@x.com"]]);
+eq("a tab with only a header appends everything", sp.planGoogleTabWrites([GH], ["a@x.com"], "S").append, [["a@x.com", "S"]]);
+eq("a tab without the email column says so", sp.planGoogleTabWrites([["Notes"]], ["a@x.com"], "S").problem, 'The "🛑 Google Inboxes to Cancel" tab has no Email Address column, so no inboxes were listed there.');
+eq("a missing source leaves the slot's dropdown cell alone", sp.planGoogleTabWrites([GH, ["", "–"]], ["a@x.com"], "").updates, [{ row: 2, column: 0, value: "a@x.com" }]);
 eq("…nor one with no inboxes", sp.isGoogleDomain({ google: 0, microsoft: 0, other: 0 }), false);
 
 // --- Already Not Active -----------------------------------------------------

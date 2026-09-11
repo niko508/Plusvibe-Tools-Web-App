@@ -22,7 +22,12 @@ import {
 import { describeNext } from "@/lib/blocked-domains/recheck";
 import { normalizeLimit } from "@/lib/blocked-domains/rejudge";
 import { bucketOf, describeProviders, PROVIDER_LABELS } from "@/lib/plusvibe-providers";
-import { GOOGLE_CANCEL_TAB, googleInboxesToList, isGoogleDomain } from "@/lib/blocked-domains/sheet-plan";
+import {
+  GOOGLE_CANCEL_TAB,
+  googleBurnedInboxes,
+  googleInboxesToList,
+  isGoogleDomain,
+} from "@/lib/blocked-domains/sheet-plan";
 
 const STATUS_META: Record<
   BlockedDomainStatus,
@@ -118,6 +123,9 @@ export function JobCard({
   // A Google domain whose burned inboxes never made it onto the Google tab —
   // handled before that path existed — can still have them listed.
   const googleUnlisted = isGoogleDomain(job.providers) ? googleInboxesToList(job).length : 0;
+  // Re-listing is always offered once something was listed: it puts the rows
+  // in the first blank slots and pulls up any left stranded at the bottom.
+  const googleBurned = isGoogleDomain(job.providers) ? googleBurnedInboxes(job).length : 0;
 
   function phaseDetail(phase: (typeof PHASE_ORDER)[number]): string {
     if (phase === "locating") {
@@ -580,17 +588,23 @@ export function JobCard({
           />
         )}
 
-        {!active && googleUnlisted > 0 && (
+        {!active && googleBurned > 0 && (
           <button
             type="button"
             className="pv-btn-ghost disabled:opacity-50"
             disabled={busy}
             onClick={() => onListGoogle(job.id)}
-            title={`Put the ${formatNumber(googleUnlisted)} burned inbox${googleUnlisted === 1 ? "" : "es"} on "${GOOGLE_CANCEL_TAB}" so the seats get cancelled. Nothing else changes.`}
+            title={
+              googleUnlisted > 0
+                ? `Put the ${formatNumber(googleUnlisted)} burned inbox${googleUnlisted === 1 ? "" : "es"} in the first blank rows of "${GOOGLE_CANCEL_TAB}" so the seats get cancelled. Nothing else changes.`
+                : `Check the ${formatNumber(googleBurned)} listed inbox${googleBurned === 1 ? "" : "es"} on "${GOOGLE_CANCEL_TAB}": any row left below blank ones is moved up into them.`
+            }
             data-list-google
           >
             {busy ? <Spinner /> : <SheetIcon size={16} />}
-            List {formatNumber(googleUnlisted)} on Google tab
+            {googleUnlisted > 0
+              ? `List ${formatNumber(googleUnlisted)} on Google tab`
+              : `Re-list ${formatNumber(googleBurned)} on Google tab`}
           </button>
         )}
 
