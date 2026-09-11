@@ -11,7 +11,13 @@ import { groupInboxes, type InboxLike } from "@/app/tools/add-signatures/filter"
 import type { PersonGroup } from "@/app/tools/add-signatures/types";
 import { findPlatformTag, findTldTag, tldOf } from "@/lib/tags/domain-tags";
 import type { TagInput } from "@/lib/tags/bulk-tags";
-import { normalizeDomain } from "@/lib/start-outreach/readiness";
+import {
+  SHEET_COL_CLIENT,
+  SHEET_COL_DOMAIN,
+  SHEET_COL_WARMUP_DAYS,
+  SHEET_COL_WARMUP_STARTED,
+  normalizeDomain,
+} from "@/lib/start-outreach/readiness";
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -320,14 +326,16 @@ export interface ClientPreview {
   notInSheet: string[];
   /** Rows whose Client already reads as the destination. */
   alreadySet: number;
+  /** Rows that still carry a warmup date or day count to clear. */
+  withWarmup: number;
 }
 
 export function previewClientColumn(
   domains: string[],
-  sheet: Record<string, { client?: string } | undefined>,
+  sheet: Record<string, { client?: string; started?: string; days?: string | number } | undefined>,
   destinationName: string
 ): ClientPreview {
-  const out: ClientPreview = { inSheet: [], notInSheet: [], alreadySet: 0 };
+  const out: ClientPreview = { inSheet: [], notInSheet: [], alreadySet: 0, withWarmup: 0 };
   const want = destinationName.trim().toLowerCase();
   for (const raw of domains) {
     const d = normalizeDomain(raw);
@@ -339,55 +347,99 @@ export function previewClientColumn(
     }
     out.inSheet.push({ domain: d, current: row.client });
     if ((row.client ?? "").trim().toLowerCase() === want && want) out.alreadySet += 1;
+    if (row.started || (row.days !== undefined && row.days !== "")) out.withWarmup += 1;
   }
   return out;
 }
 
+/** What a moved domain's Status cell is set to. */
+export const ACTIVE_STATUS = "Active";
+
+export interface SheetWrite {
+  domain: string;
+  /** 1-based sheet row and 0-based column, ready for A1 notation. */
+  row: number;
+  column: number;
+  value: string;
+}
+
 /**
- * The cell writes for the Client column: one per domain found in the grid,
- * skipping rows that already say it. Returns the 1-based rows written and the
- * domains the grid does not have.
+ * The cell writes for the moved domains: Client set to the destination,
+ * Status set to Active, and the Warmup Started / Warmup Days cells cleared,
+ * since the domain is no longer warming. Cells that already read that way
+ * are not written. Returns the domains the grid does not have, and the rows
+ * that needed nothing at all.
  */
-export function planClientWrites(
+export function planSheetWrites(
   grid: string[][],
   domains: string[],
   destinationName: string
 ): {
-  writes: { domain: string; row: number; column: number }[];
+  writes: SheetWrite[];
+  /** Rows that were changed (one per domain, however many cells). */
+  rows: string[];
   alreadySet: string[];
   notInSheet: string[];
+  /** Columns the tab does not have, so those cells were left alone. */
+  missingColumns: string[];
   problem: string | null;
 } {
-  const empty = { writes: [], alreadySet: [], notInSheet: [], problem: null as string | null };
+  const empty = {
+    writes: [] as SheetWrite[],
+    rows: [] as string[],
+    alreadySet: [] as string[],
+    notInSheet: [] as string[],
+    missingColumns: [] as string[],
+    problem: null as string | null,
+  };
   if (grid.length === 0) return { ...empty, problem: "The Domains tab is empty." };
   const header = grid[0].map((h) => String(h ?? "").trim().toLowerCase());
-  const iDomain = header.indexOf("domain");
-  const iClient = header.indexOf("client");
-  if (iDomain === -1) return { ...empty, problem: 'No "Domain" column in the Domains tab.' };
-  if (iClient === -1) return { ...empty, problem: 'No "Client" column in the Domains tab.' };
+  const col = (name: string) => header.indexOf(name.toLowerCase());
+  const iDomain = col(SHEET_COL_DOMAIN);
+  const iClient = col(SHEET_COL_CLIENT);
+  const iStatus = col("Status");
+  const iStarted = col(SHEET_COL_WARMUP_STARTED);
+  const iDays = col(SHEET_COL_WARMUP_DAYS);
+  if (iDomain === -1) return { ...empty, problem: `No "${SHEET_COL_DOMAIN}" column in the Domains tab.` };
+  if (iClient === -1) return { ...empty, problem: `No "${SHEET_COL_CLIENT}" column in the Domains tab.` };
+  const missingColumns = [
+    iStatus === -1 ? "Status" : null,
+    iStarted === -1 ? SHEET_COL_WARMUP_STARTED : null,
+    iDays === -1 ? SHEET_COL_WARMUP_DAYS : null,
+  ].filter((c): c is string => !!c);
 
   const rowByDomain = new Map<string, number>();
   for (let r = 1; r < grid.length; r++) {
     const d = normalizeDomain(grid[r]?.[iDomain]);
     if (d && !rowByDomain.has(d)) rowByDomain.set(d, r + 1); // first row wins
   }
-  const want = destinationName.trim();
-  const writes: { domain: string; row: number; column: number }[] = [];
-  const alreadySet: string[] = [];
-  const notInSheet: string[] = [];
+  const wanted: [number, string][] = [
+    [iClient, destinationName.trim()],
+    [iStatus, ACTIVE_STATUS],
+    [iStarted, ""],
+    [iDays, ""],
+  ];
+  const out = { ...empty, missingColumns };
   for (const raw of domains) {
     const d = normalizeDomain(raw);
     if (!d) continue;
     const row = rowByDomain.get(d);
     if (!row) {
-      notInSheet.push(d);
+      out.notInSheet.push(d);
       continue;
     }
-    const current = String(grid[row - 1]?.[iClient] ?? "").trim();
-    if (current.toLowerCase() === want.toLowerCase()) alreadySet.push(d);
-    else writes.push({ domain: d, row, column: iClient });
+    let changed = false;
+    for (const [column, value] of wanted) {
+      if (column === -1) continue;
+      const current = String(grid[row - 1]?.[column] ?? "").trim();
+      if (current.toLowerCase() === value.toLowerCase()) continue;
+      out.writes.push({ domain: d, row, column, value });
+      changed = true;
+    }
+    if (changed) out.rows.push(d);
+    else out.alreadySet.push(d);
   }
-  return { writes, alreadySet, notInSheet, problem: null };
+  return out;
 }
 
 // ---------------------------------------------------------------------------

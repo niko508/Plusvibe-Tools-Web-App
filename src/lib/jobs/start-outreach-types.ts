@@ -21,7 +21,7 @@ export const STEP_LABELS: Record<StepKey, string> = {
   settings: "Apply the settings",
   signatures: "Set the signatures",
   tags: "Add the tags",
-  sheet: "Update the sheet's Client column",
+  sheet: "Update the sheet",
 };
 
 export interface StepRecord {

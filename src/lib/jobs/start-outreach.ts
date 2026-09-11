@@ -25,11 +25,12 @@ import { ACCOUNTS_MAX_PAGES, ACCOUNTS_PAGE, assignTag, readInboxPage, resolveTag
 import { findPlatformTag, findTldTag, parseDomainHosts, planInboxes } from "@/lib/tags/domain-tags";
 import { normalizeEmail } from "@/lib/start-outreach/readiness";
 import {
+  ACTIVE_STATUS,
   ACTIVE_TAG_COLOR,
   describeRun,
   domainsOf,
   parseOutreachSettings,
-  planClientWrites,
+  planSheetWrites,
   planSignatures,
   signatureFieldsUsable,
   trimFields,
@@ -537,24 +538,29 @@ async function runJob(id: string) {
         if (!sheetId) throw new Error("No spreadsheet to write to: sync the sheet in the header or set SPREADSHEET_ID.");
         const tab = payload.sheet.tab?.trim() || DEFAULT_SHEET_TAB;
         const grid = await readTab(sheetId, tab);
-        const plan = planClientWrites(grid, domainsOf(arrived), payload.destWorkspaceName);
+        const plan = planSheetWrites(grid, domainsOf(arrived), payload.destWorkspaceName);
         if (plan.problem) throw new Error(plan.problem);
-        sheet.total = plan.writes.length;
+        sheet.total = plan.rows.length;
         if (plan.writes.length > 0) {
           check();
           await batchUpdateCells(
             sheetId,
             plan.writes.map((w) => ({
               range: `${quoteTab(tab)}!${columnLetter(w.column)}${w.row}`,
-              value: payload.destWorkspaceName,
+              value: w.value,
             }))
           );
-          sheet.done = plan.writes.length;
+          sheet.done = plan.rows.length;
         }
-        const bits = [`Client set to "${payload.destWorkspaceName}" on ${plural(plan.writes.length, "row")}`];
-        if (plan.alreadySet.length) bits.push(`${plan.alreadySet.length} already said it`);
+        const bits = [
+          `${plural(plan.rows.length, "row")} set to Client "${payload.destWorkspaceName}", Status ${ACTIVE_STATUS}, warmup columns cleared`,
+        ];
+        if (plan.alreadySet.length) bits.push(`${plan.alreadySet.length} already read that way`);
         if (plan.notInSheet.length) {
           bits.push(`${plural(plan.notInSheet.length, "domain")} not in the sheet: ${plan.notInSheet.slice(0, 5).join(", ")}${plan.notInSheet.length > 5 ? ", …" : ""}`);
+        }
+        if (plan.missingColumns.length) {
+          fail(sheet, `The tab has no ${plan.missingColumns.map((c) => `"${c}"`).join(" or ")} column, so that was left alone.`);
         }
         finish(sheet, bits.join(" · "));
       } catch (err) {

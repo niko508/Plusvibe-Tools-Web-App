@@ -202,7 +202,7 @@ const {
   previewDomainTags,
   countsInWords,
   previewClientColumn,
-  planClientWrites,
+  planSheetWrites,
   describeRun,
   domainsOf,
 } = await importTs("@/lib/start-outreach/plan");
@@ -272,17 +272,27 @@ const cp = previewClientColumn(["x.co", "y.org", "z.net"], { "x.co": { client: "
 eq("domains in the sheet are told from the rest", [cp.inSheet.map((r) => r.domain), cp.notInSheet], [["x.co", "y.org"], ["z.net"]]);
 eq("…and rows that already say the client are counted", cp.alreadySet, 1);
 
-const clientGrid = [
-  ["Domain", "Status", "Client"],
-  ["x.co", "Warming Up", "acme"],
-  ["Y.ORG", "Warming Up", "Old"],
-  ["w.co", "Warming Up", ""],
+eq("…and rows still carrying warmup dates", previewClientColumn(["x.co", "y.org"], { "x.co": { started: "2026-08-19", days: "23" }, "y.org": {} }, "Acme").withWarmup, 1);
+
+const sheetGrid = [
+  ["Domain", "Status", "Warmup Started", "Warmup Days", "Client"],
+  ["x.co", "Active", "", "", "acme"],
+  ["Y.ORG", "Warming Up", "2026-08-19", "23", "Old"],
+  ["w.co", "Warming Up", "", "", ""],
 ];
-const cw = planClientWrites(clientGrid, ["x.co", "y.org", "z.net"], "Acme");
-eq("only rows that do not already say it are written", cw.writes, [{ domain: "y.org", row: 3, column: 2 }]);
-eq("…the rest is reported", [cw.alreadySet, cw.notInSheet], [["x.co"], ["z.net"]]);
-eq("a tab without the column says so", planClientWrites([["Domain", "Status"]], ["x.co"], "Acme").problem, 'No "Client" column in the Domains tab.');
-eq("an empty tab says so", planClientWrites([], ["x.co"], "Acme").problem, "The Domains tab is empty.");
+const sw = planSheetWrites(sheetGrid, ["x.co", "y.org", "z.net"], "Acme");
+eq("a moved domain gets its client, an Active status and its warmup cells cleared", sw.writes, [
+  { domain: "y.org", row: 3, column: 4, value: "Acme" },
+  { domain: "y.org", row: 3, column: 1, value: "Active" },
+  { domain: "y.org", row: 3, column: 2, value: "" },
+  { domain: "y.org", row: 3, column: 3, value: "" },
+]);
+eq("…a row that already reads that way is not written", [sw.rows, sw.alreadySet, sw.notInSheet], [["y.org"], ["x.co"], ["z.net"]]);
+eq("…and only the cells that differ are", planSheetWrites(sheetGrid, ["w.co"], "Acme").writes.map((w) => [w.column, w.value]), [[4, "Acme"], [1, "Active"]]);
+eq("a tab without the Client column says so", planSheetWrites([["Domain", "Status"]], ["x.co"], "Acme").problem, 'No "Client" column in the Domains tab.');
+const noStatus = planSheetWrites([["Domain", "Client"], ["x.co", ""]], ["x.co"], "Acme");
+eq("a tab without the status or warmup columns still gets its client, and says what is missing", [noStatus.writes.length, noStatus.missingColumns], [1, ["Status", "Warmup Started", "Warmup Days"]]);
+eq("an empty tab says so", planSheetWrites([], ["x.co"], "Acme").problem, "The Domains tab is empty.");
 
 eq("domains are counted once, however spelled", domainsOf([{ domain: "X.co" }, { domain: "x.co." }, { domain: "y.org" }]), ["x.co", "y.org"]);
 eq("a run reads as a sentence", describeRun({ inboxes: 3, domains: 2, source: "Warming", destination: "Client A" }), "3 inboxes on 2 domains · Warming → Client A");

@@ -27,6 +27,7 @@ import {
   pickRandomRoles,
 } from "../add-signatures/slots";
 import {
+  ACTIVE_STATUS,
   ACTIVE_TAG_NAME,
   EMPTY_OUTREACH_SETTINGS,
   OUTREACH_FIELDS,
@@ -418,7 +419,9 @@ export function OutreachSetup({
             onChange={opt("activeTag")}
             aria-label="Add active tag"
           />
-          Add the <span className="pv-chip">{ACTIVE_TAG_NAME}</span> tag to every moved inbox
+          <span>
+            Add the <span className="pv-chip">{ACTIVE_TAG_NAME}</span> tag to every moved inbox
+          </span>
         </label>
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
           <input
@@ -458,13 +461,17 @@ export function OutreachSetup({
             onChange={opt("sheet")}
             aria-label="Update client column"
           />
-          Set the Domains tab&apos;s Client column to{" "}
-          <span className="font-medium text-foreground">{destination?.name ?? "the destination"}</span>
+          <span>
+            In the Domains tab, set Client to{" "}
+            <span className="font-medium text-foreground">{destination?.name ?? "the destination"}</span>, Status to{" "}
+            <span className="font-medium text-foreground">{ACTIVE_STATUS}</span>, and clear Warmup Started / Warmup Days
+          </span>
         </label>
         {options.sheet && inboxes.length > 0 && (
           <p className="text-xs text-muted-foreground" data-client-preview>
             {formatNumber(clientPreview.inSheet.length)} of {formatNumber(domains.length)} domains are in the sheet
             {clientPreview.alreadySet > 0 ? ` (${clientPreview.alreadySet} already say ${destination?.name})` : ""}
+            {clientPreview.withWarmup > 0 ? ` · ${clientPreview.withWarmup} with warmup dates to clear` : ""}
             {clientPreview.notInSheet.length > 0
               ? ` · not in the sheet: ${clientPreview.notInSheet.slice(0, 5).join(", ")}${clientPreview.notInSheet.length > 5 ? ", …" : ""}`
               : ""}
@@ -487,7 +494,7 @@ export function OutreachSetup({
             options.signatures ? "signatures" : null,
             options.activeTag ? `"${ACTIVE_TAG_NAME}" tag` : null,
             options.domainTags ? "TLD + platform tags" : null,
-            options.sheet ? "sheet Client column" : null,
+            options.sheet ? "sheet (Client, Status, warmup cleared)" : null,
           ]
             .filter(Boolean)
             .join(" · ")}
