@@ -86,6 +86,8 @@ export function OutreachSetup({
   sheetDates,
   sheetConfig,
   hasSheet,
+  onRunFinished,
+  resetKey,
 }: {
   source: { id: string; name: string } | null;
   workspaces: Workspace[];
@@ -94,6 +96,10 @@ export function OutreachSetup({
   sheetDates: Record<string, SheetWarmup>;
   sheetConfig: SheetConfig | null;
   hasSheet: boolean;
+  /** Called once a run started here has finished, with the addresses that arrived. */
+  onRunFinished: (movedEmails: string[]) => void;
+  /** Bumped when the page starts a new batch: the destination is cleared. */
+  resetKey: number;
 }) {
   const [dest, setDest] = useState("");
   const [options, setOptions] = useState<Options>(DEFAULT_OPTIONS);
@@ -115,6 +121,8 @@ export function OutreachSetup({
   const [jobs, setJobs] = useState<StartOutreachJob[]>([]);
   const [highlightJobId, setHighlightJobId] = useState<string | null>(null);
   const pollLock = useRef(false);
+  /** Runs started from this page: job id → the addresses sent. */
+  const sentRef = useRef(new Map<string, string[]>());
 
   // --- Remembered choices --------------------------------------------------
   useEffect(() => {
@@ -136,6 +144,7 @@ export function OutreachSetup({
     if (!prefsLoaded) return;
     try {
       if (dest) window.localStorage.setItem(DEST_KEY, dest);
+      else window.localStorage.removeItem(DEST_KEY);
       window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
       window.localStorage.setItem(OPTIONS_KEY, JSON.stringify(options));
     } catch {
@@ -143,15 +152,31 @@ export function OutreachSetup({
     }
   }, [dest, settings, options, prefsLoaded]);
 
+  // The next batch most likely goes somewhere else, so the destination is
+  // cleared rather than left pointing at the last client.
+  useEffect(() => {
+    if (resetKey === 0) return;
+    setDest("");
+    setArmed(false);
+    setPresetFrom(null);
+  }, [resetKey]);
+
   const destination = useMemo(() => workspaces.find((w) => w._id === dest) ?? null, [workspaces, dest]);
   const sameAsSource = !!source && !!destination && source.id === destination._id;
 
   // --- Signature details: the destination's saved ones, else the source's --
   useEffect(() => {
-    if (!prefsLoaded || !destination) return;
+    if (!prefsLoaded) return;
+    // One client's details must never carry over to the next: the fields
+    // start clean for every destination and only its own saved ones fill in.
+    setTitles(pickRandomRoles(TITLE_SLOTS));
+    setCompanies(Array(COMPANY_SLOTS).fill(""));
+    setPhones(Array(PHONE_SLOTS).fill(""));
+    setAddresses(Array(ADDRESS_SLOTS).fill(""));
+    setPresetFrom(null);
+    if (!destination) return;
     let cancelled = false;
     setPresetLoading(true);
-    setPresetFrom(null);
     void (async () => {
       const apply = (p: { titles: string[]; companies: string[]; phones: string[]; addresses: string[] }) => {
         if (p.titles.length) setTitles(padSlots(p.titles, TITLE_SLOTS));
@@ -223,6 +248,17 @@ export function OutreachSetup({
     void refreshJobs();
   }, [refreshJobs]);
   const anyRunning = jobs.some((j) => j.status === "running");
+  // A run started here has finished: the inboxes that arrived have left the
+  // warming workspace, so the page can drop them without fetching again.
+  useEffect(() => {
+    for (const job of jobs) {
+      const sent = sentRef.current.get(job.id);
+      if (!sent || job.status === "running") continue;
+      sentRef.current.delete(job.id);
+      const notMoved = new Set(job.notMoved.map((e) => e.trim().toLowerCase()));
+      onRunFinished(sent.filter((e) => !notMoved.has(e.trim().toLowerCase())));
+    }
+  }, [jobs, onRunFinished]);
   useEffect(() => {
     if (!anyRunning) return;
     const t = setInterval(() => void refreshJobs(), POLL_MS);
@@ -264,6 +300,7 @@ export function OutreachSetup({
           updateClient: options.sheet,
         },
       });
+      sentRef.current.set(jobId, inboxes.map((i) => i.email));
       setHighlightJobId(jobId);
       setArmed(false);
       await refreshJobs();

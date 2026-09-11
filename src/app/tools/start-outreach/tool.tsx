@@ -122,6 +122,8 @@ export function StartOutreachTool() {
 
   const [readyOnly, setReadyOnly] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  /** Addresses a finished run moved away, waiting to be dropped from the list. */
+  const [moved, setMoved] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -194,6 +196,7 @@ export function StartOutreachTool() {
     setSheetDates({});
     setSheetNote(null);
     setSelected(new Set());
+    setMoved(new Set());
     setExpanded(null);
     setFetchedFor(target.name);
     setFetched(0);
@@ -311,6 +314,25 @@ export function StartOutreachTool() {
     const w = workspaces.find((x) => x._id === ws);
     return w && fetchedFor ? { id: w._id, name: w.name } : null;
   }, [workspaces, ws, fetchedFor]);
+
+  const onRunFinished = useCallback((emails: string[]) => {
+    if (emails.length === 0) return;
+    setMoved((prev) => {
+      const next = new Set(prev);
+      for (const e of emails) next.add(e.trim().toLowerCase());
+      return next;
+    });
+  }, []);
+  // Only addresses still in the list count, so the button says what it does.
+  const movedInList = useMemo(() => rows.filter((r) => moved.has(r.email)).length, [rows, moved]);
+  const [batch, setBatch] = useState(0);
+  function dropMoved() {
+    setRows((prev) => prev.filter((r) => !moved.has(r.email)));
+    setSelected(new Set());
+    setMoved(new Set());
+    setExpanded(null);
+    setBatch((n) => n + 1); // clears the destination for the next batch
+  }
   const inboxesByDomain = useMemo(() => {
     const m = new Map<string, Judged[]>();
     for (const r of judged) {
@@ -531,6 +553,18 @@ export function StartOutreachTool() {
                 </h2>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                {movedInList > 0 && (
+                  <button
+                    type="button"
+                    className="pv-btn-primary"
+                    onClick={dropMoved}
+                    title="Takes the inboxes the last run moved off this list, clears the ticks and the destination, without fetching again"
+                    data-drop-moved
+                  >
+                    <CheckIcon size={16} />
+                    Next batch: drop {formatNumber(movedInList)} moved inbox{movedInList === 1 ? "" : "es"}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="pv-chip"
@@ -650,6 +684,8 @@ export function StartOutreachTool() {
             sheetDates={sheetDates}
             sheetConfig={sheetConfig}
             hasSheet={hasSheet}
+            onRunFinished={onRunFinished}
+            resetKey={batch}
           />
         </>
       )}
