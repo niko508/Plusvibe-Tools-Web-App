@@ -119,6 +119,13 @@ function normalizeAccounts(data: RawAccountsResponse): EmailAccount[] {
       last_name: name.last_name ? String(name.last_name) : undefined,
       tags,
       warmup_health: typeof overall === "number" ? overall : undefined,
+      // Kept as the strings Plusvibe sends; the readers decide how to parse.
+      warmup_enabled_at: a.warmup_enb_dt ? String(a.warmup_enb_dt) : undefined,
+      created_at: a.timestamp_created ? String(a.timestamp_created) : undefined,
+      campaign_ids: Array.isArray(payload.cmps)
+        ? (payload.cmps as unknown[]).map(String).filter(Boolean)
+        : undefined,
+      daily_limit: typeof payload.daily_limit === "number" ? payload.daily_limit : undefined,
     };
   });
 }

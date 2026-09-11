@@ -233,6 +233,29 @@ export function deleteInboxTagsJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/inbox-tags/delete", { method: "POST", body: { jobId }, signal });
 }
 
+// --- Start Outreach with New Inboxes ----------------------------------------
+
+export interface WarmupDatesResponse {
+  /** domain → the sheet's Warmup Started / Warmup Days cells. */
+  byDomain: Record<string, { started?: string; days?: string | number }>;
+  rows: number;
+  /** Which sheet was read, in words, or null when none could be. */
+  source: string | null;
+  problem: string | null;
+}
+
+/** The Domains tab's warmup dates for these domains, sheet first. */
+export function fetchWarmupDates(
+  params: { domains: string[]; url?: string; tab?: string },
+  signal?: AbortSignal
+) {
+  return request<WarmupDatesResponse>("/api/start-outreach/warmup-dates", {
+    method: "POST",
+    body: params,
+    signal,
+  });
+}
+
 // --- Copy Campaign to Other Workspace ---------------------------------------
 
 export interface CopyCampaignPayload {

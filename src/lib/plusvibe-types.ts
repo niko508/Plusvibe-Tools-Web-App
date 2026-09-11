@@ -24,6 +24,13 @@ export interface EmailAccount {
   last_name?: string;
   tags?: string[];
   warmup_health?: number; // 7-day overall warmup health (0-100)
+  /** When warmup was last switched on, as Plusvibe reports it (warmup_enb_dt). */
+  warmup_enabled_at?: string;
+  /** When the account was added to Plusvibe (timestamp_created). */
+  created_at?: string;
+  /** Campaigns the inbox is attached to (payload.cmps). */
+  campaign_ids?: string[];
+  daily_limit?: number;
 }
 
 export interface EmailAccountsResponse {
