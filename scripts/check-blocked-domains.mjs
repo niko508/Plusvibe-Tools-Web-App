@@ -248,6 +248,38 @@ eq("an ambiguous name is no hint",
   null
 );
 
+// --- New Blocked Domains vs History -----------------------------------------
+console.log("--- which section a card belongs in");
+const tr = await importTs("@/lib/blocked-domains/triage");
+const T0 = Date.parse("2026-09-01T00:00:00Z");
+const job = (over) => ({ status: "kept", createdAt: T0, inboxesFound: 3, ...over });
+
+eq("stopped inboxes are counted from the list the Delete would take",
+  tr.stoppedCount(job({ quarantinedEmails: ["a@x.com", "b@x.com"] })), 2);
+eq("…falling back to the assessment",
+  tr.stoppedCount(job({ performance: { inboxes: [{ decision: "stop" }, { decision: "keep" }] } })), 1);
+eq("…and to everything found, for a record from before either was kept",
+  tr.stoppedCount(job({})), 3);
+
+ok("a domain with stopped inboxes nobody has dealt with is at the top",
+  tr.needsYou(job({ quarantinedEmails: ["a@x.com"], lastStoppedAt: T0 })) === true);
+ok("…a deletion waiting for confirmation always is",
+  tr.needsYou(job({ status: "awaiting_confirmation", quarantinedEmails: ["a@x.com"], handledAt: T0 + 5 })) === true);
+ok("…a run still going is not",
+  tr.needsYou(job({ status: "working", quarantinedEmails: ["a@x.com"] })) === false);
+ok("…nor one with nothing stopped",
+  tr.needsYou(job({ quarantinedEmails: [] })) === false);
+ok("once someone has dealt with them it drops into the history",
+  tr.needsYou(job({ quarantinedEmails: ["a@x.com"], lastStoppedAt: T0, handledAt: T0 + 1000 })) === false);
+ok("…even when the deletion left something behind",
+  tr.needsYou(job({ status: "error", quarantinedEmails: ["a@x.com", "b@x.com"], lastStoppedAt: T0, handledAt: T0 + 1000 })) === false);
+ok("a later check that stops something new brings it back to the top",
+  tr.needsYou(job({ quarantinedEmails: ["c@x.com"], handledAt: T0 + 1000, lastStoppedAt: T0 + 2000 })) === true);
+ok("…and a record from before these times existed behaves as it always did",
+  tr.needsYou(job({ quarantinedEmails: ["a@x.com"] })) === true);
+ok("…including one dealt with before, whose stop time is unknown",
+  tr.needsYou(job({ quarantinedEmails: ["a@x.com"], handledAt: T0 + 1000 })) === false);
+
 console.log(
   failures === 0 ? "\nall blocked-domain checks OK" : `\n${failures} failure(s)`
 );

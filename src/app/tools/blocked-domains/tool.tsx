@@ -34,6 +34,7 @@ import {
 } from "@/components/icons";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatNumber } from "@/lib/format";
+import { needsYou, stoppedCount } from "@/lib/blocked-domains/triage";
 import { JobCard } from "./job-card";
 import { ScheduledView, watchedJobs } from "./scheduled-view";
 import { StatsView } from "./stats-view";
@@ -168,11 +169,9 @@ export function BlockedDomainsTool() {
   if (!hasKey) return <ConnectPrompt onConnected={refresh} />;
 
   const jobs = view?.jobs ?? [];
-  // A domain stays at the top of the page until there is nothing left to
-  // decide on it, whether or not it was written off: a kept domain still
-  // stops its weak inboxes and still offers to delete them. That offer used
-  // to sit inside a closed history where nobody ever saw it. Deleting those
-  // inboxes empties the list and the card drops into History.
+  // A domain stays at the top of the page until someone deals with its stopped
+  // inboxes — deleting them, or choosing to keep them. Then it drops into
+  // History, and comes back up only when a later check stops something new.
   const fresh = jobs.filter(needsYou);
   const rest = jobs.filter((j) => !needsYou(j));
   const freshStopped = fresh.reduce((n, j) => n + stoppedCount(j), 0);
@@ -672,31 +671,6 @@ function Bar({
       % <span className="text-muted-foreground/70">— {hint}</span>
     </label>
   );
-}
-
-/**
- * Inboxes this run has stopped and not yet deleted — exactly what the card's
- * "Delete N stopped inboxes" button would take, worked out the same way.
- */
-function stoppedCount(job: BlockedDomainJob): number {
-  if (job.quarantinedEmails) return job.quarantinedEmails.length;
-  const perf = job.performance;
-  if (perf) return perf.inboxes.filter((i) => i.decision === "stop").length;
-  return job.inboxesFound;
-}
-
-/**
- * True when a person still has something to decide on this domain: either the
- * deletion of a written-off domain is waiting, or the domain was kept but is
- * holding stopped inboxes that can be deleted.
- *
- * This mirrors the two buttons on the card. A run still going has nothing to
- * decide yet.
- */
-function needsYou(job: BlockedDomainJob): boolean {
-  if (job.status === "awaiting_confirmation") return true;
-  if (job.status === "working" || job.status === "deleting") return false;
-  return stoppedCount(job) > 0;
 }
 
 function errMessage(err: unknown): string {

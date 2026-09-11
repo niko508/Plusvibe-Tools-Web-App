@@ -391,6 +391,9 @@ async function runLocateAndQuarantine(id: string) {
         // and check Plusvibe.
         rec.inboxesQuarantined =
           q.sendingStopped && q.warmupStopped ? plan.stop.length : 0;
+        // When the stop happened, so the page knows whether anyone has dealt
+        // with these inboxes since.
+        if (q.sendingStopped || q.warmupStopped) rec.lastStoppedAt = Date.now();
         if (q.sendingStopped) {
           rec.inboxesActive = Math.max(0, (rec.inboxesActive ?? inboxes.length) - plan.stop.length);
         }
@@ -920,6 +923,19 @@ async function runDelete(id: string) {
       inboxes = stopped
         ? onDomain.filter((i) => stopped.includes(i.email.trim().toLowerCase()) || stopped.includes(i.email))
         : onDomain;
+      // An address Plusvibe no longer has was deleted already — by an earlier
+      // run, or by hand. It leaves the stopped list here rather than sitting
+      // in it forever offering a deletion that can never do anything.
+      if (stopped) {
+        const present = new Set(onDomain.map((i) => lower(i.email)));
+        const missing = stopped.filter((e) => !present.has(lower(e)));
+        if (missing.length > 0) {
+          rec.quarantinedEmails = stopped.filter((e) => present.has(lower(e)));
+          rec.deletedEmails = Array.from(
+            new Set([...(rec.deletedEmails ?? []), ...missing.map(lower)])
+          );
+        }
+      }
     } catch (err) {
       rec.phaseStates.deleting = "error";
       pushError(rec, `Could not re-read the inboxes: ${msg(err)}`);
@@ -1251,6 +1267,9 @@ export async function runRecheck(
         rec.inboxesQuarantined += fresh.length;
         rec.sendingStopped = true;
         rec.warmupStopped = true;
+        // Something new was stopped, so this domain is waiting on a person
+        // again even if its last batch was already dealt with.
+        rec.lastStoppedAt = Date.now();
       } else {
         for (const e of q.errors) pushError(rec, `Repeat check could not stop ${e}`);
         run.error = "Some inboxes could not be stopped.";
@@ -1379,6 +1398,7 @@ export async function confirmJob(id: string): Promise<boolean> {
   const rec = records.get(id);
   if (!rec || rec.status !== "awaiting_confirmation") return false;
   rec.confirmedAt = Date.now();
+  rec.handledAt = rec.confirmedAt;
   await persist(id);
   void runDelete(id);
   return true;
@@ -1397,6 +1417,9 @@ export async function dismissJob(id: string): Promise<boolean> {
   // The sheet has already been written — the domain is blocked and stopped
   // regardless of this choice. Only the deletion is declined.
   rec.phaseStates.deleting = "skipped";
+  // Declining IS dealing with it: the card drops into the history until a
+  // later check stops something new.
+  rec.handledAt = Date.now();
   rec.updatedAt = Date.now();
   quarantinedInboxes.delete(id);
   await persist(id);
@@ -1714,6 +1737,9 @@ export async function deleteStoppedInboxes(
   const before = rec.inboxesDeleted;
   const errorsBefore = rec.errors.length;
   rec.confirmedAt = Date.now();
+  // Dealt with: the card leaves the top section whatever the deletion finds,
+  // and comes back only if a later check stops something new.
+  rec.handledAt = rec.confirmedAt;
   await runDelete(id);
   // Losing its dead inboxes is not a write-off: a kept domain stays kept,
   // unless the deletion itself went wrong.
@@ -1723,10 +1749,16 @@ export async function deleteStoppedInboxes(
     await persist(id);
   }
   const deleted = rec.inboxesDeleted - before;
+  // Nothing deleted because Plusvibe no longer has them is not a failure: the
+  // record has just caught up with reality, and the button is now gone.
+  const gone = stopped.length - (rec.quarantinedEmails ?? []).length - deleted;
   return {
-    ok: deleted > 0,
+    ok: deleted > 0 || gone > 0,
     deleted,
-    error: deleted === 0 ? "None of the stopped inboxes could be deleted — see the card." : undefined,
+    error:
+      deleted > 0 || gone > 0
+        ? undefined
+        : "None of the stopped inboxes could be deleted — see the card.",
   };
 }
 

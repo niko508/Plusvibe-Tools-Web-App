@@ -281,6 +281,17 @@ export interface BlockedDomainJob {
    * that were deliberately left sending.
    */
   quarantinedEmails?: string[];
+  /**
+   * When the automation last stopped one or more inboxes on this domain —
+   * the first pass, or a later check that caught another one.
+   */
+  lastStoppedAt?: number;
+  /**
+   * When a person last dealt with the stopped inboxes: deleted them, or chose
+   * to keep them. Until something is stopped AFTER this, the domain has
+   * nothing waiting on anyone and sits in the history.
+   */
+  handledAt?: number;
   /** Campaign daily limit set to 0. */
   sendingStopped?: boolean;
   /** Warmup switched off. */
