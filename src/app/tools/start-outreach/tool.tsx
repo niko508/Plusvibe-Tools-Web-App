@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Workspace, EmailAccount } from "@/lib/plusvibe-types";
 import {
   fetchWorkspaces,
-  fetchAccounts,
+  fetchAccountsPage,
   fetchWarmupDates,
   ApiClientError,
 } from "@/lib/api-client";
@@ -53,6 +53,10 @@ import {
 // "Warmup Started" for its domain, or Plusvibe's own timestamp when the sheet
 // has none, and the page says which was used. Inboxes are shown grouped by
 // domain, because that is the unit they are moved in. Nothing is changed here.
+
+const PAGE_SIZE = 100;
+const PAGE_SPACING_MS = 200;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const WS_KEY = "pv_outreach_ws";
 const DAYS_KEY = "pv_outreach_min_days";
@@ -109,6 +113,7 @@ export function StartOutreachTool() {
   const [fetchedAt, setFetchedAt] = useState<number>(0);
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState("");
+  const [fetched, setFetched] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const [readyOnly, setReadyOnly] = useState(false);
@@ -187,13 +192,29 @@ export function StartOutreachTool() {
     setSelected(new Set());
     setExpanded(null);
     setFetchedFor(target.name);
+    setFetched(0);
     setPhase("Finding inboxes…");
 
     try {
-      const res = await fetchAccounts({ workspace_id: target._id }, signal);
-      const found = (res.accounts ?? [])
-        .map(toRow)
-        .filter((r): r is Row => r !== null);
+      // Paged, so the count climbs while a large workspace is still loading.
+      const found: Row[] = [];
+      let skip = 0;
+      let firstPage = true;
+      while (true) {
+        if (!firstPage) await sleep(PAGE_SPACING_MS);
+        firstPage = false;
+        const res = await fetchAccountsPage(
+          { workspace_id: target._id, skip, limit: PAGE_SIZE },
+          signal
+        );
+        for (const a of res.accounts ?? []) {
+          const row = toRow(a);
+          if (row) found.push(row);
+        }
+        setFetched((n) => n + (res.accounts?.length ?? 0));
+        if (!res.hasMore) break;
+        skip += PAGE_SIZE;
+      }
       setRows(found);
 
       // The sheet is per domain, so one read covers every inbox.
@@ -304,16 +325,7 @@ export function StartOutreachTool() {
     <div className="space-y-5">
       {/* Step 1 */}
       <div className="pv-card space-y-4 p-4 sm:p-5">
-        <div>
-          <h2 className="text-sm font-semibold">Step 1 · Find the domains that are ready</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Every inbox in the workspace is listed and grouped by domain. Each
-            domain&apos;s warmup start comes from the sheet&apos;s Warmup
-            Started column, or from Plusvibe when the sheet has no date. An
-            inbox is ready when warmup is on and has run for at least the days
-            below.
-          </p>
-        </div>
+        <h2 className="text-sm font-semibold">Step 1 · Find the domains that are ready</h2>
 
         <div className="flex flex-col gap-4 lg:flex-row lg:flex-wrap lg:items-end">
           <div className="min-w-[260px] flex-1">
@@ -400,6 +412,20 @@ export function StartOutreachTool() {
 
         {minDays.problem && <p className="text-xs text-danger">{minDays.problem}</p>}
 
+        {busy && (
+          <div className="space-y-1.5" data-fetch-progress>
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>{phase}</span>
+              <span className="tabular-nums">
+                {formatNumber(fetched)} inbox{fetched === 1 ? "" : "es"} found
+              </span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+              <div className="h-full w-1/3 animate-pulse rounded-full bg-accent" />
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <SheetIcon size={13} />
           {hasSheet
@@ -418,8 +444,6 @@ export function StartOutreachTool() {
       {rows.length === 0 && !busy && (
         <EmptyState icon={<PlayIcon />} title="Nothing fetched yet">
           Pick the warming workspace and press <strong>Fetch inboxes</strong>.
-          Nothing is moved or started here; this step only finds what is ready
-          and lets you pick the domains.
         </EmptyState>
       )}
 
@@ -482,11 +506,6 @@ export function StartOutreachTool() {
                     ? "No domains selected"
                     : `${formatNumber(totals.domains)} domain${totals.domains === 1 ? "" : "s"} selected · ${formatNumber(totals.inboxes)} inbox${totals.inboxes === 1 ? "" : "es"} to move`}
                 </h2>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Tick the domains to take. Only their ready inboxes count;
-                  the rest of a domain is left where it is. Moving them is the
-                  next step.
-                </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button

@@ -17,13 +17,6 @@ export default function StartOutreachPage() {
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
             Start Outreach with New Inboxes
           </h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground sm:text-base">
-            Pick the workspace where inboxes have been warming and it finds the
-            ones that have warmed long enough to go to work. The start date
-            comes from the Email Infra sheet first, and from Plusvibe&apos;s own
-            record when the sheet has none. Moving them and starting the
-            outreach are the next steps.
-          </p>
         </div>
         <StartOutreachTool />
       </main>

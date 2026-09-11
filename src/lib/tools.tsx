@@ -152,7 +152,7 @@ export const TOOLS: Tool[] = [
     name: "Start Outreach with New Inboxes",
     tagline: "Find the inboxes that have warmed long enough, then put them to work",
     description:
-      "Pick the workspace where inboxes have been warming and it finds the ones that have warmed for at least 14 days, taking each start date from the Email Infra sheet first and from Plusvibe's own record when the sheet has none. Moving them to a client workspace and starting the outreach are the next steps.",
+      "Find the inboxes that have warmed long enough, move them to a client workspace with signatures, limits and tags set, and start the outreach.",
     status: "active",
     color: "orange",
     Icon: PlayIcon,
