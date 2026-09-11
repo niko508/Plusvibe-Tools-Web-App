@@ -1700,6 +1700,10 @@ export async function rearmJob(id: string): Promise<boolean> {
  *
  * Records whose schedule has ended keep their history untouched: there is no
  * next check to move.
+ *
+ * Every watched record is moved, including ones already on this gap: this is
+ * also what "reschedule everything to N days from now" does, and that has to
+ * work when the number itself has not changed.
  */
 export async function applyRecheckInterval(everyDays: number): Promise<number> {
   await loadOnce();
@@ -1708,7 +1712,7 @@ export async function applyRecheckInterval(everyDays: number): Promise<number> {
   for (const [id, rec] of records) {
     const state = rec.recheck;
     if (!state || !state.enabled) continue;
-    if (state.everyDays === everyDays) continue;
+    if (rec.rearmedAt) continue; // a fresh run is doing the watching
     state.nextAt = rebaseNextAt(state, everyDays, now);
     state.everyDays = everyDays;
     rec.updatedAt = now;

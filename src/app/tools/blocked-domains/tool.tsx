@@ -61,6 +61,21 @@ export function BlockedDomainsTool() {
   const [savingToggle, setSavingToggle] = useState(false);
   /** Said after the gap between checks changes, so the effect is visible. */
   const [rescheduled, setRescheduled] = useState<{ count: number; days: number } | null>(null);
+  /**
+   * What is being typed into the gap box, until it is committed. Saving on
+   * every keystroke meant typing "21" first saved "2", and each save now
+   * reschedules every watched domain, so the value is taken on blur or Enter.
+   */
+  const [daysDraft, setDaysDraft] = useState<string | null>(null);
+
+  function commitDays() {
+    if (daysDraft === null) return;
+    const n = Number(daysDraft);
+    setDaysDraft(null);
+    if (!Number.isInteger(n) || n < 1 || n > 90) return;
+    if (n === view?.settings.recheckDays) return;
+    void saveSettings({ recheckDays: n });
+  }
   const [copied, setCopied] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -263,7 +278,19 @@ export function BlockedDomainsTool() {
       )}
 
       {section === "scheduled" && (
-        <ScheduledView jobs={jobs} busyId={busyId} onRecheck={recheck} />
+        <ScheduledView
+          jobs={jobs}
+          busyId={busyId}
+          onRecheck={recheck}
+          everyDays={view?.settings.recheckDays ?? 7}
+          // Saving the gap again, unchanged, is what moves every watched
+          // domain onto it: the server restarts each clock from now.
+          onRescheduleAll={() =>
+            saveSettings({ recheckDays: view?.settings.recheckDays ?? 7 })
+          }
+          rescheduling={savingToggle}
+          rescheduled={rescheduled}
+        />
       )}
 
       {section === "stats" && <StatsView jobs={jobs} />}
@@ -380,10 +407,11 @@ export function BlockedDomainsTool() {
                     min={1}
                     max={90}
                     step={1}
-                    value={String(view.settings.recheckDays)}
-                    onChange={(e) => {
-                      const n = Number(e.target.value);
-                      if (Number.isInteger(n) && n >= 1 && n <= 90) void saveSettings({ recheckDays: n });
+                    value={daysDraft ?? String(view.settings.recheckDays)}
+                    onChange={(e) => setDaysDraft(e.target.value)}
+                    onBlur={commitDays}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
                     }}
                     aria-label="Days between repeat checks"
                   />

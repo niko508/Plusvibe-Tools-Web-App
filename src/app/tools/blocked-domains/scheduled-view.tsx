@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { BlockedDomainJob } from "@/lib/jobs/blocked-domains-types";
 import { describeNext } from "@/lib/blocked-domains/recheck";
 import { formatNumber } from "@/lib/format";
@@ -36,14 +37,26 @@ export function ScheduledView({
   jobs,
   busyId,
   onRecheck,
+  everyDays,
+  onRescheduleAll,
+  rescheduling,
+  rescheduled,
 }: {
   jobs: BlockedDomainJob[];
   busyId: string | null;
   onRecheck: (id: string, action: "now" | "on" | "off") => void | Promise<void>;
+  /** The gap between checks, as set on the Home tab. */
+  everyDays: number;
+  /** Puts every watched domain's next check that many days from now. */
+  onRescheduleAll: () => void | Promise<void>;
+  rescheduling: boolean;
+  /** Said after a reschedule, so the effect is visible. */
+  rescheduled: { count: number; days: number } | null;
 }) {
   const watched = watchedJobs(jobs);
   const ended = endedJobs(jobs);
   const now = Date.now();
+  const [armed, setArmed] = useState(false);
 
   if (watched.length === 0 && ended.length === 0) {
     return (
@@ -57,14 +70,57 @@ export function ScheduledView({
   return (
     <div className="space-y-5">
       <div className="space-y-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-sm font-semibold">
-            Scheduled ({formatNumber(watched.length)})
-          </h2>
-          <span className="text-xs text-muted-foreground">
-            Soonest first. Each check reads the last 7 days again and acts on
-            what it says.
-          </span>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h2 className="text-sm font-semibold">
+              Scheduled ({formatNumber(watched.length)})
+            </h2>
+            <span className="text-xs text-muted-foreground">
+              Soonest first. Each check reads the last 7 days again and acts on
+              what it says.
+            </span>
+          </div>
+          {watched.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              {rescheduled && (
+                <span className="text-xs text-success" data-rescheduled>
+                  {formatNumber(rescheduled.count)} domain
+                  {rescheduled.count === 1 ? "" : "s"} now due in {rescheduled.days} days.
+                </span>
+              )}
+              {armed && (
+                <button
+                  type="button"
+                  className="pv-btn-ghost"
+                  onClick={() => setArmed(false)}
+                >
+                  Cancel
+                </button>
+              )}
+              {/* Two clicks: this moves every watched domain at once, and a
+                  slip here would push the whole schedule out. */}
+              <button
+                type="button"
+                data-reschedule-all
+                className={`pv-btn-ghost disabled:opacity-50 ${armed ? "border-warning text-warning" : ""}`}
+                disabled={rescheduling}
+                title={`Puts every watched domain's next check ${everyDays} days from now, whatever it was. The gap itself is set on the Home tab.`}
+                onClick={() => {
+                  if (!armed) {
+                    setArmed(true);
+                    return;
+                  }
+                  setArmed(false);
+                  void onRescheduleAll();
+                }}
+              >
+                {rescheduling ? <Spinner size={14} /> : <ClockIcon size={14} />}
+                {armed
+                  ? `Really move all ${formatNumber(watched.length)}? Click again`
+                  : `Reschedule all: next check in ${everyDays} days`}
+              </button>
+            </div>
+          )}
         </div>
         {watched.length === 0 ? (
           <p className="pv-card p-4 text-sm text-muted-foreground">

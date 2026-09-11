@@ -77,23 +77,14 @@ eq("past due", describeNext(NOW - 1000, NOW), "due now");
 eq("unscheduled", describeNext(undefined, NOW), "not scheduled");
 
 // --- changing the gap reaches the domains already being watched ---------------------------
-// Scheduled 5 days ago on a 7-day gap: 2 days left. On a 21-day gap it is due
-// in 16, not in 21 — the 5 days already served still count.
+// Whatever was left on the old schedule, the next check is the new gap from
+// now — that is what "21 days" reads as on the page.
 const served5 = { enabled: true, everyDays: 7, nextAt: NOW + 2 * DAY_MS };
-eq("a longer gap keeps the time already served", rebaseNextAt(served5, 21, NOW), NOW + 16 * DAY_MS);
-eq("…and a shorter one does too", rebaseNextAt(served5, 3, NOW), NOW - 2 * DAY_MS);
+eq("a longer gap puts the next check the new gap from now", rebaseNextAt(served5, 21, NOW), NOW + 21 * DAY_MS);
+eq("…and so does a shorter one", rebaseNextAt(served5, 3, NOW), NOW + 3 * DAY_MS);
+eq("…which reads as such", describeNext(rebaseNextAt(served5, 21, NOW), NOW), "in 21 days");
 eq(
-  "…so shortening below the time served leaves it due now",
-  describeNext(rebaseNextAt(served5, 3, NOW), NOW),
-  "due now"
-);
-eq(
-  "a freshly scheduled domain simply gets the new gap",
-  rebaseNextAt({ enabled: true, everyDays: 7, nextAt: NOW + 7 * DAY_MS }, 21, NOW),
-  NOW + 21 * DAY_MS
-);
-eq(
-  "one that is watched but unscheduled starts from now",
+  "one that is watched but unscheduled starts from now too",
   rebaseNextAt({ enabled: true, everyDays: 7, nextAt: undefined }, 21, NOW),
   NOW + 21 * DAY_MS
 );
@@ -103,9 +94,9 @@ eq(
   undefined
 );
 eq(
-  "the same gap is a no-op",
+  "the same gap still restarts the clock, so 'reschedule all' works on its own",
   rebaseNextAt(served5, 7, NOW),
-  NOW + 2 * DAY_MS
+  NOW + 7 * DAY_MS
 );
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} FAILED`);
