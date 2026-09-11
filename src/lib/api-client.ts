@@ -1237,6 +1237,14 @@ export function deleteStoppedBlockedDomainInboxes(jobId: string, signal?: AbortS
   );
 }
 
+/** List a Google domain's burned inboxes on the Google tab when the run did not. */
+export function listBlockedDomainGoogleInboxes(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean; listed: number; already: number; error?: string }>(
+    "/api/jobs/blocked-domains/list-google",
+    { method: "POST", body: { jobId }, signal }
+  );
+}
+
 /** Put a written-off domain's Status back and return it to kept. */
 export function undoBlockedDomainWriteOff(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/blocked-domains/undo-write-off", {

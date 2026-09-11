@@ -45,6 +45,41 @@ export function isGoogleDomain(providers: ProviderCounts | undefined): boolean {
   return !!providers && dominantProvider(providers) === "google";
 }
 
+/** The parts of a record that say which inboxes were burned and which are listed. */
+export interface GoogleListable {
+  quarantinedEmails?: string[];
+  deletedEmails?: string[];
+  performance?: { inboxes: { email: string; decision: string }[] };
+  sheet?: { googleQueued?: string[]; googleAlreadyQueued?: string[] };
+}
+
+/**
+ * Burned inboxes that are not yet on 🛑 Google Inboxes to Cancel, as far as
+ * the record knows: everything this automation stopped or deleted, minus what
+ * it has already listed. A domain handled before the Google path existed took
+ * the tenant route, so its burned inboxes were never listed — this is what a
+ * later listing takes.
+ */
+export function googleInboxesToList(rec: GoogleListable): string[] {
+  const listed = new Set(
+    [...(rec.sheet?.googleQueued ?? []), ...(rec.sheet?.googleAlreadyQueued ?? [])].map((e) =>
+      e.trim().toLowerCase()
+    )
+  );
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (raw: string) => {
+    const email = raw.trim().toLowerCase();
+    if (!email || seen.has(email) || listed.has(email)) return;
+    seen.add(email);
+    out.push(email);
+  };
+  for (const e of rec.quarantinedEmails ?? []) add(e);
+  for (const e of rec.deletedEmails ?? []) add(e);
+  for (const i of rec.performance?.inboxes ?? []) if (i.decision === "stop") add(i.email);
+  return out;
+}
+
 /** Case-insensitive header lookup, tolerant of stray padding. */
 export function headerIndex(header: string[], name: string): number {
   const want = name.trim().toLowerCase();

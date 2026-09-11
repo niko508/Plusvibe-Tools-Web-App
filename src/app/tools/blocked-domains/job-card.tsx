@@ -17,11 +17,12 @@ import {
   GaugeIcon,
   TrashIcon,
   RefreshIcon,
+  SheetIcon,
 } from "@/components/icons";
 import { describeNext } from "@/lib/blocked-domains/recheck";
 import { normalizeLimit } from "@/lib/blocked-domains/rejudge";
 import { bucketOf, describeProviders, PROVIDER_LABELS } from "@/lib/plusvibe-providers";
-import { GOOGLE_CANCEL_TAB } from "@/lib/blocked-domains/sheet-plan";
+import { GOOGLE_CANCEL_TAB, googleInboxesToList, isGoogleDomain } from "@/lib/blocked-domains/sheet-plan";
 
 const STATUS_META: Record<
   BlockedDomainStatus,
@@ -51,6 +52,7 @@ export function JobCard({
   onRestore,
   onUndoWriteOff,
   onDeleteStopped,
+  onListGoogle,
   busy,
 }: {
   job: BlockedDomainJob;
@@ -63,6 +65,7 @@ export function JobCard({
   onRestore: (id: string, dailyLimit: number) => void | Promise<void>;
   onUndoWriteOff: (id: string) => void | Promise<void>;
   onDeleteStopped: (id: string) => void | Promise<void>;
+  onListGoogle: (id: string) => void | Promise<void>;
   busy: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -112,6 +115,9 @@ export function JobCard({
   // Both halves of the quarantine have to have landed before the card is
   // allowed to say the domain is stopped.
   const fullyStopped = job.sendingStopped === true && job.warmupStopped === true;
+  // A Google domain whose burned inboxes never made it onto the Google tab —
+  // handled before that path existed — can still have them listed.
+  const googleUnlisted = isGoogleDomain(job.providers) ? googleInboxesToList(job).length : 0;
 
   function phaseDetail(phase: (typeof PHASE_ORDER)[number]): string {
     if (phase === "locating") {
@@ -572,6 +578,20 @@ export function JobCard({
             busy={busy}
             onConfirm={() => onDeleteStopped(job.id)}
           />
+        )}
+
+        {!active && googleUnlisted > 0 && (
+          <button
+            type="button"
+            className="pv-btn-ghost disabled:opacity-50"
+            disabled={busy}
+            onClick={() => onListGoogle(job.id)}
+            title={`Put the ${formatNumber(googleUnlisted)} burned inbox${googleUnlisted === 1 ? "" : "es"} on "${GOOGLE_CANCEL_TAB}" so the seats get cancelled. Nothing else changes.`}
+            data-list-google
+          >
+            {busy ? <Spinner /> : <SheetIcon size={16} />}
+            List {formatNumber(googleUnlisted)} on Google tab
+          </button>
         )}
 
         {!active && (

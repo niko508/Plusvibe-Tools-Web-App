@@ -36,6 +36,7 @@ import {
   googleInboxesToQueue,
   headerIndex,
   isGoogleDomain,
+  googleInboxesToList,
   matchWorkspaceByClient,
   tenantAlreadyQueued,
 } from "@/lib/blocked-domains/sheet-plan";
@@ -624,27 +625,8 @@ async function runSheetGoogle(
 
     // --- the inboxes -----------------------------------------------------
     if (args.burned.length > 0) {
-      const gGrid = await readTab(sheetId, GOOGLE_CANCEL_TAB);
-      const gHeader = gGrid[0] ?? [COL_GOOGLE_EMAIL, COL_CANCEL_SOURCE];
-      const iEmail = headerIndex(gHeader, COL_GOOGLE_EMAIL);
-      if (iEmail < 0) {
-        // Writing rows the tab can't place would put addresses under the
-        // wrong heading, which is worse than listing nothing and saying so.
-        outcome.error = `The "${GOOGLE_CANCEL_TAB}" tab has no ${COL_GOOGLE_EMAIL} column, so no inboxes were listed there.`;
-        rec.phaseStates.sheet = "error";
-        pushError(rec, outcome.error);
-      } else {
-        const { toQueue, alreadyQueued } = googleInboxesToQueue(gGrid, iEmail, args.burned);
-        if (toQueue.length > 0) {
-          await appendRows(
-            sheetId,
-            GOOGLE_CANCEL_TAB,
-            toQueue.map((email) => buildGoogleCancelRow(gHeader, { email, source }))
-          );
-        }
-        outcome.googleQueued = [...(outcome.googleQueued ?? []), ...toQueue];
-        outcome.googleAlreadyQueued = alreadyQueued;
-      }
+      const listed = await listGoogleInboxes(rec, sheetId, args.burned, source);
+      if (!listed.ok) rec.phaseStates.sheet = "error";
     }
 
     if (rec.phaseStates.sheet === "running") rec.phaseStates.sheet = "done";
@@ -653,6 +635,62 @@ async function runSheetGoogle(
     rec.phaseStates.sheet = "error";
     pushError(rec, `Sheet update failed: ${msg(err)}`);
   }
+}
+
+/**
+ * Puts burned Google inboxes onto 🛑 Google Inboxes to Cancel, one row each,
+ * skipping any already there. The source is the domain's "Tenant / Inbox
+ * Source" from 📋 Domains; when the caller has not read it, it is looked up.
+ * Records what was listed on the sheet outcome, so the card can say so.
+ */
+async function listGoogleInboxes(
+  rec: BlockedDomainJob,
+  sheetId: string,
+  emails: string[],
+  source?: string
+): Promise<{ ok: boolean; queued: string[]; already: string[] }> {
+  const outcome: SheetOutcome = { ...(rec.sheet ?? emptySheet()), googlePath: true };
+  rec.sheet = outcome;
+  let src = source ?? outcome.tenantSource ?? "";
+  if (source === undefined && !outcome.tenantSource) {
+    const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
+    const header = grid[0] ?? [];
+    const hit = findDomainRow(grid, rec.domain, {
+      domain: headerIndex(header, COL_DOMAIN),
+      status: headerIndex(header, COL_STATUS),
+      tenantEmail: headerIndex(header, COL_TENANT_EMAIL),
+      tenantSource: headerIndex(header, COL_TENANT_SOURCE),
+      client: headerIndex(header, "Client"),
+      domainHost: headerIndex(header, COL_DOMAIN_HOST),
+    });
+    if (hit.row) {
+      src = hit.row.tenantSource;
+      outcome.tenantSource = hit.row.tenantSource || undefined;
+      outcome.client = hit.row.client || outcome.client;
+      outcome.domainHost = hit.row.domainHost || outcome.domainHost;
+    }
+  }
+  const gGrid = await readTab(sheetId, GOOGLE_CANCEL_TAB);
+  const gHeader = gGrid[0] ?? [COL_GOOGLE_EMAIL, COL_CANCEL_SOURCE];
+  const iEmail = headerIndex(gHeader, COL_GOOGLE_EMAIL);
+  if (iEmail < 0) {
+    // Writing rows the tab can't place would put addresses under the wrong
+    // heading, which is worse than listing nothing and saying so.
+    outcome.error = `The "${GOOGLE_CANCEL_TAB}" tab has no ${COL_GOOGLE_EMAIL} column, so no inboxes were listed there.`;
+    pushError(rec, outcome.error);
+    return { ok: false, queued: [], already: [] };
+  }
+  const { toQueue, alreadyQueued } = googleInboxesToQueue(gGrid, iEmail, emails);
+  if (toQueue.length > 0) {
+    await appendRows(
+      sheetId,
+      GOOGLE_CANCEL_TAB,
+      toQueue.map((email) => buildGoogleCancelRow(gHeader, { email, source: src }))
+    );
+  }
+  outcome.googleQueued = [...(outcome.googleQueued ?? []), ...toQueue];
+  outcome.googleAlreadyQueued = alreadyQueued;
+  return { ok: true, queued: toQueue, already: alreadyQueued };
 }
 
 /** The window the inboxes are judged on: the last 7 days, ending today. */
@@ -885,6 +923,22 @@ async function runDelete(id: string) {
     }
   }
 
+  // A Google domain's inboxes are seats to cancel, so they go onto the Google
+  // tab before they disappear from Plusvibe — belt and braces for a domain
+  // whose first pass listed them, and the only listing for one handled before
+  // the Google path existed.
+  if (!rec.providers && inboxes.length > 0) rec.providers = countProviders(inboxes);
+  if (isGoogleDomain(rec.providers) && inboxes.length > 0) {
+    const sheetId = envSpreadsheetId();
+    if (sheetId && isSheetWritingConfigured()) {
+      try {
+        await listGoogleInboxes(rec, sheetId, inboxes.map((i) => i.email));
+      } catch (err) {
+        pushError(rec, `Could not list the inboxes on "${GOOGLE_CANCEL_TAB}" before deleting: ${msg(err)}`);
+      }
+    }
+  }
+
   const gone = new Set<string>();
   const deletedBefore = rec.inboxesDeleted;
   for (const inbox of inboxes) {
@@ -904,6 +958,7 @@ async function runDelete(id: string) {
   // The quarantined list is "stopped and still there": what was deleted
   // leaves it, so nothing offers to delete it a second time.
   rec.quarantinedEmails = (rec.quarantinedEmails ?? []).filter((e) => !gone.has(lower(e)));
+  rec.deletedEmails = [...(rec.deletedEmails ?? []), ...gone];
   // `inboxesFound` means "on the domain as of the last look", so the ones just
   // deleted are no longer among them. THIS run's count, not the record's
   // total: a record can delete more than once (a kept domain's stragglers,
@@ -1163,6 +1218,9 @@ export async function runRecheck(
       state.enabled = false;
       state.nextAt = undefined;
       run.kept = 0;
+      // "Stopped and still there" — and nothing is there, so no Delete is
+      // offered for inboxes that are already gone.
+      rec.quarantinedEmails = [];
       return true;
     }
 
@@ -1666,6 +1724,48 @@ export async function deleteStoppedInboxes(
     deleted,
     error: deleted === 0 ? "None of the stopped inboxes could be deleted — see the card." : undefined,
   };
+}
+
+/**
+ * Lists a Google domain's burned inboxes on 🛑 Google Inboxes to Cancel when
+ * a run did not: a domain handled before the Google path existed took the
+ * tenant route, and its inboxes were stopped or deleted without a row there.
+ */
+export async function listGoogleInboxesForJob(
+  id: string
+): Promise<{ ok: boolean; listed: number; already: number; error?: string }> {
+  await loadOnce();
+  const rec = records.get(id);
+  if (!rec || !canRecheck(rec)) return { ok: false, listed: 0, already: 0, error: "Job not found, or mid-run." };
+  if (!isGoogleDomain(rec.providers)) {
+    return {
+      ok: false,
+      listed: 0,
+      already: 0,
+      error: rec.providers
+        ? "This domain does not run on Google Workspace, so its inboxes are not seats to cancel."
+        : "The mailbox type is not known for this run yet — Re-judge it first.",
+    };
+  }
+  const emails = googleInboxesToList(rec);
+  if (emails.length === 0) {
+    return { ok: false, listed: 0, already: 0, error: `Nothing to list — every burned inbox is already on "${GOOGLE_CANCEL_TAB}".` };
+  }
+  const sheetId = envSpreadsheetId();
+  if (!sheetId || !isSheetWritingConfigured()) {
+    return { ok: false, listed: 0, already: 0, error: "The sheet cannot be written: SPREADSHEET_ID or the Google service account is not set." };
+  }
+  try {
+    const r = await listGoogleInboxes(rec, sheetId, emails);
+    rec.updatedAt = Date.now();
+    await persist(id);
+    return { ok: r.ok, listed: r.queued.length, already: r.already.length, error: r.ok ? undefined : rec.sheet?.error };
+  } catch (err) {
+    pushError(rec, `Could not list the inboxes on "${GOOGLE_CANCEL_TAB}": ${msg(err)}`);
+    rec.updatedAt = Date.now();
+    await persist(id);
+    return { ok: false, listed: 0, already: 0, error: msg(err) };
+  }
 }
 
 export async function rearmJob(id: string): Promise<boolean> {

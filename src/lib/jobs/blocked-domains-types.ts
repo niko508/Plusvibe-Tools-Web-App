@@ -287,6 +287,8 @@ export interface BlockedDomainJob {
   warmupStopped?: boolean;
   /** Inboxes actually deleted. */
   inboxesDeleted: number;
+  /** Their addresses, so a Google domain's seats can still be listed to cancel. */
+  deletedEmails?: string[];
 
   /** True when the run deleted without waiting, because the toggle was on. */
   autoDeleted?: boolean;

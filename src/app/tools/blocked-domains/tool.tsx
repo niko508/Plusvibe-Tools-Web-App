@@ -16,6 +16,7 @@ import {
   restoreBlockedDomainInboxes,
   undoBlockedDomainWriteOff,
   deleteStoppedBlockedDomainInboxes,
+  listBlockedDomainGoogleInboxes,
   deleteBlockedDomainJob,
   ApiClientError,
 } from "@/lib/api-client";
@@ -216,6 +217,7 @@ export function BlockedDomainsTool() {
     withBusy(id, () => restoreBlockedDomainInboxes(id, dailyLimit));
   const undo = (id: string) => withBusy(id, () => undoBlockedDomainWriteOff(id));
   const deleteStopped = (id: string) => withBusy(id, () => deleteStoppedBlockedDomainInboxes(id));
+  const listGoogle = (id: string) => withBusy(id, () => listBlockedDomainGoogleInboxes(id));
   const rejudgeAll = view?.rejudgeAll;
   async function rejudgeAllNow() {
     setError(null);
@@ -555,6 +557,7 @@ export function BlockedDomainsTool() {
               onRestore={restore}
               onUndoWriteOff={undo}
               onDeleteStopped={deleteStopped}
+              onListGoogle={listGoogle}
             />
           ))}
         </div>
@@ -601,6 +604,7 @@ export function BlockedDomainsTool() {
               onRestore={restore}
               onUndoWriteOff={undo}
               onDeleteStopped={deleteStopped}
+              onListGoogle={listGoogle}
             />
           ))}
           </div>

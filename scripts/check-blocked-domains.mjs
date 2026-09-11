@@ -168,6 +168,18 @@ eq("a Google-majority domain takes the Google path", sp.isGoogleDomain({ google:
 eq("…a Microsoft one does not", sp.isGoogleDomain({ google: 1, microsoft: 49, other: 0 }), false);
 eq("…nor a tie", sp.isGoogleDomain({ google: 2, microsoft: 2, other: 0 }), false);
 eq("…nor a record from before providers were captured", sp.isGoogleDomain(undefined), false);
+// A record handled before the Google path: what still needs listing is what
+// it stopped or deleted, minus what it has listed since.
+eq("an older record's burned inboxes are all still to list",
+  sp.googleInboxesToList({ quarantinedEmails: ["One@old.com", "two@old.com"], deletedEmails: ["two@old.com", "three@old.com"] }),
+  ["one@old.com", "two@old.com", "three@old.com"]);
+eq("…the assessment's stopped inboxes count too",
+  sp.googleInboxesToList({ performance: { inboxes: [{ email: "a@x.com", decision: "stop" }, { email: "b@x.com", decision: "keep" }] } }),
+  ["a@x.com"]);
+eq("…and what is already on the tab is left out",
+  sp.googleInboxesToList({ quarantinedEmails: ["a@x.com", "b@x.com"], sheet: { googleQueued: ["A@x.com"], googleAlreadyQueued: ["b@x.com"] } }),
+  []);
+eq("a record with nothing stopped has nothing to list", sp.googleInboxesToList({}), []);
 eq("…nor one with no inboxes", sp.isGoogleDomain({ google: 0, microsoft: 0, other: 0 }), false);
 
 // --- Already Not Active -----------------------------------------------------
