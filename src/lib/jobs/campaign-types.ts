@@ -14,7 +14,11 @@ import { listCampaigns } from "@/lib/plusvibe-campaigns";
 import { moveLeadChunk, MOVE_CHUNK } from "@/lib/move-leads-core";
 import { UNMOVED_LABELS, type UnmovedLead, type UnmovedReason } from "@/lib/move-leads-plan";
 import { resolveLeadEsps } from "@/lib/campaign-types/resolve-esp";
-import { planSplit } from "@/lib/campaign-types/split";
+import {
+  ALL_AVAILABLE,
+  planSplitFor,
+  type Availability,
+} from "@/lib/campaign-types/split";
 import { applyOptOutToCampaign } from "@/lib/campaign-types/apply-opt-out";
 import { applySignatureToCampaign } from "@/lib/campaign-types/apply-signature";
 import { duplicateCampaign, launchCampaign } from "@/lib/campaign-types/duplicate";
@@ -642,17 +646,30 @@ async function runJob(id: string) {
             );
           }
         } else {
-          target.state = "error";
+          // Not an error: the run goes ahead with the campaigns that are
+          // there, and this one's share stays with the others in its group.
+          target.state = "skipped";
           target.error = hit?.ambiguous
             ? "more than one campaign has this name"
             : "no campaign with this name";
+          const mv = rec.moving.targets.find((t) => t.role === target.role);
+          if (mv) mv.state = "skipped";
           pushError(
             rec,
             hit?.ambiguous
-              ? `More than one campaign is called "${target.name}", so there is no telling which was meant.`
-              : `No campaign called "${target.name}" in this workspace.`
+              ? `More than one campaign is called "${target.name}", so there is no telling which was meant. Nothing was moved into it.`
+              : `No campaign called "${target.name}" in this workspace, so its share went to the other campaigns in its group.`
           );
         }
+      }
+      if (!rec.created.some((c) => c.campaignId)) {
+        pushError(
+          rec,
+          "None of the five campaigns are in this workspace, so there is nowhere to move anything. Check the names in Plusvibe, and that they are not archived."
+        );
+        rec.phaseStates.duplicating = "error";
+        rec.status = "error";
+        return;
       }
       rec.updatedAt = Date.now();
       await persist(id);
@@ -802,7 +819,15 @@ async function runJob(id: string) {
     rec.phase = "moving";
     rec.phaseStates.moving = "running";
 
-    const plan = planSplit(resolution.microsoft, resolution.other);
+    // A move run splits into the campaigns it found; a create run just made
+    // all five, so everything is available.
+    const availability: Availability = { ...ALL_AVAILABLE };
+    if (mode === "move") {
+      for (const role of CREATED_ROLES) {
+        availability[role] = !!rec.created.find((c) => c.role === role)?.campaignId;
+      }
+    }
+    const plan = planSplitFor(resolution.microsoft, resolution.other, availability);
     rec.moving.staysInSource = plan.counts.source;
     for (const t of rec.moving.targets) t.planned = plan.counts[t.role];
     rec.moving.plannedTotal =

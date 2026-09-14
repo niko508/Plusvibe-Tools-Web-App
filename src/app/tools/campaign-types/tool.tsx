@@ -179,6 +179,16 @@ export function CampaignTypesTool() {
   const missingCount = moveMatch
     ? moveMatch.matches.filter((m) => !m.match).length
     : 0;
+  const foundCount = moveMatch ? moveMatch.matches.length - missingCount : 0;
+  // Which 🔵 campaigns are there decides where the Microsoft leads can go: with
+  // none of them, those leads have nowhere to belong and stay in the source.
+  const blueFound = moveMatch
+    ? moveMatch.matches.some(
+        (m) =>
+          m.match &&
+          (m.role === "blue" || m.role === "blueOptOut" || m.role === "blueSignature")
+      )
+    : false;
 
   const activeJob = jobs.find((j) => j.status === "running") ?? null;
   const queuedCount = jobs.filter((j) => j.status === "queued").length;
@@ -194,7 +204,9 @@ export function CampaignTypesTool() {
     !!source &&
     !alreadyPending &&
     !starting &&
-    (mode === "create" || !!moveMatch?.complete);
+    // A move needs somewhere to move to, but not all five: the campaigns that
+    // are there take the share of the ones that are not.
+    (mode === "create" || foundCount > 0);
 
   // --- Actions -------------------------------------------------------------
   async function handleStart() {
@@ -323,9 +335,9 @@ export function CampaignTypesTool() {
             <h3 className="mb-1 text-sm font-medium">
               {missingCount === 0
                 ? "Leads go to these five campaigns"
-                : missingCount === moveMatch.matches.length
+                : foundCount === 0
                   ? "None of these five campaigns are in this workspace"
-                  : `${formatNumber(missingCount)} of these five campaigns ${missingCount === 1 ? "is" : "are"} missing`}
+                  : `Leads go to the ${formatNumber(foundCount)} campaigns that are there`}
             </h3>
             <p className="mb-3 text-xs text-muted-foreground">
               Found by name in this workspace. Archived campaigns don&apos;t
@@ -359,23 +371,31 @@ export function CampaignTypesTool() {
                         ? "found — check it is the right one"
                         : "found"
                       : m.ambiguous
-                        ? "two campaigns share this name"
-                        : "not found"}
+                        ? "two share this name — skipped"
+                        : "not found — skipped"}
                   </span>
                 </div>
               ))}
             </div>
-            {missingCount > 0 && (
+            {foundCount === 0 && (
               <p className="mt-3 text-xs text-danger">
-                Nothing moves until all five are there. Check the names in
-                Plusvibe read exactly as above, and that none of them is
-                archived.
+                There is nowhere to move anything. Check the names in Plusvibe
+                read exactly as above, and that none of them is archived.
               </p>
             )}
             <p className="mt-3 text-xs text-muted-foreground">
-              The source keeps a sixth of its leads, and the split is the same
-              as a full run: Microsoft recipients to the 🔵 campaigns, everyone
-              else to the rest, divided evenly.
+              Microsoft recipients go to the 🔵 campaigns, everyone else to the
+              rest, and the source keeps a share.
+              {missingCount > 0 && foundCount > 0 && (
+                <>
+                  {" "}
+                  A campaign that isn&apos;t there is skipped and its share
+                  stays with the others in its group
+                  {blueFound
+                    ? "."
+                    : " — and with no 🔵 campaign at all, the Microsoft leads stay in the source."}
+                </>
+              )}
             </p>
           </div>
         )}

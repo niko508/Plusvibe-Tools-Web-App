@@ -83,7 +83,8 @@ eq("derivation is idempotent", withOptOut(withOptOut("Tree Removal (August)")),
 eq("blue idempotent", withBlue(withBlue("Tree Removal (August)")), "\u{1F535} Tree Removal (August)");
 
 // --- split -----------------------------------------------------------------
-const { splitCounts, planSplit } = await importTs("@/lib/campaign-types/split");
+const { splitCounts, planSplit, splitCountsFor, planSplitFor } =
+  await importTs("@/lib/campaign-types/split");
 const MS_ROLES = ["blue", "blueOptOut", "blueSignature"];
 const OTHER_ROLES = ["source", "optOut", "signature"];
 const sum = (c, roles) => roles.reduce((n, r) => n + c[r], 0);
@@ -151,6 +152,67 @@ for (const mv of plan.moves) {
   eq(`${mv.destination} takes one bucket only`,
     MS_ROLES.includes(mv.destination) ? fromMs : fromOther, true);
   eq(`${mv.destination} moves what it planned`, mv.leads.length, plan.counts[mv.destination]);
+}
+
+// --- split when some campaigns are missing ----------------------------------
+// A Move run takes the campaigns as it finds them: a stage whose campaign is
+// not there simply doesn't happen, and its share stays with the rest of its
+// provider bucket.
+console.log("--- split with campaigns missing");
+const avail = (over) => ({
+  blue: true, blueOptOut: true, blueSignature: true, optOut: true, signature: true, ...over,
+});
+eq("with everything there it is the split it always was",
+  splitCountsFor(10000, 10000, avail({})), splitCounts(10000, 10000));
+
+// The reported case: both Signature copies missing, the other three there.
+eq("no Signature copies: the half that is left stays in its own campaign",
+  splitCountsFor(4, 4, avail({ signature: false, blueSignature: false })),
+  { source: 2, optOut: 2, blue: 2, blueOptOut: 2, signature: 0, blueSignature: 0 });
+
+// Only the Opt Out pair: it takes half, and the rest has nowhere to halve into.
+eq("no blue copy: its share goes to the 🔵 Signature copy",
+  splitCountsFor(4, 0, avail({ blue: false })),
+  { source: 0, optOut: 0, blue: 0, blueOptOut: 2, signature: 0, blueSignature: 2 });
+eq("no Opt Out copies: the bucket is never halved",
+  splitCountsFor(4, 4, avail({ optOut: false, blueOptOut: false })),
+  { source: 2, optOut: 0, blue: 2, blueOptOut: 0, signature: 2, blueSignature: 2 });
+
+// Microsoft leads must never be sent from non-Microsoft mailboxes, so with no
+// 🔵 campaign at all they stay where they are.
+// The six Microsoft leads join the one non-Microsoft lead that stays put.
+eq("no 🔵 campaign at all: the Microsoft leads stay in the source",
+  splitCountsFor(6, 4, avail({ blue: false, blueOptOut: false, blueSignature: false })),
+  { source: 7, optOut: 2, blue: 0, blueOptOut: 0, signature: 1, blueSignature: 0 });
+eq("…and only the non-Microsoft ones are moved",
+  planSplitFor(["m0","m1"], ["o0","o1"], avail({ blue: false, blueOptOut: false, blueSignature: false }))
+    .moves.flatMap((m) => m.leads),
+  ["o1"]);
+
+// Conservation still holds for every combination of what is there.
+const ROLE_KEYS = ["blue", "blueOptOut", "blueSignature", "optOut", "signature"];
+for (let bits = 0; bits < 32; bits++) {
+  const a = Object.fromEntries(ROLE_KEYS.map((r, i) => [r, !!(bits & (1 << i))]));
+  const msN = 13, otN = 11;
+  const c = splitCountsFor(msN, otN, a);
+  const label = ROLE_KEYS.filter((r) => a[r]).join("+") || "nothing";
+  eq(`conserves every lead with ${label}`, sum(c, [...MS_ROLES, ...OTHER_ROLES]), msN + otN);
+  eq(`no lead goes to a campaign that isn't there (${label})`,
+    ROLE_KEYS.every((r) => a[r] || c[r] === 0), true);
+  eq(`non-Microsoft leads never reach a 🔵 campaign (${label})`, sum(c, MS_ROLES) <= msN, true);
+  const p = planSplitFor(
+    Array.from({ length: msN }, (_, i) => `m${i}`),
+    Array.from({ length: otN }, (_, i) => `o${i}`),
+    a
+  );
+  const movedAll = p.moves.flatMap((mv) => mv.leads);
+  eq(`the plan moves each lead once (${label})`, new Set(movedAll).size, movedAll.length);
+  eq(`…and only into 🔵 campaigns from the Microsoft bucket (${label})`,
+    p.moves.every((mv) =>
+      mv.leads.every((l) => (MS_ROLES.includes(mv.destination) ? l[0] === "m" : l[0] === "o"))
+    ), true);
+  eq(`…matching the counts (${label})`,
+    p.moves.every((mv) => mv.leads.length === c[mv.destination]), true);
 }
 
 // --- esp -------------------------------------------------------------------
