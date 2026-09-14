@@ -16,7 +16,27 @@ import { deriveNames } from "./names";
 // can't match is reported so the UI can ask, rather than guessed at: picking
 // the wrong campaign here moves thousands of leads into it.
 
-export type MatchRole = "blue" | "optOut" | "blueOptOut";
+export type MatchRole =
+  | "blue"
+  | "optOut"
+  | "blueOptOut"
+  | "signature"
+  | "blueSignature";
+
+/** The three companions the older four-campaign flow expected. */
+export const COMPANION_ROLES: MatchRole[] = ["blue", "optOut", "blueOptOut"];
+
+/**
+ * All five companions of a source campaign — what Move Leads looks for, since
+ * the campaigns it moves into were made by an earlier Create All run.
+ */
+export const ALL_COMPANION_ROLES: MatchRole[] = [
+  "blue",
+  "optOut",
+  "blueOptOut",
+  "signature",
+  "blueSignature",
+];
 
 export interface CampaignLike {
   id: string;
@@ -82,8 +102,24 @@ export interface RoleMatch {
 
 export interface MatchResult {
   matches: RoleMatch[];
-  /** True when all three companions were found unambiguously. */
+  /** True when every companion asked for was found unambiguously. */
   complete: boolean;
+}
+
+/**
+ * The campaigns a Move Leads run would put leads into: all five companions,
+ * found by name among the workspace's live campaigns.
+ *
+ * A campaign's status is not looked at beyond archived/not: an active, paused
+ * or completed campaign all take leads perfectly well, and which of those it
+ * is, is the user's business rather than this tool's.
+ */
+export function matchMoveTargets(
+  sourceName: string,
+  campaigns: CampaignLike[],
+  sourceId?: string
+): MatchResult {
+  return matchCompanions(sourceName, campaigns, sourceId, ALL_COMPANION_ROLES);
 }
 
 /**
@@ -117,12 +153,16 @@ export function looseKey(name: string): string {
 export function matchCompanions(
   sourceName: string,
   campaigns: CampaignLike[],
-  sourceId?: string
+  sourceId?: string,
+  roleList: MatchRole[] = COMPANION_ROLES
 ): MatchResult {
   const names = deriveNames(sourceName);
   // Sub-sequences are separate campaign records; they are never a role here.
+  // Archived campaigns are left out for the same reason buildReuseIndex leaves
+  // them out: they cannot take a lead, so matching one would report a tidy
+  // success and then fail on the first add.
   const pool = campaigns.filter(
-    (c) => c.campaignType !== "subseq" && c.id !== sourceId
+    (c) => c.campaignType !== "subseq" && c.id !== sourceId && !isArchived(c)
   );
 
   const byName = new Map<string, CampaignLike[]>();
@@ -138,11 +178,9 @@ export function matchCompanions(
     }
   }
 
-  const roles: { role: MatchRole; expectedName: string }[] = [
-    { role: "blue", expectedName: names.blue },
-    { role: "optOut", expectedName: names.optOut },
-    { role: "blueOptOut", expectedName: names.blueOptOut },
-  ];
+  const roles: { role: MatchRole; expectedName: string }[] = roleList.map(
+    (role) => ({ role, expectedName: names[role] })
+  );
 
   const used = new Set<string>();
   const matches: RoleMatch[] = roles.map(({ role, expectedName }) => {

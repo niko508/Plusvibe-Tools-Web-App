@@ -14,6 +14,17 @@
 
 export const MAX_STORED_ERRORS = 50;
 
+/**
+ * What a run does.
+ *
+ * "create" is the whole thing: build the five copies, then sort, split, move
+ * and launch. "move" is the second half on its own — the five campaigns were
+ * built by an earlier run and are found by name, and only the source's
+ * not-contacted leads are sorted and split into them. Nothing is created,
+ * no copy is edited, and nothing is launched.
+ */
+export type CampaignTypesMode = "create" | "move";
+
 export type CampaignTypesStatus =
   /** Accepted and waiting its turn — nothing has been created for it yet. */
   | "queued"
@@ -45,6 +56,19 @@ export const PHASE_LABELS: Record<CampaignTypesPhase, string> = {
   activating: "Activating campaigns",
   finished: "Finished",
 };
+
+/** A move run finds its campaigns rather than making them. */
+export const MOVE_PHASE_LABELS: Record<CampaignTypesPhase, string> = {
+  ...PHASE_LABELS,
+  duplicating: "Finding campaigns",
+};
+
+export function phaseLabel(
+  phase: CampaignTypesPhase,
+  mode: CampaignTypesMode | undefined
+): string {
+  return (mode === "move" ? MOVE_PHASE_LABELS : PHASE_LABELS)[phase];
+}
 
 export type PhaseState = "pending" | "running" | "done" | "skipped" | "error";
 
@@ -164,6 +188,8 @@ export interface ActivationTarget {
 export interface CampaignTypesJob {
   id: string;
   label: string;
+  /** Absent on records written before Move Leads existed, i.e. "create". */
+  mode?: CampaignTypesMode;
   status: CampaignTypesStatus;
   phase: CampaignTypesPhase;
   phaseStates: Record<Exclude<CampaignTypesPhase, "finished">, PhaseState>;
@@ -192,6 +218,8 @@ export interface CampaignTypesJob {
 }
 
 export interface CampaignTypesStartPayload {
+  /** Defaults to "create". */
+  mode?: CampaignTypesMode;
   workspaceId: string;
   workspaceName: string;
   sourceCampaignId: string;

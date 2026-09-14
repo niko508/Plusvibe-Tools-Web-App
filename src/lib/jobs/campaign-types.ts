@@ -18,7 +18,8 @@ import { planSplit } from "@/lib/campaign-types/split";
 import { applyOptOutToCampaign } from "@/lib/campaign-types/apply-opt-out";
 import { applySignatureToCampaign } from "@/lib/campaign-types/apply-signature";
 import { duplicateCampaign, launchCampaign } from "@/lib/campaign-types/duplicate";
-import { buildReuseIndex, normalizeName } from "@/lib/campaign-types/match";
+import { buildReuseIndex, matchMoveTargets, normalizeName } from "@/lib/campaign-types/match";
+import type { CampaignSummary } from "@/lib/plusvibe-types";
 import type {
   ActivationTarget,
   CampaignRole,
@@ -405,15 +406,18 @@ export async function createJob(
 
   const id = randomUUID();
   const now = Date.now();
+  const mode = payload.mode === "move" ? "move" : "create";
 
+  // A move run edits no copy: the campaigns it finds already carry their
+  // opt-out line and sign-off, and touching them again is not its business.
   const created: CreatedCampaign[] = CREATED_ROLES.map((role) => ({
     role,
     name: payload.names[role],
     state: "pending" as const,
-    ...(OPT_OUT_ROLES.includes(role)
+    ...(mode === "create" && OPT_OUT_ROLES.includes(role)
       ? { optOut: { state: "pending" as const, applied: [], alreadyPresent: [] } }
       : {}),
-    ...(SIGNATURE_ROLES.includes(role)
+    ...(mode === "create" && SIGNATURE_ROLES.includes(role)
       ? {
           signature: {
             state: "pending" as const,
@@ -433,20 +437,22 @@ export async function createJob(
     state: "pending" as const,
   }));
 
-  const activation: ActivationTarget[] = (
-    ["source", ...CREATED_ROLES] as CampaignRole[]
-  ).map((role) => ({
-    role,
-    name:
-      role === "source"
-        ? payload.sourceCampaignName
-        : payload.names[role as CreatedRole],
-    state: "pending" as const,
-  }));
+  const activation: ActivationTarget[] =
+    mode === "move"
+      ? []
+      : (["source", ...CREATED_ROLES] as CampaignRole[]).map((role) => ({
+          role,
+          name:
+            role === "source"
+              ? payload.sourceCampaignName
+              : payload.names[role as CreatedRole],
+          state: "pending" as const,
+        }));
 
   const record: CampaignTypesJob = {
     id,
     label: payload.sourceCampaignName,
+    mode,
     // Always queued to begin with, even when nothing else is going: pump()
     // starts it in the same tick, so there is one path into a run rather than
     // two that could drift apart.
@@ -456,7 +462,10 @@ export async function createJob(
       sorting: "pending",
       duplicating: "pending",
       moving: "pending",
-      activating: payload.activate === false ? "skipped" : "pending",
+      // A move run launches nothing: the campaigns it moves into are already
+      // running, and resuming a paused one is the user's decision.
+      activating:
+        mode === "move" || payload.activate === false ? "skipped" : "pending",
     },
     createdAt: now,
     updatedAt: now,
@@ -513,7 +522,8 @@ async function runJob(id: string) {
     workspaceId: m.payload.workspaceId,
     sourceCampaignId: m.payload.sourceCampaignId,
   };
-  const activate = m.payload.activate !== false;
+  const mode = rec.mode ?? "create";
+  const activate = mode !== "move" && m.payload.activate !== false;
   const check = () => {
     if (m.aborted) throw new AbortedError();
   };
@@ -573,33 +583,89 @@ async function runJob(id: string) {
     rec.phaseStates.sorting = "done";
     await persist(id);
 
-    // --- Phase 2: duplicating campaigns ----------------------------------
+    // --- Phase 2: duplicating campaigns (move: finding them) -------------
     rec.phase = "duplicating";
     rec.phaseStates.duplicating = "running";
     await persist(id);
 
-    // Existing names in the workspace, so a resumed or repeated run adopts the
-    // copies it already made instead of creating a second set under the same
-    // names. Duplication is not idempotent on its own.
+    // The workspace's live campaigns. A create run uses them to adopt copies
+    // it already made instead of making a second set under the same names —
+    // duplication is not idempotent on its own. A move run uses them to find
+    // the five campaigns to move into.
     //
-    // Archived campaigns are excluded — see buildReuseIndex. Adopting one is
-    // silently fatal: it reports as a reuse and then can't take a single lead.
-    let existingByName = new Map<string, string>();
+    // Archived campaigns are excluded either way: adopting or matching one is
+    // silently fatal, since it reads as a success and then cannot take a
+    // single lead.
+    let workspaceCampaigns: CampaignSummary[] = [];
     try {
-      existingByName = buildReuseIndex(await listCampaigns(apiKey, workspaceId));
+      workspaceCampaigns = await listCampaigns(apiKey, workspaceId);
     } catch (err) {
       // Without the list we can't tell a resumed run from a fresh one, and
       // duplicating blind could leave a second set of campaigns behind.
       pushError(
         rec,
-        `Could not list the workspace's campaigns to check for copies already made: ${msg(err)}. Stopped before duplicating anything.`
+        mode === "move"
+          ? `Could not list the workspace's campaigns to find the ones to move into: ${msg(err)}. Nothing was moved.`
+          : `Could not list the workspace's campaigns to check for copies already made: ${msg(err)}. Stopped before duplicating anything.`
       );
       rec.phaseStates.duplicating = "error";
       rec.status = "error";
       return;
     }
 
+    if (mode === "move") {
+      // Nothing is created here: the five campaigns were made by an earlier
+      // run and are found by name among the live ones. A name that isn't
+      // there, or that two campaigns share, stops the run before any lead
+      // moves — picking the wrong campaign would put thousands of leads in it.
+      const found = matchMoveTargets(
+        rec.sourceCampaignName,
+        workspaceCampaigns,
+        sourceCampaignId
+      );
+      for (const target of rec.created) {
+        const hit = found.matches.find((x) => x.role === target.role);
+        if (hit?.match) {
+          target.campaignId = hit.match.id;
+          target.reused = true;
+          target.state = "done";
+          // The stored name, not the derived one: that is the campaign the
+          // leads actually go to, and both the card and any error should
+          // say so.
+          target.name = hit.match.name;
+          const mv = rec.moving.targets.find((t) => t.role === target.role);
+          if (mv) mv.name = hit.match.name;
+          if (hit.loose) {
+            pushError(
+              rec,
+              `"${hit.match.name}" was matched to "${hit.expectedName}" by ignoring separators. Check it is the right campaign.`
+            );
+          }
+        } else {
+          target.state = "error";
+          target.error = hit?.ambiguous
+            ? "more than one campaign has this name"
+            : "no campaign with this name";
+          pushError(
+            rec,
+            hit?.ambiguous
+              ? `More than one campaign is called "${target.name}", so there is no telling which was meant.`
+              : `No campaign called "${target.name}" in this workspace.`
+          );
+        }
+      }
+      rec.updatedAt = Date.now();
+      await persist(id);
+    }
+
+    const existingByName =
+      mode === "create"
+        ? buildReuseIndex(workspaceCampaigns)
+        : new Map<string, string>();
+
     for (const target of rec.created) {
+      // A move run has its campaigns already; it creates nothing.
+      if (mode === "move") break;
       check();
       target.state = "running";
       rec.updatedAt = Date.now();
@@ -724,7 +790,9 @@ async function runJob(id: string) {
     if (setupFailed) {
       pushError(
         rec,
-        "Stopped before moving any leads: a campaign is missing, lacks its opt-out copy or still has the wrong sign-off. Fix it in Plusvibe, then run again — the copies already made are reused, both copy steps are idempotent, and no leads have moved."
+        mode === "move"
+          ? "Stopped before moving any lead: one of the five campaigns could not be found in this workspace. Check the names in Plusvibe — they have to read exactly as listed above, and an archived campaign does not count — then run again. Nothing has moved."
+          : "Stopped before moving any leads: a campaign is missing, lacks its opt-out copy or still has the wrong sign-off. Fix it in Plusvibe, then run again — the copies already made are reused, both copy steps are idempotent, and no leads have moved."
       );
       rec.status = "error";
       return;

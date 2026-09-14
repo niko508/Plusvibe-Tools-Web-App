@@ -295,39 +295,10 @@ eq("detection agrees with the swap",
   [true, true]);
 
 // --- companion matching -----------------------------------------------------
-const normalizeName = (n) => n.replace(/\uFE0F/g, "").replace(/\s+/g, " ").trim().toLowerCase();
-const looseKey = (n) => normalizeName(n).replace(/-/g, " ").replace(/\s+/g, " ").trim();
-const matchCompanions = (sourceName, campaigns, sourceId) => {
-  const names = deriveNames(sourceName);
-  const pool = campaigns.filter((c) => c.campaignType !== "subseq" && c.id !== sourceId);
-  const byName = new Map(), byLoose = new Map();
-  for (const c of pool) {
-    for (const [map, key] of [[byName, normalizeName(c.name)], [byLoose, looseKey(c.name)]]) {
-      map.has(key) ? map.get(key).push(c) : map.set(key, [c]);
-    }
-  }
-  const roles = [
-    { role: "blue", expectedName: names.blue },
-    { role: "optOut", expectedName: names.optOut },
-    { role: "blueOptOut", expectedName: names.blueOptOut },
-  ];
-  const used = new Set();
-  const matches = roles.map(({ role, expectedName }) => {
-    const exact = byName.get(normalizeName(expectedName)) ?? [];
-    if (exact.length > 1) return { role, expectedName, match: null, ambiguous: true };
-    let candidate = exact[0], loose = false;
-    if (!candidate) {
-      const near = (byLoose.get(looseKey(expectedName)) ?? []).filter((c) => !used.has(c.id));
-      if (near.length > 1) return { role, expectedName, match: null, ambiguous: true };
-      candidate = near[0];
-      loose = !!candidate;
-    }
-    if (!candidate || used.has(candidate.id)) return { role, expectedName, match: null, ambiguous: false };
-    used.add(candidate.id);
-    return { role, expectedName, match: candidate, ambiguous: false, loose };
-  });
-  return { matches, complete: matches.every((m) => m.match !== null) };
-};
+// The REAL module, so a change to the matching that breaks these is caught.
+const matchMod = await importTs("@/lib/campaign-types/match");
+const { matchCompanions, matchMoveTargets, normalizeName, looseKey, isArchived } =
+  matchMod;
 
 console.log("--- companion matching");
 const SRC = { id: "s1", name: "Tree Removal (August)" };
@@ -382,6 +353,63 @@ const dupes = matchCompanions(SRC.name, [
 ], SRC.id);
 eq("duplicate names are ambiguous, not guessed", dupes.matches[0].ambiguous, true);
 eq("ambiguous role is left unmatched", dupes.matches[0].match, null);
+
+// --- Move Leads: finding all five campaigns ---------------------------------
+// A move run creates nothing, so every one of the five has to be there already.
+console.log("--- move targets");
+const FIVE = [
+  SRC,
+  { id: "b1", name: "\u{1F535} Consulting (August)", status: "ACTIVE" },
+  { id: "o1", name: "Consulting - Opt Out (August)", status: "PAUSED" },
+  { id: "bo1", name: "\u{1F535} Consulting - Opt Out (August)", status: "COMPLETED" },
+  { id: "s1x", name: "Consulting - Signature (August)", status: "ACTIVE" },
+  { id: "bs1", name: "\u{1F535} Consulting - Signature (August)", status: "ACTIVE" },
+];
+const CONSULTING = { id: "c0", name: "Consulting (August)" };
+const five = matchMoveTargets(CONSULTING.name, FIVE, CONSULTING.id);
+eq("all five are found", five.complete, true);
+eq("…in role order", five.matches.map((m) => [m.role, m.match?.id]), [
+  ["blue", "b1"],
+  ["optOut", "o1"],
+  ["blueOptOut", "bo1"],
+  ["signature", "s1x"],
+  ["blueSignature", "bs1"],
+]);
+eq("…whatever their status, as long as it isn't archived",
+  five.matches.every((m) => m.match), true);
+
+// Archived campaigns can't take a lead, so their names don't count as found.
+const archived = matchMoveTargets(CONSULTING.name, [
+  { id: "b1", name: "\u{1F535} Consulting (August)", status: "ARCHIVED" },
+  { id: "o1", name: "Consulting - Opt Out (August)", status: "ACTIVE" },
+], CONSULTING.id);
+eq("an archived campaign is not a match", archived.matches[0].match, null);
+eq("…while the live one beside it still is", archived.matches[1].match.id, "o1");
+eq("…so the run is incomplete", archived.complete, false);
+
+// A live campaign wins over an archived one holding the same name.
+const both = matchMoveTargets(CONSULTING.name, [
+  { id: "old", name: "\u{1F535} Consulting (August)", status: "ARCHIVED" },
+  { id: "new", name: "\u{1F535} Consulting (August)", status: "ACTIVE" },
+], CONSULTING.id);
+eq("the live campaign is taken, not the archived namesake", both.matches[0].match.id, "new");
+eq("…and that is not ambiguous", both.matches[0].ambiguous, false);
+
+const missing = matchMoveTargets(CONSULTING.name, [
+  { id: "b1", name: "\u{1F535} Consulting (August)" },
+], CONSULTING.id);
+eq("a missing companion is reported, not guessed at",
+  missing.matches.filter((m) => !m.match).map((m) => m.expectedName),
+  [
+    "Consulting - Opt Out (August)",
+    "\u{1F535} Consulting - Opt Out (August)",
+    "Consulting - Signature (August)",
+    "\u{1F535} Consulting - Signature (August)",
+  ]);
+eq("…and the whole thing is incomplete", missing.complete, false);
+eq("the three-role call still only asks for three",
+  matchCompanions(CONSULTING.name, FIVE, CONSULTING.id).matches.map((m) => m.role),
+  ["blue", "optOut", "blueOptOut"]);
 
 // Loose matching must not resolve a genuine ambiguity either.
 const looseDupes = matchCompanions(SRC.name, [

@@ -6,10 +6,7 @@ import type {
   CampaignTypesStatus,
   PhaseState,
 } from "@/lib/jobs/campaign-types-types";
-import {
-  PHASE_ORDER,
-  PHASE_LABELS,
-} from "@/lib/jobs/campaign-types-types";
+import { PHASE_ORDER, phaseLabel } from "@/lib/jobs/campaign-types-types";
 import { formatNumber } from "@/lib/format";
 import { Spinner, RemoveJobButton } from "@/components/ui";
 import { CheckIcon, AlertIcon } from "@/components/icons";
@@ -71,6 +68,11 @@ export function JobCard({
               : ""}
           </span>
           <span className="truncate text-sm font-medium">{job.label}</span>
+          {job.mode === "move" && (
+            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+              Move leads
+            </span>
+          )}
         </div>
         <span className="shrink-0 text-xs text-muted-foreground">
           {relativeTime(job.createdAt)}
@@ -99,13 +101,14 @@ export function JobCard({
                       : "font-medium"
                   }`}
                 >
-                  {PHASE_LABELS[phase]}
+                  {phaseLabel(phase, job.mode)}
                 </span>
                 <span className="text-xs tabular-nums text-muted-foreground">
                   {phaseSummary(
                     { created, activation, moving, sorting },
                     phase,
-                    phaseState
+                    phaseState,
+                    job.mode
                   )}
                 </span>
               </div>
@@ -357,7 +360,8 @@ function phaseSummary(
     sorting: CampaignTypesJob["sorting"];
   },
   phase: (typeof PHASE_ORDER)[number],
-  state: PhaseState
+  state: PhaseState,
+  mode: CampaignTypesJob["mode"]
 ): string {
   if (state === "pending") return "";
   if (state === "skipped") return "skipped";
@@ -373,6 +377,7 @@ function phaseSummary(
 
   if (phase === "duplicating") {
     const done = parts.created.filter((c) => c.state === "done").length;
+    if (mode === "move") return `${done} / ${parts.created.length} found`;
     const reused = parts.created.filter((c) => c.reused).length;
     const base = `${done} / ${parts.created.length} campaigns`;
     return reused > 0 ? `${base} · ${reused} reused` : base;

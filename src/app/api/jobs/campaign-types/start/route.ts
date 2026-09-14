@@ -8,9 +8,13 @@ import { normalizeName } from "@/lib/campaign-types/match";
 export const dynamic = "force-dynamic";
 
 // POST /api/jobs/campaign-types/start
-// Body: { workspaceId, workspaceName, sourceCampaignId, sourceCampaignName,
+// Body: { mode?, workspaceId, workspaceName, sourceCampaignId,
+//         sourceCampaignName,
 //         names: { blue, optOut, blueOptOut, signature, blueSignature },
 //         activate? }
+//
+// mode "move" sorts and splits the source's leads into the five campaigns
+// that already carry these names, creating and launching nothing.
 export async function POST(request: Request) {
   try {
     const apiKey = resolveApiKey(request);
@@ -62,6 +66,7 @@ export async function POST(request: Request) {
     }
 
     const jobId = await createJob(apiKey, {
+      mode: body.mode === "move" ? "move" : "create",
       workspaceId,
       workspaceName: String(body.workspaceName ?? ""),
       sourceCampaignId,

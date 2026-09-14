@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Workspace, CampaignSummary } from "@/lib/plusvibe-types";
-import type { CampaignTypesJob } from "@/lib/jobs/campaign-types-types";
+import type {
+  CampaignTypesJob,
+  CampaignTypesMode,
+} from "@/lib/jobs/campaign-types-types";
 import { CREATED_ROLES } from "@/lib/jobs/campaign-types-types";
 import {
   fetchWorkspaces,
@@ -22,9 +25,14 @@ import {
   AlertIcon,
   ChevronDownIcon,
   CheckIcon,
+  MoveIcon,
 } from "@/components/icons";
 import { deriveNames } from "@/lib/campaign-types/names";
-import { isArchived, normalizeName } from "@/lib/campaign-types/match";
+import {
+  isArchived,
+  matchMoveTargets,
+  normalizeName,
+} from "@/lib/campaign-types/match";
 import { JobCard } from "./job-card";
 
 const POLL_MS = 2000;
@@ -47,6 +55,7 @@ export function CampaignTypesTool() {
   const [campaignsLoading, setCampaignsLoading] = useState(false);
   const [sourceId, setSourceId] = useState<string>("");
   const [activate, setActivate] = useState(true);
+  const [mode, setMode] = useState<CampaignTypesMode>("create");
 
   const [jobs, setJobs] = useState<CampaignTypesJob[]>([]);
   const [starting, setStarting] = useState(false);
@@ -160,6 +169,17 @@ export function CampaignTypesTool() {
   const reusedCount = rows.filter((r) => r.reused).length;
   const archivedCount = rows.filter((r) => r.replacesArchived).length;
 
+  // Move Leads: the five campaigns the leads would go into, found by name the
+  // same way the run finds them — so what is shown here is what will happen.
+  // Archived campaigns are left out: they cannot take a lead.
+  const moveMatch = useMemo(
+    () => (source ? matchMoveTargets(source.name, parents, source.id) : null),
+    [source, parents]
+  );
+  const missingCount = moveMatch
+    ? moveMatch.matches.filter((m) => !m.match).length
+    : 0;
+
   const activeJob = jobs.find((j) => j.status === "running") ?? null;
   const queuedCount = jobs.filter((j) => j.status === "queued").length;
   // Already-pending work no longer blocks Start — it queues behind it. The one
@@ -170,7 +190,11 @@ export function CampaignTypesTool() {
       (j.status === "running" || j.status === "queued") &&
       j.sourceCampaignId === sourceId
   );
-  const canStart = !!source && !alreadyPending && !starting;
+  const canStart =
+    !!source &&
+    !alreadyPending &&
+    !starting &&
+    (mode === "create" || !!moveMatch?.complete);
 
   // --- Actions -------------------------------------------------------------
   async function handleStart() {
@@ -180,12 +204,13 @@ export function CampaignTypesTool() {
     setError(null);
     try {
       await startCampaignTypes({
+        mode,
         workspaceId: workspaceId!,
         workspaceName: workspaces.find((w) => w._id === workspaceId)?.name ?? "",
         sourceCampaignId: source.id,
         sourceCampaignName: source.name,
         names,
-        activate,
+        activate: mode === "create" && activate,
       });
       setToast(
         activeJob || queuedCount > 0
@@ -209,6 +234,32 @@ export function CampaignTypesTool() {
   return (
     <div className="space-y-5">
       <div className="pv-card space-y-4 p-4 sm:p-5">
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label="What to run">
+          {(
+            [
+              ["create", "Create all types"],
+              ["move", "Move leads"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              aria-selected={mode === value}
+              className={`pv-chip ${mode === value ? "pv-chip-active" : "hover:text-foreground"}`}
+              onClick={() => setMode(value)}
+              data-mode={value}
+            >
+              {label}
+            </button>
+          ))}
+          <span className="self-center text-xs text-muted-foreground">
+            {mode === "create"
+              ? "Builds the five campaigns, then splits the leads into them."
+              : "The five campaigns already exist: this only splits the source's not-contacted leads into them."}
+          </span>
+        </div>
+
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
@@ -267,7 +318,69 @@ export function CampaignTypesTool() {
           </div>
         </div>
 
-        {source && names && (
+        {mode === "move" && source && moveMatch && (
+          <div className="rounded-xl border border-border p-3 sm:p-4" data-move-preview>
+            <h3 className="mb-1 text-sm font-medium">
+              {missingCount === 0
+                ? "Leads go to these five campaigns"
+                : missingCount === moveMatch.matches.length
+                  ? "None of these five campaigns are in this workspace"
+                  : `${formatNumber(missingCount)} of these five campaigns ${missingCount === 1 ? "is" : "are"} missing`}
+            </h3>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Found by name in this workspace. Archived campaigns don&apos;t
+              count — an active, paused or completed one all take leads. Nothing
+              is created, no copy is changed and nothing is launched.
+            </p>
+            <div className="space-y-2">
+              {moveMatch.matches.map((m) => (
+                <div
+                  key={m.role}
+                  className="flex flex-col gap-1 rounded-lg border border-border/70 p-2.5 sm:flex-row sm:items-center sm:justify-between"
+                  data-move-row={m.role}
+                >
+                  <div className="min-w-0">
+                    <div className="truncate font-mono text-xs">
+                      {m.match?.name ?? m.expectedName}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-muted-foreground">
+                      {ROLE_LABELS[m.role]}
+                    </div>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                      m.match
+                        ? "bg-success/10 text-success"
+                        : "bg-danger/10 text-danger"
+                    }`}
+                  >
+                    {m.match
+                      ? m.loose
+                        ? "found — check it is the right one"
+                        : "found"
+                      : m.ambiguous
+                        ? "two campaigns share this name"
+                        : "not found"}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {missingCount > 0 && (
+              <p className="mt-3 text-xs text-danger">
+                Nothing moves until all five are there. Check the names in
+                Plusvibe read exactly as above, and that none of them is
+                archived.
+              </p>
+            )}
+            <p className="mt-3 text-xs text-muted-foreground">
+              The source keeps a sixth of its leads, and the split is the same
+              as a full run: Microsoft recipients to the 🔵 campaigns, everyone
+              else to the rest, divided evenly.
+            </p>
+          </div>
+        )}
+
+        {mode === "create" && source && names && (
           <div className="rounded-xl border border-border p-3 sm:p-4">
             <h3 className="mb-1 text-sm font-medium">
               Five campaigns will be created
@@ -355,9 +468,14 @@ export function CampaignTypesTool() {
             className="pv-btn-primary disabled:opacity-50"
             disabled={!canStart}
             onClick={handleStart}
+            data-start
           >
-            {starting ? <Spinner /> : <LayersIcon size={16} />}
-            {activeJob || queuedCount > 0 ? "Add to queue" : "Start"}
+            {starting ? <Spinner /> : mode === "move" ? <MoveIcon size={16} /> : <LayersIcon size={16} />}
+            {activeJob || queuedCount > 0
+              ? "Add to queue"
+              : mode === "move"
+                ? "Move leads"
+                : "Start"}
           </button>
           {alreadyPending ? (
             <span className="text-xs text-warning">
