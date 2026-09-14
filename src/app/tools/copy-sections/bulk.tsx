@@ -160,7 +160,7 @@ export function BulkReplace({
         <p className="text-xs text-muted-foreground">
           {filtered
             ? "The campaigns you ticked, every step."
-            : "Every active or paused campaign in each selected workspace, every step. Drafts, completed and archived campaigns are left alone."} The scan reads everything first and shows what would
+            : "Every active, paused or draft campaign in each selected workspace, every step. Completed and archived campaigns are left alone."} The scan reads everything first and shows what would
           change; nothing is written until you confirm. A campaign someone edits between the scan and the apply is skipped
           rather than overwritten.
         </p>

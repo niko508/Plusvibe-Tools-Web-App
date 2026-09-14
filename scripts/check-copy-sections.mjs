@@ -116,5 +116,29 @@ eq("a later step can (replies in-thread)", validateEdit({ kind: "set-section", s
 eq("a paragraph needs text", validateEdit({ kind: "set-section", section: "opening", text: "" }, 1).length, 1);
 eq("normalizeFind collapses whitespace", normalizeFind("  a \n  b  "), "a b");
 
+// --- which campaigns are in scope -------------------------------------------
+// The picker and the background job share this, so they cannot disagree about
+// what a run will touch.
+const scope = await importTs("@/lib/copy-sections/scope");
+const { statusBucket, isEditableStatus, EDITABLE_BUCKETS } = scope;
+
+console.log("--- scope");
+eq("Plusvibe's statuses are bucketed",
+  ["ACTIVE", "RUNNING", "PAUSED", "DRAFTED", "COMPLETED", "ARCHIVED"].map(statusBucket),
+  ["active", "active", "paused", "draft", "completed", "archived"]);
+eq("…however they are spelled", ["active", " Paused ", "archived"].map(statusBucket),
+  ["active", "paused", "archived"]);
+eq("a status this build has never seen reads as a draft",
+  [statusBucket("SOMETHING_NEW"), statusBucket(""), statusBucket(undefined), statusBucket(null)],
+  ["draft", "draft", "draft", "draft"]);
+
+eq("a draft is edited now, as asked", isEditableStatus("DRAFTED"), true);
+eq("…along with active and paused", ["ACTIVE", "RUNNING", "PAUSED"].map(isEditableStatus), [true, true, true]);
+// A finished campaign's copy is a record of what was sent, and the write is
+// wholesale with no undo, so neither is touched.
+eq("a completed campaign is left alone", isEditableStatus("COMPLETED"), false);
+eq("…and an archived one", isEditableStatus("ARCHIVED"), false);
+eq("the three editable buckets, in picker order", EDITABLE_BUCKETS, ["active", "paused", "draft"]);
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

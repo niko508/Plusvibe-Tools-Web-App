@@ -24,29 +24,19 @@ import {
   RefreshIcon,
 } from "@/components/icons";
 import { WorkspacePicker } from "@/components/workspace-picker";
+import {
+  BUCKET_LABEL,
+  EDITABLE_SUMMARY,
+  EXCLUDED_SUMMARY,
+  isEditableStatus,
+  statusBucket,
+} from "@/lib/copy-sections/scope";
 import { BulkReplace } from "./bulk";
 
 // One edit, every variation of one step. The preview is the whole point: it
 // shows exactly which variations change and which don't (and why), before a
 // single byte is written — because the write replaces the step's copy
 // wholesale and there is no undo in Plusvibe.
-
-type Bucket = "active" | "draft" | "paused" | "completed" | "archived";
-function statusBucket(status: string): Bucket {
-  const s = (status ?? "").toUpperCase();
-  if (s === "ACTIVE" || s === "RUNNING") return "active";
-  if (s === "PAUSED") return "paused";
-  if (s === "COMPLETED") return "completed";
-  if (s === "ARCHIVED") return "archived";
-  return "draft";
-}
-const BUCKET_LABEL: Record<Bucket, string> = {
-  active: "Active",
-  draft: "Draft",
-  paused: "Paused",
-  completed: "Completed",
-  archived: "Archived",
-};
 
 type Mode = "replace" | "section";
 
@@ -140,16 +130,13 @@ export function CopySectionsTool() {
     };
   }, [workspaceId]);
 
-  // Parent campaigns that are active or paused — the ones whose copy gets
-  // edited in practice. Sub-sequences, drafts, completed and archived are left
-  // out of the picker entirely.
+  // Parent campaigns whose copy is worth editing: active, paused or draft.
+  // Sub-sequences, completed and archived are left out of the picker entirely.
   const visible = useMemo(
     () =>
-      (campaigns ?? []).filter((c) => {
-        if (c.campaignType === "subseq") return false;
-        const b = statusBucket(c.status);
-        return b === "active" || b === "paused";
-      }),
+      (campaigns ?? []).filter(
+        (c) => c.campaignType !== "subseq" && isEditableStatus(c.status)
+      ),
     [campaigns]
   );
 
@@ -319,7 +306,7 @@ export function CopySectionsTool() {
               {campaignsLoading ? (
                 <div className="h-20 animate-pulse rounded-xl bg-muted" />
               ) : visible.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No active or paused campaigns in this workspace.</p>
+                <p className="text-xs text-muted-foreground">No active, paused or draft campaigns in this workspace.</p>
               ) : (
                 <div className="pv-scroll max-h-64 overflow-y-auto rounded-xl border border-border">
                   <div className="grid gap-px sm:grid-cols-2">
@@ -347,9 +334,9 @@ export function CopySectionsTool() {
                 </div>
               )}
               <p className="mt-1.5 text-[11px] text-muted-foreground">
-                Active and paused campaigns only
+                {EDITABLE_SUMMARY}
                 {campaigns && campaigns.length > visible.length
-                  ? ` · ${formatNumber(campaigns.length - visible.length)} draft, completed or archived not shown`
+                  ? ` · ${formatNumber(campaigns.length - visible.length)} ${EXCLUDED_SUMMARY}`
                   : ""}
               </p>
             </div>
@@ -420,9 +407,9 @@ export function CopySectionsTool() {
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <span className="text-xs text-muted-foreground">
-            Active and paused campaigns only
+            {EDITABLE_SUMMARY}
             {campaigns && campaigns.length > visible.length
-              ? ` · ${formatNumber(campaigns.length - visible.length)} draft, completed or archived not shown`
+              ? ` · ${formatNumber(campaigns.length - visible.length)} ${EXCLUDED_SUMMARY}`
               : ""}
           </span>
           <button type="button" className="pv-btn-ghost text-xs" onClick={loadDetail} disabled={!campaignId || detailLoading}>

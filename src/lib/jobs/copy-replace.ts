@@ -11,6 +11,7 @@ import {
   editCampaignCopy,
 } from "@/lib/copy-sections/apply-campaign";
 import { validateEdit } from "@/lib/copy-sections/edit";
+import { isEditableStatus } from "@/lib/copy-sections/scope";
 import type {
   CampaignOutcome,
   CopyReplaceJob,
@@ -33,8 +34,6 @@ import { MAX_STORED_ERRORS } from "@/lib/jobs/copy-replace-types";
 const JOBS_BASE = process.env.JOBS_DIR || path.join(process.cwd(), ".jobs-data");
 const JOBS_DIR = path.join(JOBS_BASE, "copy-replace");
 const PERSIST_EVERY = 5;
-/** Campaign statuses in scope — the ones whose copy is live or about to be. */
-const IN_SCOPE = new Set(["ACTIVE", "PAUSED"]);
 
 interface JobMeta {
   fingerprint: string;
@@ -240,7 +239,7 @@ async function runScan(id: string) {
       // still applies, so one archived since it was picked is left alone.
       const picked = ws.campaignIds ? new Set(ws.campaignIds) : null;
       const candidates = picked ? list.filter((c) => picked.has(c.id)) : list;
-      const inScope = candidates.filter((c) => IN_SCOPE.has(c.status.toUpperCase()));
+      const inScope = candidates.filter((c) => isEditableStatus(c.status));
       ws.skippedOutOfScope = candidates.length - inScope.length;
       ws.campaigns = inScope.map((c) => ({
         campaignId: c.id,
