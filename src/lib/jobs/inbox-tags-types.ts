@@ -1,12 +1,17 @@
-// Shared types for Update Inbox Tags jobs (server + client).
+// Shared types for Update Inbox & Campaign Tags jobs (server + client).
 //
-// One set of rules, every selected workspace, in the background. Per
-// workspace: read the tags, create any that are missing, read every inbox,
-// sort them by provider, assign each rule's tag to the inboxes in its scope
-// that don't already carry it, then re-read a sample to confirm nothing lost
-// a tag it had.
+// One level (inboxes or campaigns), one action (add or remove), one set of
+// rules, every selected workspace, in the background. Per workspace: read the
+// tags, create any that are missing (adding only), read every inbox or
+// campaign, sort them into buckets, move each rule's tag on or off the ones in
+// its scope that aren't already that way, then re-read a sample to confirm
+// nothing else changed.
+//
+// The job id stays "inbox-tags" — it is what the routes and the jobs
+// directory are named, and records written before campaigns existed load as
+// inbox jobs.
 
-import type { Rule, ProviderCounts } from "@/lib/inbox-tags/plan";
+import type { BucketCounts, Level, ProviderCounts, Rule, TagAction } from "@/lib/inbox-tags/plan";
 
 export const MAX_STORED_ERRORS = 50;
 
@@ -20,13 +25,18 @@ export interface RuleOutcome {
   tagId?: string;
   /** The tag was missing from this workspace and was created. */
   created?: boolean;
-  /** Inboxes in scope. */
+  /**
+   * The workspace has no tag of that name. Removing one it never had is
+   * nothing to do, not a failure.
+   */
+  noTag?: boolean;
+  /** Inboxes or campaigns in scope. */
   matched: number;
-  /** Already carried the tag — left alone. */
+  /** Already the way the rule wants them — left alone. */
   already: number;
-  /** Assigned by this job. */
+  /** Changed by this job. */
   assigned: number;
-  /** In scope, but the assign call failed. */
+  /** In scope, but the call failed. */
   failed: number;
   error?: string;
 }
@@ -35,11 +45,12 @@ export interface WorkspaceOutcome {
   workspaceId: string;
   workspaceName: string;
   state: WorkspaceState;
-  /** Inboxes read so far (live during fetching), then the total. */
-  inboxes: number;
-  providers: ProviderCounts;
+  /** Inboxes or campaigns read so far (live during fetching), then the total. */
+  found: number;
+  /** How many fell in each bucket: providers for inboxes, statuses for campaigns. */
+  buckets: BucketCounts;
   rules: RuleOutcome[];
-  /** The re-read after assigning. */
+  /** The re-read after writing. */
   verified?: { checked: number; lostTags: number; missingTag: number };
   error?: string;
 }
@@ -52,13 +63,18 @@ export interface InboxTagsJob {
   updatedAt: number;
   finishedAt?: number;
 
+  level: Level;
+  action: TagAction;
+  /** Campaigns only: sub-sequences were tagged as well as their parents. */
+  includeSubsequences?: boolean;
   rules: Rule[];
   workspaces: WorkspaceOutcome[];
 
   progress: {
     workspacesDone: number;
-    inboxesRead: number;
-    /** Tag assignments made (an inbox under two rules counts twice). */
+    /** Inboxes or campaigns read. */
+    read: number;
+    /** Tag writes made (something under two rules counts twice). */
     assigned: number;
     already: number;
     failed: number;
@@ -72,4 +88,9 @@ export interface InboxTagsJob {
 export interface InboxTagsStartPayload {
   workspaces: { id: string; name: string }[];
   rules: Rule[];
+  level?: Level;
+  action?: TagAction;
+  includeSubsequences?: boolean;
 }
+
+export type { ProviderCounts };

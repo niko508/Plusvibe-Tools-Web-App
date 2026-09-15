@@ -83,9 +83,9 @@ const ACTIONS: BulkAction[] = [
   },
   {
     id: "inbox-tags",
-    name: "Update Inbox Tags",
+    name: "Update Inbox & Campaign Tags",
     description:
-      "Add a tag to every inbox, or just the Google or Microsoft ones, across the selected workspaces. Existing tags are kept. Runs in the background.",
+      "Add or remove a tag on inboxes — all of them, or just the Google or Microsoft ones — or on campaigns by status, across the selected workspaces. Every other tag is kept. Runs in the background.",
     color: "sky",
     Icon: MailIcon,
     ready: true,
