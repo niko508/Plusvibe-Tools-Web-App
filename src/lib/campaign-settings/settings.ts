@@ -7,7 +7,7 @@
 // catalogue, validation, the per-campaign diff and the read-back check, with
 // no API calls, so all of it is unit-tested.
 
-export type SettingKind = "toggle" | "choice" | "number";
+export type SettingKind = "toggle" | "choice" | "number" | "ratio";
 
 export interface SettingSpec {
   key: string;
@@ -17,11 +17,26 @@ export interface SettingSpec {
   kind: SettingKind;
   /** For "choice": the allowed values with their labels. */
   choices?: { value: string; label: string }[];
-  /** For "number": the smallest allowed value. */
+  /** For "number" and "ratio": the smallest allowed value. */
   min?: number;
+  /** For "ratio": the largest allowed value. */
+  max?: number;
   /** For "number": a hint on units. */
   unit?: string;
 }
+
+/**
+ * Sending Preference, the way Plusvibe's own screen offers it. The number is
+ * the share of the daily volume going to NEW leads; the rest goes to
+ * follow-ups.
+ */
+export const RATIO_PRESETS: { newLeads: number; label: string }[] = [
+  { newLeads: 100, label: "All New (100/0)" },
+  { newLeads: 70, label: "Growth (70/30)" },
+  { newLeads: 50, label: "Balanced (50/50)" },
+  { newLeads: 30, label: "Retention (30/70)" },
+  { newLeads: 0, label: "All Follow-ups (0/100)" },
+];
 
 export const SETTINGS: SettingSpec[] = [
   { key: "is_esp_match", label: "ESP matching", hint: "Match the sender's provider with the recipient's (Google to Google, Microsoft to Microsoft).", kind: "toggle" },
@@ -50,6 +65,14 @@ export const SETTINGS: SettingSpec[] = [
     ],
   },
   { key: "opportunity_val", label: "Opportunity value", hint: "Dollar value per positive reply.", kind: "number", min: 0, unit: "$" },
+  {
+    key: "send_priority",
+    label: "Sending preference",
+    hint: "How the daily volume is split between new leads and follow-ups.",
+    kind: "ratio",
+    min: 0,
+    max: 100,
+  },
 ];
 
 export function specFor(key: string): SettingSpec | undefined {
@@ -70,6 +93,14 @@ export interface SettingChange {
  */
 export function readValue(spec: SettingSpec, raw: unknown): string | number | null {
   if (raw === undefined || raw === null) return null;
+  if (spec.kind === "ratio") {
+    // On the wire this is `send_priority`: the FOLLOW-UP share, 0 to 1. The
+    // tool works in the new-leads percentage, which is how the Plusvibe screen
+    // reads ("70 / 30" is 70% new leads, so send_priority 0.3).
+    const n = typeof raw === "number" ? raw : Number(String(raw).trim());
+    if (!Number.isFinite(n) || n < 0 || n > 1) return null;
+    return Math.round((1 - n) * 100);
+  }
   if (spec.kind === "toggle") {
     if (raw === true || raw === 1 || raw === "1") return "yes";
     if (raw === false || raw === 0 || raw === "0") return "no";
@@ -96,6 +127,13 @@ export function validateChange(c: SettingChange): string[] {
   if (spec.kind === "choice") {
     return spec.choices?.some((o) => o.value === c.value) ? [] : [`${spec.label}: pick one of the options.`];
   }
+  if (spec.kind === "ratio") {
+    const n = typeof c.value === "number" ? c.value : String(c.value).trim() === "" ? NaN : Number(c.value);
+    if (!Number.isFinite(n)) return [`${spec.label}: enter a percentage.`];
+    if (!Number.isInteger(n)) return [`${spec.label}: use a whole percentage.`];
+    if (n < 0 || n > 100) return [`${spec.label}: must be between 0 and 100.`];
+    return [];
+  }
   // Number("") is 0, so a blank field has to be caught before converting.
   const n = typeof c.value === "number" ? c.value : String(c.value).trim() === "" ? NaN : Number(c.value);
   if (!Number.isFinite(n)) return [`${spec.label}: enter a number.`];
@@ -120,7 +158,8 @@ export function prepareChanges(inputs: SettingChange[]): ChangesResult {
       continue;
     }
     const spec = specFor(c.key) as SettingSpec;
-    byKey.set(c.key, { key: c.key, value: spec.kind === "number" ? Number(c.value) : String(c.value) });
+    const numeric = spec.kind === "number" || spec.kind === "ratio";
+    byKey.set(c.key, { key: c.key, value: numeric ? Number(c.value) : String(c.value) });
   }
   const changes = SETTINGS.filter((s) => byKey.has(s.key)).map((s) => byKey.get(s.key) as SettingChange);
   return { changes, problems };
@@ -140,10 +179,26 @@ export function diffCampaign(changes: SettingChange[], raw: Record<string, unkno
   });
 }
 
+/**
+ * The value as the API wants it. Everything is written as it is read except
+ * the ratio, which the tool holds as a new-leads percentage and the API takes
+ * as a 0–1 follow-up share.
+ */
+export function wireValue(spec: SettingSpec, value: string | number): string | number {
+  if (spec.kind !== "ratio") return value;
+  const percent = typeof value === "number" ? value : Number(value);
+  // Two decimals is enough for whole percentages and keeps 0.7 from arriving
+  // as 0.7000000000000001.
+  return Math.round((100 - percent)) / 100;
+}
+
 /** The PATCH body for a set of changes. */
 export function patchBody(workspaceId: string, campaignId: string, changes: SettingChange[]): Record<string, unknown> {
   const body: Record<string, unknown> = { workspace_id: workspaceId, campaign_id: campaignId };
-  for (const c of changes) body[c.key] = c.value;
+  for (const c of changes) {
+    const spec = specFor(c.key);
+    body[c.key] = spec ? wireValue(spec, c.value) : c.value;
+  }
   return body;
 }
 
@@ -163,10 +218,19 @@ export function describeChanges(changes: SettingChange[]): string {
           ? c.value === "yes" ? "On" : "Off"
           : spec.kind === "choice"
             ? spec.choices?.find((o) => o.value === c.value)?.label ?? String(c.value)
-            : `${spec.unit === "$" ? "$" : ""}${c.value}${spec.unit === "%" ? "%" : ""}`;
+            : spec.kind === "ratio"
+              ? describeRatio(Number(c.value))
+              : `${spec.unit === "$" ? "$" : ""}${c.value}${spec.unit === "%" ? "%" : ""}`;
       return `${spec.label} → ${v}`;
     })
     .join(", ");
+}
+
+/** "Growth (70/30)" when it is one of Plusvibe's presets, else "65 / 35 new / follow-ups". */
+export function describeRatio(newLeads: number): string {
+  const preset = RATIO_PRESETS.find((p) => p.newLeads === newLeads);
+  if (preset) return preset.label;
+  return `${newLeads}% new / ${100 - newLeads}% follow-ups`;
 }
 
 /** Statuses the job touches: live campaigns only. */

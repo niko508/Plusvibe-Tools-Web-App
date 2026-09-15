@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Workspace } from "@/lib/plusvibe-types";
 import type { CampaignSettingsJob } from "@/lib/jobs/campaign-settings-types";
 import {
+  RATIO_PRESETS,
   SETTINGS,
   prepareChanges,
   specFor,
@@ -66,7 +67,14 @@ export function CampaignSettings({
         return next;
       }
       const spec = specFor(key);
-      next[key] = spec?.kind === "toggle" ? "yes" : spec?.kind === "choice" ? spec.choices?.[0].value ?? "" : spec?.min ?? 0;
+      next[key] =
+        spec?.kind === "toggle"
+          ? "yes"
+          : spec?.kind === "choice"
+            ? spec.choices?.[0].value ?? ""
+            : spec?.kind === "ratio"
+              ? 50 // Balanced, the middle of Plusvibe's own presets
+              : spec?.min ?? 0;
       return next;
     });
   }
@@ -175,6 +183,40 @@ export function CampaignSettings({
                         </option>
                       ))}
                     </select>
+                  )}
+                  {/* The ratio gets its own line: the presets are too wide to sit beside the label without squeezing it. */}
+                  {on && s.kind === "ratio" && (
+                    <div className="flex w-full flex-wrap items-center gap-1.5 pl-[26px]" data-ratio>
+                      <div className="flex flex-wrap items-center gap-1 text-xs" role="radiogroup" aria-label={s.label}>
+                        {RATIO_PRESETS.map((p) => (
+                          <button
+                            key={p.newLeads}
+                            type="button"
+                            role="radio"
+                            aria-checked={Number(value) === p.newLeads}
+                            onClick={() => setValue(s.key, p.newLeads)}
+                            className={`pv-chip ${Number(value) === p.newLeads ? "pv-chip-active" : "hover:text-foreground"}`}
+                          >
+                            {p.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-1.5 text-sm">
+                        <input
+                          type="number"
+                          className="pv-input w-20 text-sm"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={String(value)}
+                          onChange={(e) => setValue(s.key, e.target.value === "" ? "" : Number(e.target.value))}
+                          aria-label={`${s.label} · percent to new leads`}
+                        />
+                        <span className="whitespace-nowrap text-xs text-muted-foreground">
+                          % new · {Number.isFinite(Number(value)) ? 100 - Number(value) : "—"}% follow-ups
+                        </span>
+                      </div>
+                    </div>
                   )}
                   {on && s.kind === "number" && (
                     <div className="flex items-center gap-1.5 text-sm">
