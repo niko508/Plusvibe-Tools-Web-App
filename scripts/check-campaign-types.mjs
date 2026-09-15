@@ -673,31 +673,41 @@ eq("a blank limit sets nothing on that side", limitForRole("blue", { ...S, micro
 eq("the limits read as a sentence", [describeLimits(S), describeLimits({ ...S, googleDailyLimit: null, microsoftDailyLimit: null })],
   ["Google copies 3,000/day · 🔵 copies 1,500/day", "daily limits as duplicated"]);
 
-// --- the daily limit sits on the schedule ------------------------------------
-// PATCH /campaign/update/campaign refuses a top-level daily_limit; it goes
-// inside `schedules`, which is replaced wholesale, so the write is a
-// read-modify-write of the schedules the campaign has.
+// --- the daily limit is set through the schedule ----------------------------
+// The API reads the schedule one way and writes it another; the limit rides
+// on it. The translation is what these check.
 console.log("--- schedule limit");
 const schedMod = await importTs("@/lib/campaign-types/schedule-limit");
-const { readSchedules, withDailyLimit, readDailyLimits } = schedMod;
-const RAW = {
-  id: "c1",
-  schedules: [
-    { _id: "sch1", name: "Default", days: { 1: true }, timezone: "America/New_York", timing: { from: "09:00", to: "17:00" }, start_date: "2026-09-01", daily_limit: 3000, created_at: "x" },
-    { _id: "sch2", name: "Weekend", days: { 6: true }, timezone: "America/New_York", timing: { from: "10:00", to: "12:00" }, start_date: "2026-09-01", end_date: "2026-12-01", daily_limit: 100 },
-  ],
+const { toDaysObject, readSchedule, readDailyLimit, scheduleForWrite, todayIn } = schedMod;
+// A campaign as /campaign/list-all returns it.
+const LISTED = {
+  id: "c1", camp_name: "🟡 X (August)", status: "ACTIVE",
+  daily_limit: 600, daily_limit_new_lead: 0, interval_limit_in_min: 1,
+  camp_st_date: "2026-08-01", camp_end_date: "",
+  schedule: { days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], from_time: "10:00", to_time: "17:00", tz: "America/New_York" },
 };
-eq("schedules are read as an array", readSchedules(RAW).length, 2);
-eq("…an object is read as one", readSchedules({ schedules: RAW.schedules[0] }).length, 1);
-eq("…and nothing is nothing", [readSchedules({}), readSchedules(null), readSchedules({ schedules: "x" })], [[], [], []]);
-eq("every schedule gets the limit", withDailyLimit(readSchedules(RAW), 150).map((s) => s.daily_limit), [150, 150]);
-eq("…keeping what the endpoint takes", withDailyLimit(readSchedules(RAW), 150)[1], {
-  name: "Weekend", days: { 6: true }, timezone: "America/New_York", timing: { from: "10:00", to: "12:00" }, start_date: "2026-09-01", end_date: "2026-12-01", daily_limit: 150,
+eq("day names become the write form", toDaysObject(["Monday", "Wednesday", "Sunday"]), { 1: true, 3: true, 7: true });
+eq("…as do numbers and objects", [toDaysObject([1, "5"]), toDaysObject({ "2": true, "3": false, Friday: true })], [{ 1: true, 5: true }, { 2: true, 5: true }]);
+eq("…and nothing is null", [toDaysObject([]), toDaysObject("x"), toDaysObject(undefined)], [null, null, null]);
+const read = readSchedule(LISTED);
+eq("the listed schedule is read with its dates from the campaign", read, {
+  days: { 1: true, 2: true, 3: true, 4: true, 5: true }, timezone: "America/New_York", from: "10:00", to: "17:00", startDate: "2026-08-01", endDate: undefined,
 });
-eq("…and dropping what it added on the way out", Object.keys(withDailyLimit(readSchedules(RAW), 150)[0]).includes("_id") || Object.keys(withDailyLimit(readSchedules(RAW), 150)[0]).includes("created_at"), false);
-eq("the limits read back as numbers", readDailyLimits(RAW), [3000, 100]);
-eq("…even when reported as strings", readDailyLimits({ schedules: [{ daily_limit: "150" }] }), [150]);
-eq("the source is not changed by making the copy's", RAW.schedules[0].daily_limit, 3000);
+eq("the limit is read from the campaign", readDailyLimit(LISTED), 600);
+eq("a new-lead cap of 0 is 'no cap' and is not carried", "newLeadLimit" in read, false);
+eq("…a real one is", readSchedule({ ...LISTED, daily_limit_new_lead: 40 }).newLeadLimit, 40);
+eq("the write form carries the new limit and everything the endpoint requires", scheduleForWrite(read, 150, "2026-08-01"), {
+  daily_limit: 150, days: { 1: true, 2: true, 3: true, 4: true, 5: true }, timezone: "America/New_York", timing: { from: "10:00", to: "17:00" }, start_date: "2026-08-01",
+});
+eq("…with an end date and a new-lead cap when there are any",
+  scheduleForWrite(readSchedule({ ...LISTED, camp_end_date: "2026-12-31", daily_limit_new_lead: 40 }), 150, "2026-08-01"),
+  { daily_limit: 150, days: { 1: true, 2: true, 3: true, 4: true, 5: true }, timezone: "America/New_York", timing: { from: "10:00", to: "17:00" }, start_date: "2026-08-01", end_date: "2026-12-31", daily_limit_new_lead: 40 });
+eq("nothing top-level is sent", Object.keys(scheduleForWrite(read, 150, "2026-08-01")).includes("tz") || Object.keys(scheduleForWrite(read, 150, "2026-08-01")).includes("from_time"), false);
+eq("the write form is read back as itself", readSchedule({ schedules: [scheduleForWrite(read, 150, "2026-08-01")] }), { ...read, endDate: undefined });
+eq("a campaign with no schedule reads as null", [readSchedule({ id: "c2", daily_limit: 5 }), readSchedule(null), readSchedule({ schedule: { tz: "UTC" } })], [null, null, null]);
+eq("the limit still reads when there is no schedule", readDailyLimit({ daily_limit: "5" }), 5);
+eq("today is a date in the campaign's zone", /^\d{4}-\d{2}-\d{2}$/.test(todayIn("America/New_York")), true);
+eq("…and a bad zone falls back rather than throws", /^\d{4}-\d{2}-\d{2}$/.test(todayIn("Not/AZone")), true);
 
 console.log(failures === 0 ? "\nall campaign-types checks OK" : `\n${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);
