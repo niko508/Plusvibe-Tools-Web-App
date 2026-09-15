@@ -6,34 +6,17 @@ import path from "path";
 import { onShutdownFlush } from "@/lib/jobs/shutdown";
 import { acquireSlot } from "@/lib/jobs/rate-limit";
 import { listTags } from "@/lib/plusvibe-tags";
-import { findExisting } from "@/lib/tags/bulk-tags";
 import {
   ASSIGN_CHUNK,
-  campaignTaggable,
   chunk,
-  countBuckets,
+  countProviders,
   describeRules,
-  inboxTaggable,
-  isLevel,
-  isTagAction,
-  levelNoun,
   planRule,
   prepareRules,
   verifyTags,
-  type Level,
-  type TagAction,
-  type Taggable,
+  type InboxLite,
 } from "@/lib/inbox-tags/plan";
-import {
-  ACCOUNTS_MAX_PAGES,
-  ACCOUNTS_PAGE,
-  CAMPAIGNS_MAX_PAGES,
-  CAMPAIGNS_PAGE,
-  applyTag,
-  readCampaignPage,
-  readInboxPage,
-  resolveTag,
-} from "@/lib/inbox-tags/api";
+import { ACCOUNTS_MAX_PAGES, ACCOUNTS_PAGE, assignTag, readInboxPage, resolveTag } from "@/lib/inbox-tags/api";
 import type {
   InboxTagsJob,
   InboxTagsStartPayload,
@@ -42,13 +25,12 @@ import type {
 } from "@/lib/jobs/inbox-tags-types";
 import { MAX_STORED_ERRORS } from "@/lib/jobs/inbox-tags-types";
 
-// Server-side manager for Update Inbox & Campaign Tags jobs.
+// Server-side manager for Update Inbox Tags jobs.
 //
-// Runs in the background and reports as it goes: per workspace the inboxes or
-// campaigns are counted page by page while they load, and each write updates
-// the totals. Only the rule's own tag moves — the bulk call names one tag, so
-// every other tag stays where it is, and anything already the way the rule
-// wants it is left out of the call entirely.
+// Runs in the background and reports as it goes: per workspace the inboxes
+// are counted page by page while they load, and each assign call updates the
+// totals. Existing tags on an inbox are never touched — the assign call is
+// additive and an inbox that already has the tag is left out of it.
 //
 // ONE JOB AT A TIME per API key. Two jobs on the same workspace would race to
 // create the same tag and read stale tag lists; queuing them is simpler.
@@ -115,24 +97,6 @@ function flushRunningSync() {
 
 onShutdownFlush(flushRunningSync);
 
-/**
- * A record written before campaigns and removal existed, read as what it was:
- * an add on inboxes. Its per-workspace counts were called `inboxes` and
- * `providers`, which are now `found` and `buckets` — the same numbers under
- * names that fit both levels.
- */
-function migrate(rec: InboxTagsJob) {
-  if (!isLevel(rec.level)) rec.level = "inboxes";
-  if (!isTagAction(rec.action)) rec.action = "add";
-  for (const w of rec.workspaces) {
-    const old = w as unknown as { inboxes?: number; providers?: Record<string, number> };
-    if (typeof w.found !== "number") w.found = old.inboxes ?? 0;
-    if (!w.buckets) w.buckets = old.providers ?? {};
-  }
-  const p = rec.progress as typeof rec.progress & { inboxesRead?: number };
-  if (p && typeof p.read !== "number") p.read = p.inboxesRead ?? 0;
-}
-
 async function loadOnce() {
   if (loaded) return;
   loaded = true;
@@ -149,7 +113,6 @@ async function loadOnce() {
         parsed.workspaces = Array.isArray(parsed.workspaces) ? parsed.workspaces : [];
         parsed.rules = Array.isArray(parsed.rules) ? parsed.rules : [];
         parsed.errors = Array.isArray(parsed.errors) ? parsed.errors : [];
-        migrate(parsed);
         records.set(parsed.id, parsed);
         meta.set(parsed.id, { fingerprint, aborted: false });
       } catch {
@@ -165,7 +128,7 @@ async function loadOnce() {
 
 export class ActiveJobError extends Error {
   constructor(readonly activeJobId: string) {
-    super("A tagging job is already running — let it finish or stop it first.");
+    super("An inbox tagging job is already running — let it finish or stop it first.");
     this.name = "ActiveJobError";
   }
 }
@@ -185,9 +148,7 @@ export async function createJob(apiKey: string, payload: InboxTagsStartPayload):
   const running = activeIdFor(fp);
   if (running) throw new ActiveJobError(running);
 
-  const level: Level = isLevel(payload.level) ? payload.level : "inboxes";
-  const action: TagAction = isTagAction(payload.action) ? payload.action : "add";
-  const prepared = prepareRules(payload.rules, level);
+  const prepared = prepareRules(payload.rules);
   if (prepared.problems.size > 0) {
     const [i, p] = [...prepared.problems.entries()][0];
     throw new Error(`Rule ${i + 1}: ${p.join(" ")}`);
@@ -199,23 +160,20 @@ export async function createJob(apiKey: string, payload: InboxTagsStartPayload):
   const n = payload.workspaces.length;
   const record: InboxTagsJob = {
     id,
-    label: `${describeRules(prepared.rules, level, action)} · ${n} workspace${n === 1 ? "" : "s"}`,
+    label: `${describeRules(prepared.rules)} · ${n} workspace${n === 1 ? "" : "s"}`,
     status: "running",
     createdAt: now,
     updatedAt: now,
-    level,
-    action,
-    includeSubsequences: level === "campaigns" ? payload.includeSubsequences === true : undefined,
     rules: prepared.rules,
     workspaces: payload.workspaces.map((w) => ({
       workspaceId: w.id,
       workspaceName: w.name,
       state: "pending" as const,
-      found: 0,
-      buckets: {},
+      inboxes: 0,
+      providers: { google: 0, microsoft: 0, other: 0 },
       rules: prepared.rules.map((_, i) => ({ rule: i, matched: 0, already: 0, assigned: 0, failed: 0 })),
     })),
-    progress: { workspacesDone: 0, read: 0, assigned: 0, already: 0, failed: 0, tagsCreated: 0 },
+    progress: { workspacesDone: 0, inboxesRead: 0, assigned: 0, already: 0, failed: 0, tagsCreated: 0 },
     errors: [],
   };
   records.set(id, record);
@@ -289,15 +247,7 @@ async function runWorkspace(
   check: () => void,
   touch: () => Promise<void>
 ) {
-  const level = rec.level;
-  const action = rec.action;
-  const one = levelNoun(level);
-  const many = levelNoun(level, true);
-  const plural = (n: number) => (n === 1 ? one : many);
-
-  // 1. Tags: find each rule's tag in this workspace, creating it when adding.
-  //    Removing never creates one — a tag the workspace doesn't have is a tag
-  //    nothing here carries, so the rule has nothing to do.
+  // 1. Tags: find or create each rule's tag in this workspace.
   ws.state = "tags";
   await touch();
   await acquireSlot();
@@ -310,12 +260,6 @@ async function runWorkspace(
   for (const out of ws.rules) {
     check();
     const rule = rec.rules[out.rule];
-    if (action === "remove") {
-      const found = findExisting(rule.tagName, existing);
-      if (found) out.tagId = found.id;
-      else out.noTag = true;
-      continue;
-    }
     try {
       const t = await resolveTag(apiKey, ws.workspaceId, existing, rule.tagName, rule.color);
       out.tagId = t.id;
@@ -331,72 +275,47 @@ async function runWorkspace(
   }
   await touch();
 
-  // 2. The things themselves: every page, counting as they arrive.
+  // 2. Inboxes: every page, counting as they arrive.
   ws.state = "fetching";
-  const items: Taggable[] = [];
-  const pageSize = level === "campaigns" ? CAMPAIGNS_PAGE : ACCOUNTS_PAGE;
-  const maxPages = level === "campaigns" ? CAMPAIGNS_MAX_PAGES : ACCOUNTS_MAX_PAGES;
-  for (let page = 0; page < maxPages; page++) {
+  const inboxes: InboxLite[] = [];
+  for (let page = 0; page < ACCOUNTS_MAX_PAGES; page++) {
     check();
-    let batch: Taggable[];
-    let size: number;
+    let batch;
     try {
-      if (level === "campaigns") {
-        const raw = await readCampaignPage(
-          apiKey,
-          ws.workspaceId,
-          page * pageSize,
-          pageSize,
-          rec.includeSubsequences === true
-        );
-        size = raw.length;
-        // Archived campaigns are out of scope entirely, so they never reach
-        // the planner — not even through "All campaigns".
-        batch = raw.map(campaignTaggable).filter((c) => c.bucket !== "archived");
-      } else {
-        const raw = await readInboxPage(apiKey, ws.workspaceId, page * pageSize, pageSize);
-        size = raw.length;
-        batch = raw.map(inboxTaggable);
-      }
+      batch = await readInboxPage(apiKey, ws.workspaceId, page * ACCOUNTS_PAGE, ACCOUNTS_PAGE);
     } catch (err) {
-      throw new Error(`Could not read the ${many}: ${msg(err)}`);
+      throw new Error(`Could not read the inboxes: ${msg(err)}`);
     }
-    items.push(...batch);
-    ws.found = items.length;
-    rec.progress.read += batch.length;
-    ws.buckets = countBuckets(items);
+    inboxes.push(...batch);
+    ws.inboxes = inboxes.length;
+    rec.progress.inboxesRead += batch.length;
+    ws.providers = countProviders(inboxes);
     await touch();
-    if (size < pageSize) break;
+    if (batch.length < ACCOUNTS_PAGE) break;
   }
 
-  // 3. Write, rule by rule, in chunks — each chunk moves the counters.
+  // 3. Assign, rule by rule, in chunks — each chunk moves the counters.
   ws.state = "tagging";
   await touch();
   const expected = new Map<string, string[]>();
   for (const out of ws.rules) {
+    if (!out.tagId) continue;
     const rule = rec.rules[out.rule];
-    if (!out.tagId) {
-      // Nothing to remove, but the scope is still worth reporting.
-      if (out.noTag) out.matched = planRule(rule, "", items, action).matched;
-      continue;
-    }
-    const plan = planRule(rule, out.tagId, items, action);
+    const plan = planRule(rule, out.tagId, inboxes);
     out.matched = plan.matched;
     out.already = plan.already;
     rec.progress.already += plan.already;
-    for (const ids of chunk(plan.toChange, ASSIGN_CHUNK)) {
+    for (const ids of chunk(plan.toAssign, ASSIGN_CHUNK)) {
       check();
       try {
-        await applyTag(apiKey, ws.workspaceId, ids, out.tagId, level, action);
+        await assignTag(apiKey, ws.workspaceId, ids, out.tagId);
         out.assigned += ids.length;
         rec.progress.assigned += ids.length;
         for (const i of ids) expected.set(i, [...(expected.get(i) ?? []), out.tagId]);
       } catch (err) {
         out.failed += ids.length;
         rec.progress.failed += ids.length;
-        const verb = action === "remove" ? "Removing" : "Assigning";
-        const prep = action === "remove" ? "from" : "to";
-        const text = `${verb} "${rule.tagName}" ${prep} ${ids.length} ${plural(ids.length)} failed: ${msg(err)}`;
+        const text = `Assigning "${rule.tagName}" to ${ids.length} inbox${ids.length === 1 ? "" : "es"} failed: ${msg(err)}`;
         out.error = out.error ? `${out.error} ${text}` : text;
         pushError(rec, `${ws.workspaceName}: ${text}`);
       }
@@ -404,32 +323,28 @@ async function runWorkspace(
     }
   }
 
-  // 4. Verify on a sample: no other tag moved, and the write has landed.
+  // 4. Verify on a sample: nothing lost a tag, and what was sent has arrived.
   if (expected.size > 0) {
     ws.state = "verifying";
     await touch();
     try {
-      const sample = Math.min(VERIFY_SAMPLE, pageSize);
-      const after: Taggable[] =
-        level === "campaigns"
-          ? (await readCampaignPage(apiKey, ws.workspaceId, 0, sample, rec.includeSubsequences === true)).map(campaignTaggable)
-          : (await readInboxPage(apiKey, ws.workspaceId, 0, sample)).map(inboxTaggable);
-      const v = verifyTags(items, after, expected, action);
+      const after = await readInboxPage(apiKey, ws.workspaceId, 0, Math.min(VERIFY_SAMPLE, ACCOUNTS_PAGE));
+      const v = verifyTags(inboxes, after, expected);
       ws.verified = { checked: v.checked, lostTags: v.lostTags.length, missingTag: v.missingTag.length };
       if (v.lostTags.length > 0) {
         pushError(
           rec,
-          `${ws.workspaceName}: ${v.lostTags.length} ${plural(v.lostTags.length)} read back with a tag missing that it had before (${v.lostTags.slice(0, 3).join(", ")}${v.lostTags.length > 3 ? ", …" : ""}).`
+          `${ws.workspaceName}: ${v.lostTags.length} inbox${v.lostTags.length === 1 ? "" : "es"} read back with a tag missing that it had before (${v.lostTags.slice(0, 3).join(", ")}${v.lostTags.length > 3 ? ", …" : ""}).`
         );
       }
       if (v.missingTag.length > 0) {
         pushError(
           rec,
-          `${ws.workspaceName}: ${v.missingTag.length} ${plural(v.missingTag.length)} read back ${action === "remove" ? "still carrying the tag just removed" : "without the tag just assigned"} (${v.missingTag.slice(0, 3).join(", ")}${v.missingTag.length > 3 ? ", …" : ""}).`
+          `${ws.workspaceName}: ${v.missingTag.length} inbox${v.missingTag.length === 1 ? "" : "es"} read back without the tag just assigned (${v.missingTag.slice(0, 3).join(", ")}${v.missingTag.length > 3 ? ", …" : ""}).`
         );
       }
     } catch (err) {
-      pushError(rec, `${ws.workspaceName}: tagged, but the check afterwards could not read the ${many}: ${msg(err)}`);
+      pushError(rec, `${ws.workspaceName}: tagged, but the check afterwards could not read the inboxes: ${msg(err)}`);
     }
   }
 }
