@@ -673,5 +673,31 @@ eq("a blank limit sets nothing on that side", limitForRole("blue", { ...S, micro
 eq("the limits read as a sentence", [describeLimits(S), describeLimits({ ...S, googleDailyLimit: null, microsoftDailyLimit: null })],
   ["Google copies 3,000/day · 🔵 copies 1,500/day", "daily limits as duplicated"]);
 
+// --- the daily limit sits on the schedule ------------------------------------
+// PATCH /campaign/update/campaign refuses a top-level daily_limit; it goes
+// inside `schedules`, which is replaced wholesale, so the write is a
+// read-modify-write of the schedules the campaign has.
+console.log("--- schedule limit");
+const schedMod = await importTs("@/lib/campaign-types/schedule-limit");
+const { readSchedules, withDailyLimit, readDailyLimits } = schedMod;
+const RAW = {
+  id: "c1",
+  schedules: [
+    { _id: "sch1", name: "Default", days: { 1: true }, timezone: "America/New_York", timing: { from: "09:00", to: "17:00" }, start_date: "2026-09-01", daily_limit: 3000, created_at: "x" },
+    { _id: "sch2", name: "Weekend", days: { 6: true }, timezone: "America/New_York", timing: { from: "10:00", to: "12:00" }, start_date: "2026-09-01", end_date: "2026-12-01", daily_limit: 100 },
+  ],
+};
+eq("schedules are read as an array", readSchedules(RAW).length, 2);
+eq("…an object is read as one", readSchedules({ schedules: RAW.schedules[0] }).length, 1);
+eq("…and nothing is nothing", [readSchedules({}), readSchedules(null), readSchedules({ schedules: "x" })], [[], [], []]);
+eq("every schedule gets the limit", withDailyLimit(readSchedules(RAW), 150).map((s) => s.daily_limit), [150, 150]);
+eq("…keeping what the endpoint takes", withDailyLimit(readSchedules(RAW), 150)[1], {
+  name: "Weekend", days: { 6: true }, timezone: "America/New_York", timing: { from: "10:00", to: "12:00" }, start_date: "2026-09-01", end_date: "2026-12-01", daily_limit: 150,
+});
+eq("…and dropping what it added on the way out", Object.keys(withDailyLimit(readSchedules(RAW), 150)[0]).includes("_id") || Object.keys(withDailyLimit(readSchedules(RAW), 150)[0]).includes("created_at"), false);
+eq("the limits read back as numbers", readDailyLimits(RAW), [3000, 100]);
+eq("…even when reported as strings", readDailyLimits({ schedules: [{ daily_limit: "150" }] }), [150]);
+eq("the source is not changed by making the copy's", RAW.schedules[0].daily_limit, 3000);
+
 console.log(failures === 0 ? "\nall campaign-types checks OK" : `\n${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);
