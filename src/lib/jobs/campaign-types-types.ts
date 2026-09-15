@@ -15,6 +15,22 @@
 export const MAX_STORED_ERRORS = 50;
 
 /**
+ * Which side the leads that are neither Microsoft nor Google go to. Defined
+ * here rather than in campaign-types/settings.ts, which imports CreatedRole
+ * from this file: the dependency has to run one way.
+ */
+export type Dominant = "google" | "microsoft";
+
+/** The three settings a run needs. The form and the store are in campaign-types/settings.ts. */
+export interface RunSettings {
+  dominant: Dominant;
+  /** Per day, for the plain (Google) copies. Null leaves the inherited limit. */
+  googleDailyLimit: number | null;
+  /** Per day, for the 🔵 (Microsoft) copies. Null leaves the inherited limit. */
+  microsoftDailyLimit: number | null;
+}
+
+/**
  * What a run does.
  *
  * "create" is the whole thing: build the five copies, then sort, split, move
@@ -118,6 +134,16 @@ export interface CreatedCampaign {
   reused?: boolean;
   state: PhaseState;
   error?: string;
+  /**
+   * The daily limit written after the copy was made — the Google setting for
+   * a plain copy, the Microsoft one for a 🔵 copy. Absent when that setting
+   * is blank, so the copy keeps the limit it was duplicated with.
+   */
+  dailyLimit?: {
+    value: number;
+    state: PhaseState;
+    error?: string;
+  };
   /** Opt-out copy, for the two Opt Out roles only. */
   optOut?: {
     state: PhaseState;
@@ -143,7 +169,15 @@ export interface CreatedCampaign {
 export interface SortingProgress {
   leadsFound: number;
   microsoft: number;
+  /**
+   * Google recipients. Absent on records from before dominant targeting, when
+   * `other` meant everything that was not Microsoft.
+   */
+  google?: number;
+  /** Neither Microsoft nor Google (or, on older records, not Microsoft). */
   other: number;
+  /** Which side the neither-leads went to. Absent on older records: Google. */
+  dominant?: Dominant;
   domainsTotal: number;
   domainsResolved: number;
   /** Domains whose MX lookup failed; classified as non-Microsoft. */
@@ -207,6 +241,12 @@ export interface CampaignTypesJob {
   workspaceName: string;
   sourceCampaignId: string;
   sourceCampaignName: string;
+
+  /**
+   * The settings this run uses, taken when it was queued so an edit made
+   * while it waits does not change what it does. Absent on older records.
+   */
+  settings?: RunSettings;
 
   sorting: SortingProgress;
   created: CreatedCampaign[];

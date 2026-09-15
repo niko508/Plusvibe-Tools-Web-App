@@ -17,6 +17,7 @@ import type {
   CampaignTypesJob,
   CampaignTypesStartPayload,
 } from "@/lib/jobs/campaign-types-types";
+import type { CampaignTypesSettings, Dominant } from "@/lib/campaign-types/settings";
 import type {
   CampaignDetail,
   CampaignSummary,
@@ -809,6 +810,22 @@ export function deleteCampaignTypesJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/campaign-types/delete", {
     method: "POST",
     body: { jobId },
+    signal,
+  });
+}
+
+export function fetchCampaignTypesSettings(signal?: AbortSignal) {
+  return request<{ settings: CampaignTypesSettings }>("/api/jobs/campaign-types/settings", { signal });
+}
+
+/** Only the fields given change; a limit sent as null is cleared. */
+export function saveCampaignTypesSettings(
+  patch: { dominant?: Dominant; googleDailyLimit?: number | null; microsoftDailyLimit?: number | null },
+  signal?: AbortSignal
+) {
+  return request<{ settings: CampaignTypesSettings }>("/api/jobs/campaign-types/settings", {
+    method: "PUT",
+    body: patch,
     signal,
   });
 }

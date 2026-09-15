@@ -22,7 +22,10 @@ import {
 import { applyOptOutToCampaign } from "@/lib/campaign-types/apply-opt-out";
 import { applySignatureToCampaign } from "@/lib/campaign-types/apply-signature";
 import { duplicateCampaign, launchCampaign } from "@/lib/campaign-types/duplicate";
+import { setCampaignDailyLimit } from "@/lib/campaign-types/daily-limit";
 import { buildReuseIndex, matchMoveTargets, normalizeName } from "@/lib/campaign-types/match";
+import { limitForRole, runSettingsOf, sidesFor } from "@/lib/campaign-types/settings";
+import { loadSettings } from "@/lib/campaign-types/settings-store";
 import type { CampaignSummary } from "@/lib/plusvibe-types";
 import type {
   ActivationTarget,
@@ -45,12 +48,18 @@ import {
 // Server-side manager for Create All Campaign Types jobs.
 //
 // Four phases, in order:
-//   1 sorting     collect the source's NOT_CONTACTED leads and split them into
-//                 Microsoft / everything-else by MX lookup
-//   2 duplicating create the three copies (sub-sequences included) and add the
-//                 opt-out spintax to step 1 of the two Opt Out copies
-//   3 moving      move each bucket into its campaign (add → verify → delete)
-//   4 activating  launch all four, sub-sequences included
+//   1 sorting     collect the source's NOT_CONTACTED leads, resolve each to
+//                 Microsoft / Google / neither by MX lookup, and put the
+//                 neither-leads on whichever side the dominant targeting
+//                 setting says
+//   2 duplicating create the five copies (sub-sequences included), set each
+//                 one's daily limit from the settings, add the opt-out spintax
+//                 to step 1 of the two Opt Out copies and swap the sign-off on
+//                 the two Signature copies
+//   3 moving      move each side into its campaigns (add → verify → delete)
+//   4 activating  launch all six, sub-sequences included
+//
+// The settings are read once, when the job is queued, and stored on it.
 //
 // Runs in the Node process so the work survives the tab closing, and persists
 // to disk so a job can be read back later. The API key is memory-only.
@@ -411,13 +420,21 @@ export async function createJob(
   const id = randomUUID();
   const now = Date.now();
   const mode = payload.mode === "move" ? "move" : "create";
+  // Taken now rather than when the run starts: what the user saw when they
+  // pressed Start is what a queued job does, however long it waits.
+  const settings = runSettingsOf(await loadSettings());
 
   // A move run edits no copy: the campaigns it finds already carry their
   // opt-out line and sign-off, and touching them again is not its business.
+  // It sets no limit either — those campaigns were created, and limited, by
+  // an earlier run.
   const created: CreatedCampaign[] = CREATED_ROLES.map((role) => ({
     role,
     name: payload.names[role],
     state: "pending" as const,
+    ...(mode === "create" && limitForRole(role, settings) !== null
+      ? { dailyLimit: { value: limitForRole(role, settings) as number, state: "pending" as const } }
+      : {}),
     ...(mode === "create" && OPT_OUT_ROLES.includes(role)
       ? { optOut: { state: "pending" as const, applied: [], alreadyPresent: [] } }
       : {}),
@@ -477,10 +494,13 @@ export async function createJob(
     workspaceName: payload.workspaceName,
     sourceCampaignId: payload.sourceCampaignId,
     sourceCampaignName: payload.sourceCampaignName,
+    settings,
     sorting: {
       leadsFound: 0,
       microsoft: 0,
+      google: 0,
       other: 0,
+      dominant: settings.dominant,
       domainsTotal: 0,
       domainsResolved: 0,
       unresolvedDomains: 0,
@@ -572,8 +592,14 @@ async function runJob(id: string) {
     });
     check();
 
-    rec.sorting.microsoft = resolution.microsoft.length;
-    rec.sorting.other = resolution.other.length;
+    // A record from before the setting existed has none stored; Google
+    // dominant is what those runs did.
+    const dominant = rec.settings?.dominant ?? "google";
+    const sides = sidesFor(resolution.classified, dominant);
+    rec.sorting.microsoft = resolution.counts.microsoft;
+    rec.sorting.google = resolution.counts.google;
+    rec.sorting.other = resolution.counts.other;
+    rec.sorting.dominant = dominant;
     rec.sorting.unresolvedDomains = resolution.unresolvedDomains.length;
     rec.sorting.fromLeadField = resolution.fromLeadField;
     rec.sorting.domainsTotal = resolution.domainsLookedUp;
@@ -581,7 +607,7 @@ async function runJob(id: string) {
     if (resolution.unresolvedDomains.length > 0) {
       pushError(
         rec,
-        `${resolution.unresolvedDomains.length} domain(s) could not be resolved (e.g. ${resolution.unresolvedDomains.slice(0, 5).join(", ")}). Their leads were treated as non-Microsoft.`
+        `${resolution.unresolvedDomains.length} domain(s) could not be resolved (e.g. ${resolution.unresolvedDomains.slice(0, 5).join(", ")}). Their leads were treated as neither Microsoft nor Google, which puts them in the ${dominant === "microsoft" ? "🔵" : "plain"} campaigns.`
       );
     }
     rec.phaseStates.sorting = "done";
@@ -723,6 +749,38 @@ async function runJob(id: string) {
       await persist(id);
     }
 
+    // Daily limits, on every copy that has one to set — reused copies too, so
+    // a re-run brings them onto the current setting. Failing here leaves the
+    // copy on the limit it was duplicated with, which is not a wrong email
+    // going out, so the run carries on and says so at the end.
+    let limitFailed = false;
+    for (const target of rec.created) {
+      if (!target.dailyLimit || !target.campaignId || target.state === "error") continue;
+      check();
+      target.dailyLimit.state = "running";
+      await persist(id);
+      try {
+        await setCampaignDailyLimit({
+          apiKey,
+          workspaceId,
+          campaignId: target.campaignId,
+          dailyLimit: target.dailyLimit.value,
+        });
+        target.dailyLimit.state = "done";
+      } catch (err) {
+        if (err instanceof AbortedError || m.aborted) throw err;
+        limitFailed = true;
+        target.dailyLimit.state = "error";
+        target.dailyLimit.error = msg(err);
+        pushError(
+          rec,
+          `Could not set the daily limit of "${target.name}" to ${target.dailyLimit.value}: ${msg(err)}. It keeps the limit it was duplicated with.`
+        );
+      }
+      rec.updatedAt = Date.now();
+      await persist(id);
+    }
+
     // Opt-out copy on the two Opt Out campaigns.
     for (const target of rec.created) {
       if (!target.optOut || !target.campaignId || target.state === "error") continue;
@@ -827,7 +885,7 @@ async function runJob(id: string) {
         availability[role] = !!rec.created.find((c) => c.role === role)?.campaignId;
       }
     }
-    const plan = planSplitFor(resolution.microsoft, resolution.other, availability);
+    const plan = planSplitFor(sides.blue, sides.plain, availability);
     rec.moving.staysInSource = plan.counts.source;
     for (const t of rec.moving.targets) t.planned = plan.counts[t.role];
     rec.moving.plannedTotal =
@@ -963,7 +1021,7 @@ async function runJob(id: string) {
     if (!activate) {
       rec.phaseStates.activating = "skipped";
       for (const a of rec.activation) a.state = "skipped";
-      rec.status = "done";
+      rec.status = limitFailed ? "error" : "done";
       await persist(id);
       return;
     }
@@ -1001,9 +1059,10 @@ async function runJob(id: string) {
     const activationFailed = rec.activation.some((a) => a.state === "error");
     rec.phaseStates.activating = activationFailed ? "error" : "done";
     // Everything real is done by this point — the campaigns exist, carry the
-    // right copy and hold the right leads. A failed launch is a one-click fix
-    // in Plusvibe, so it's reported without discarding the run.
-    rec.status = activationFailed ? "error" : "done";
+    // right copy and hold the right leads. A failed launch or a limit that
+    // did not take is a one-click fix in Plusvibe, so either is reported
+    // without discarding the run.
+    rec.status = activationFailed || limitFailed ? "error" : "done";
   } catch (err) {
     if (err instanceof AbortedError || m.aborted) {
       rec.status = "aborted";

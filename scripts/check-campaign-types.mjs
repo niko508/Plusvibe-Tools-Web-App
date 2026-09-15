@@ -577,5 +577,101 @@ eq("every Opt Out and Signature role is one the tool creates",
 eq("every created role is named by deriveNames",
   roles.CREATED_ROLES.every((r) => typeof deriveNames(SRC2)[r] === "string"), true);
 
+// --- the yellow circle ------------------------------------------------------
+// Google campaigns are now named "🟡 X (Month)". The plain copies keep the
+// circle, the 🔵 copies replace it, and a source without one is named
+// exactly as before.
+console.log("--- yellow circle");
+const YELLOW = "\u{1F7E1}";
+const { withYellow, hasYellow, stripYellow } = namesMod;
+eq("the user's example", deriveNames(`${YELLOW} Home Services Broad V2 (August)`), {
+  blue: `${BLUE} Home Services Broad V2 (August)`,
+  optOut: `${YELLOW} Home Services Broad V2 - Opt Out (August)`,
+  blueOptOut: `${BLUE} Home Services Broad V2 - Opt Out (August)`,
+  signature: `${YELLOW} Home Services Broad V2 - Signature (August)`,
+  blueSignature: `${BLUE} Home Services Broad V2 - Signature (August)`,
+});
+eq("the 🔵 copies never carry both circles",
+  Object.values(deriveNames(`${YELLOW} Tree Removal (August)`)).some((n) => n.includes(YELLOW) && n.includes(BLUE)), false);
+eq("a source without the circle is named as it always was",
+  deriveNames("Tree Removal (August)"), {
+    blue: `${BLUE} Tree Removal (August)`,
+    optOut: "Tree Removal - Opt Out (August)",
+    blueOptOut: `${BLUE} Tree Removal - Opt Out (August)`,
+    signature: "Tree Removal - Signature (August)",
+    blueSignature: `${BLUE} Tree Removal - Signature (August)`,
+  });
+eq("the variation selector and a missing space are tolerated",
+  [hasYellow(`${YELLOW}️Tree Removal`), stripYellow(`${YELLOW}️  Tree Removal (August)`)],
+  [true, "Tree Removal (August)"]);
+eq("yellow is not doubled", withYellow(`${YELLOW} Tree Removal`), `${YELLOW} Tree Removal`);
+eq("all five names still differ from each other and the source", (() => {
+  const src = `${YELLOW} Tree Removal (August)`;
+  const all = Object.values(deriveNames(src));
+  return [new Set(all).size, all.includes(src)];
+})(), [5, false]);
+
+// The companions of a 🟡 source are found by the same derived names, so a
+// Move Leads run on one lands in the right campaigns.
+{
+  const src = `${YELLOW} Tree Removal (August)`;
+  const pool = [
+    { id: "s", name: src },
+    { id: "b", name: `${BLUE} Tree Removal (August)` },
+    { id: "o", name: `${YELLOW} Tree Removal - Opt Out (August)` },
+    { id: "bo", name: `${BLUE} Tree Removal - Opt Out (August)` },
+    { id: "g", name: `${YELLOW} Tree Removal - Signature (August)` },
+    { id: "bg", name: `${BLUE} Tree Removal - Signature (August)` },
+    { id: "old", name: "Tree Removal - Opt Out (August)" }, // the pre-circle naming: not this source's
+  ];
+  const r = matchMod.matchMoveTargets(src, pool, "s");
+  eq("a 🟡 source finds its five 🟡/🔵 companions", r.matches.map((m) => m.match?.id), ["b", "o", "bo", "g", "bg"]);
+  eq("…and never the un-circled campaign of the same name", r.matches.some((m) => m.match?.id === "old"), false);
+}
+
+// --- dominant targeting ------------------------------------------------------
+console.log("--- dominant targeting");
+const settingsMod = await importTs("@/lib/campaign-types/settings");
+const { sidesFor, parseLimit, normalizeSettings, limitForRole, DEFAULT_SETTINGS, describeLimits } = settingsMod;
+const classified = [
+  { lead: "m1", esp: "MICROSOFT" },
+  { lead: "g1", esp: "GOOGLE" },
+  { lead: "o1", esp: "OTHER" },
+  { lead: "m2", esp: "MICROSOFT" },
+  { lead: "o2", esp: "OTHER" },
+  { lead: "g2", esp: "GOOGLE" },
+];
+eq("Google dominant: the other leads stay with the Google ones, in order",
+  sidesFor(classified, "google"), { blue: ["m1", "m2"], plain: ["g1", "o1", "o2", "g2"] });
+eq("Microsoft dominant: the other leads go to the 🔵 side, in order",
+  sidesFor(classified, "microsoft"), { blue: ["m1", "o1", "m2", "o2"], plain: ["g1", "g2"] });
+eq("either way every lead lands exactly once",
+  ["google", "microsoft"].map((d) => { const s = sidesFor(classified, d); return s.blue.length + s.plain.length; }), [6, 6]);
+eq("Google dominant is the two-way split the tool always made",
+  sidesFor(classified, "google").blue, classified.filter((c) => c.esp === "MICROSOFT").map((c) => c.lead));
+eq("no leads, no sides", sidesFor([], "microsoft"), { blue: [], plain: [] });
+
+// --- the settings ------------------------------------------------------------
+console.log("--- settings");
+eq("the defaults are what the tool did before: Google dominant, limits as duplicated",
+  [DEFAULT_SETTINGS.dominant, DEFAULT_SETTINGS.googleDailyLimit, DEFAULT_SETTINGS.microsoftDailyLimit], ["google", null, null]);
+eq("a limit is a whole number from 0 up", [parseLimit(3000, "x").value, parseLimit("1500", "x").value, parseLimit(0, "x").value], [3000, 1500, 0]);
+eq("blank means not set", [parseLimit("", "x"), parseLimit(null, "x"), parseLimit(undefined, "x")], [{ value: null }, { value: null }, { value: null }]);
+eq("a fraction is refused", parseLimit(12.5, "Google daily limit").error, "Google daily limit: use a whole number.");
+eq("a negative is refused", parseLimit(-1, "Google daily limit").error, "Google daily limit: can't be negative.");
+eq("nonsense is refused", parseLimit("lots", "Microsoft daily limit").error, "Microsoft daily limit: enter a number, or leave it blank.");
+eq("a stored file with junk in it reads as the defaults",
+  normalizeSettings({ dominant: "yahoo", googleDailyLimit: "x", microsoftDailyLimit: -5 }),
+  { dominant: "google", googleDailyLimit: null, microsoftDailyLimit: null, updatedAt: 0 });
+eq("…and a good one reads as itself",
+  normalizeSettings({ dominant: "microsoft", googleDailyLimit: 3000, microsoftDailyLimit: 1500, updatedAt: 7 }),
+  { dominant: "microsoft", googleDailyLimit: 3000, microsoftDailyLimit: 1500, updatedAt: 7 });
+const S = { dominant: "microsoft", googleDailyLimit: 3000, microsoftDailyLimit: 1500 };
+eq("the plain copies get the Google limit", ["optOut", "signature"].map((r) => limitForRole(r, S)), [3000, 3000]);
+eq("the 🔵 copies get the Microsoft limit", ["blue", "blueOptOut", "blueSignature"].map((r) => limitForRole(r, S)), [1500, 1500, 1500]);
+eq("a blank limit sets nothing on that side", limitForRole("blue", { ...S, microsoftDailyLimit: null }), null);
+eq("the limits read as a sentence", [describeLimits(S), describeLimits({ ...S, googleDailyLimit: null, microsoftDailyLimit: null })],
+  ["Google copies 3,000/day · 🔵 copies 1,500/day", "daily limits as duplicated"]);
+
 console.log(failures === 0 ? "\nall campaign-types checks OK" : `\n${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);

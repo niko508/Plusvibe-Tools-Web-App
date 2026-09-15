@@ -213,10 +213,18 @@ export function JobCard({
           <Detail label="Workspace" value={job.workspaceName || "—"} />
           <Detail
             label="Leads sorted"
-            value={`${formatNumber(job.sorting.leadsFound)} not-contacted · ${formatNumber(
-              job.sorting.microsoft
-            )} Microsoft · ${formatNumber(job.sorting.other)} other`}
+            value={`${formatNumber(job.sorting.leadsFound)} not-contacted · ${sortBreakdown(job.sorting)}`}
           />
+          {job.sorting.dominant && (
+            <Detail
+              label="Other-ESP leads"
+              value={
+                job.sorting.dominant === "microsoft"
+                  ? "went to the 🔵 campaigns (Microsoft dominant)"
+                  : "stayed in the plain campaigns (Google dominant)"
+              }
+            />
+          )}
           <Detail
             label="Domains resolved"
             value={`${formatNumber(job.sorting.domainsResolved)} / ${formatNumber(
@@ -243,6 +251,21 @@ export function JobCard({
               mono
             />
           ))}
+          {created
+            .filter((c) => c.dailyLimit)
+            .map((c) => (
+              <Detail
+                key={`limit-${c.role}`}
+                label={`Daily limit · ${shortName(c.name)}`}
+                value={
+                  c.dailyLimit!.state === "error"
+                    ? `${c.dailyLimit!.error || "failed"} — keeps the limit it was duplicated with`
+                    : c.dailyLimit!.state === "done"
+                      ? `set to ${formatNumber(c.dailyLimit!.value)} per day`
+                      : c.dailyLimit!.state
+                }
+              />
+            ))}
           {created
             .filter((c) => c.optOut)
             .map((c) => (
@@ -372,7 +395,7 @@ function phaseSummary(
       return `${formatNumber(s.domainsResolved)} / ${formatNumber(s.domainsTotal)} domains`;
     }
     if (s.leadsFound === 0) return state === "done" ? "no leads found" : "";
-    return `${formatNumber(s.microsoft)} Microsoft · ${formatNumber(s.other)} other`;
+    return sortBreakdown(s);
   }
 
   if (phase === "duplicating") {
@@ -434,6 +457,18 @@ function Detail({
       <span className={mono ? "font-mono" : ""}>{value}</span>
     </div>
   );
+}
+
+/**
+ * "7,779 Microsoft · 5,000 Google · 1,544 other". A record from before
+ * dominant targeting has no Google count — its "other" was everything that
+ * was not Microsoft, and it reads that way.
+ */
+function sortBreakdown(s: CampaignTypesJob["sorting"]): string {
+  const parts = [`${formatNumber(s.microsoft)} Microsoft`];
+  if (typeof s.google === "number") parts.push(`${formatNumber(s.google)} Google`);
+  parts.push(`${formatNumber(s.other)} other`);
+  return parts.join(" · ");
 }
 
 /** Trims a long campaign name down to something that fits a metric tile. */

@@ -11,14 +11,43 @@
 // whose step 1 carries the opt-out spintax; "Signature" marks the copies whose
 // step 1 signs off with {{sender_signature}} instead of {{sender_first_name}}.
 //
+// Google campaigns are now named with a yellow circle in front, so a source
+// called "🟡 Tree Removal (August)" gives:
+//
+//   🟡 Tree Removal - Opt Out (August)     the plain copies keep the 🟡
+//   🔵 Tree Removal - Opt Out (August)     the 🔵 copies swap it for the 🔵
+//
+// A source with no 🟡 is named exactly as before: the circle is mirrored from
+// the source, never added to it.
+//
 // The month sits in a trailing parenthetical and stays last, with NO separator
 // introduced in front of it — the marker goes before the parenthetical, not
 // after the campaign name.
 
 export const BLUE = "🔵";
+export const YELLOW = "🟡";
 export const OPT_OUT = "Opt Out";
 export const SIGNATURE = "Signature";
 const SEP = " - ";
+
+/** A leading yellow circle, with or without the invisible variation selector. */
+const LEADING_YELLOW = /^🟡️?\s*/;
+
+export function hasYellow(name: string): boolean {
+  return LEADING_YELLOW.test(name.trim());
+}
+
+/** The name without its leading 🟡 — what the 🔵 copies are named from. */
+export function stripYellow(name: string): string {
+  return name.trim().replace(LEADING_YELLOW, "").trim();
+}
+
+/** Prefixes the yellow circle, leaving one space and never doubling up. */
+export function withYellow(name: string): string {
+  const trimmed = name.trim();
+  if (hasYellow(trimmed)) return trimmed;
+  return `${YELLOW} ${trimmed}`;
+}
 
 export interface DerivedNames {
   blue: string;
@@ -89,12 +118,16 @@ export function hasSignature(name: string): boolean {
 }
 
 export function deriveNames(sourceName: string): DerivedNames {
-  const base = sourceName.trim();
+  // The 🔵 copies are named from the bare name: a blue circle replaces a
+  // yellow one rather than following it. The plain copies mirror the source,
+  // yellow circle and all.
+  const base = stripYellow(sourceName);
+  const plain = hasYellow(sourceName) ? withYellow : (n: string) => n;
   return {
     blue: withBlue(base),
-    optOut: withOptOut(base),
+    optOut: plain(withOptOut(base)),
     blueOptOut: withOptOut(withBlue(base)),
-    signature: withSignature(base),
+    signature: plain(withSignature(base)),
     blueSignature: withSignature(withBlue(base)),
   };
 }

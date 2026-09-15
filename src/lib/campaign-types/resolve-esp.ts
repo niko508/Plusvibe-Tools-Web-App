@@ -26,8 +26,13 @@ const DNS_TIMEOUT_MS = 5000;
 const PROVIDER_FIELDS = ["provider", "esp", "email_provider", "recp_provider"];
 
 export interface EspResolution {
-  microsoft: RawLead[];
-  other: RawLead[];
+  /**
+   * Every lead in the order given, with the provider it resolved to. Which
+   * side of the split each goes to is decided afterwards from the dominant
+   * targeting setting — see sidesFor() in settings.ts.
+   */
+  classified: { lead: RawLead; esp: Esp }[];
+  counts: { microsoft: number; google: number; other: number };
   /** Domains whose MX lookup failed outright (treated as OTHER). */
   unresolvedDomains: string[];
   /** How many leads were classified from a field rather than DNS. */
@@ -62,7 +67,7 @@ async function resolveMxWithTimeout(domain: string): Promise<string[] | null> {
 }
 
 /**
- * Splits leads into the Microsoft bucket and everything else.
+ * Resolves every lead to Microsoft, Google or neither.
  *
  * `onProgress` is called as domains resolve so a long classification phase can
  * show live progress rather than appearing to hang.
@@ -121,21 +126,23 @@ export async function resolveLeadEsps(
     Array.from({ length: Math.min(DNS_CONCURRENCY, domains.length) }, worker)
   );
 
-  // Pass 3: bucket.
-  const microsoft: RawLead[] = [];
-  const other: RawLead[] = [];
+  // Pass 3: classify, in the order given.
+  const classified: EspResolution["classified"] = [];
+  const counts = { microsoft: 0, google: 0, other: 0 };
   for (const lead of leads) {
-    const esp =
+    const esp: Esp =
       fieldEsp.get(lead) ??
       cache.get(domainOf(String(lead.email ?? ""))) ??
       "OTHER";
-    if (esp === "MICROSOFT") microsoft.push(lead);
-    else other.push(lead);
+    classified.push({ lead, esp });
+    if (esp === "MICROSOFT") counts.microsoft += 1;
+    else if (esp === "GOOGLE") counts.google += 1;
+    else counts.other += 1;
   }
 
   return {
-    microsoft,
-    other,
+    classified,
+    counts,
     unresolvedDomains,
     fromLeadField: fieldEsp.size,
     domainsLookedUp: domains.length,

@@ -14,8 +14,19 @@ import {
   listCampaignTypesJobs,
   abortCampaignTypes,
   deleteCampaignTypesJob,
+  fetchCampaignTypesSettings,
+  saveCampaignTypesSettings,
   ApiClientError,
 } from "@/lib/api-client";
+import {
+  DEFAULT_SETTINGS,
+  DOMINANT_OPTIONS,
+  describeDominant,
+  describeLimits,
+  parseLimit,
+  type CampaignTypesSettings,
+  type Dominant,
+} from "@/lib/campaign-types/settings";
 import { useApiKey } from "@/lib/use-api-key";
 import { formatNumber } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
@@ -26,6 +37,7 @@ import {
   ChevronDownIcon,
   CheckIcon,
   MoveIcon,
+  SettingsIcon,
 } from "@/components/icons";
 import { deriveNames } from "@/lib/campaign-types/names";
 import {
@@ -56,6 +68,66 @@ export function CampaignTypesTool() {
   const [sourceId, setSourceId] = useState<string>("");
   const [activate, setActivate] = useState(true);
   const [mode, setMode] = useState<CampaignTypesMode>("create");
+  // The Settings tab sits beside the two modes but starts no job; the mode
+  // it was opened from is kept, so closing it goes back to where you were.
+  const [showSettings, setShowSettings] = useState(false);
+
+  // --- Settings: read once, saved on request, kept as typed in between ------
+  const [settings, setSettings] = useState<CampaignTypesSettings>(DEFAULT_SETTINGS);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [draftDominant, setDraftDominant] = useState<Dominant>(DEFAULT_SETTINGS.dominant);
+  const [draftGoogle, setDraftGoogle] = useState("");
+  const [draftMicrosoft, setDraftMicrosoft] = useState("");
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsNote, setSettingsNote] = useState<string | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+
+  const applyToDraft = useCallback((s: CampaignTypesSettings) => {
+    setDraftDominant(s.dominant);
+    setDraftGoogle(s.googleDailyLimit === null ? "" : String(s.googleDailyLimit));
+    setDraftMicrosoft(s.microsoftDailyLimit === null ? "" : String(s.microsoftDailyLimit));
+  }, []);
+
+  const loadSettings = useCallback(async () => {
+    try {
+      const { settings: s } = await fetchCampaignTypesSettings();
+      setSettings(s);
+      applyToDraft(s);
+      setSettingsLoaded(true);
+    } catch (err) {
+      setSettingsError(errMessage(err));
+    }
+  }, [applyToDraft]);
+
+  const googleProblem = parseLimit(draftGoogle, "Google daily limit").error ?? null;
+  const microsoftProblem = parseLimit(draftMicrosoft, "Microsoft daily limit").error ?? null;
+  const draftDirty =
+    draftDominant !== settings.dominant ||
+    (parseLimit(draftGoogle, "").value ?? null) !== settings.googleDailyLimit ||
+    (parseLimit(draftMicrosoft, "").value ?? null) !== settings.microsoftDailyLimit;
+  const canSave = settingsLoaded && draftDirty && !googleProblem && !microsoftProblem && !savingSettings;
+
+  async function handleSaveSettings() {
+    if (!canSave) return;
+    setSavingSettings(true);
+    setSettingsError(null);
+    setSettingsNote(null);
+    try {
+      const { settings: s } = await saveCampaignTypesSettings({
+        dominant: draftDominant,
+        googleDailyLimit: parseLimit(draftGoogle, "").value,
+        microsoftDailyLimit: parseLimit(draftMicrosoft, "").value,
+      });
+      setSettings(s);
+      applyToDraft(s);
+      setSettingsNote("Saved — every run from now on uses these.");
+      setTimeout(() => setSettingsNote(null), 5000);
+    } catch (err) {
+      setSettingsError(errMessage(err));
+    } finally {
+      setSavingSettings(false);
+    }
+  }
 
   const [jobs, setJobs] = useState<CampaignTypesJob[]>([]);
   const [starting, setStarting] = useState(false);
@@ -91,8 +163,9 @@ export function CampaignTypesTool() {
     if (ready && hasKey) {
       void loadWorkspaces();
       void refreshJobs();
+      void loadSettings();
     }
-  }, [ready, hasKey, loadWorkspaces, refreshJobs]);
+  }, [ready, hasKey, loadWorkspaces, refreshJobs, loadSettings]);
 
   // Queued jobs need polling too — nothing else tells the page when one of them
   // reaches the front and starts.
@@ -202,6 +275,7 @@ export function CampaignTypesTool() {
   );
   const canStart =
     !!source &&
+    !showSettings &&
     !alreadyPending &&
     !starting &&
     // A move needs somewhere to move to, but not all five: the campaigns that
@@ -257,22 +331,143 @@ export function CampaignTypesTool() {
               key={value}
               type="button"
               role="tab"
-              aria-selected={mode === value}
-              className={`pv-chip ${mode === value ? "pv-chip-active" : "hover:text-foreground"}`}
-              onClick={() => setMode(value)}
+              aria-selected={!showSettings && mode === value}
+              className={`pv-chip ${!showSettings && mode === value ? "pv-chip-active" : "hover:text-foreground"}`}
+              onClick={() => {
+                setMode(value);
+                setShowSettings(false);
+              }}
               data-mode={value}
             >
               {label}
             </button>
           ))}
+          {/* Warning-toned so it stands apart from the two modes it sits beside. */}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={showSettings}
+            className={`pv-chip border-warning/50 text-warning hover:bg-warning/10 ${
+              showSettings ? "bg-warning/15" : ""
+            }`}
+            onClick={() => setShowSettings(true)}
+            data-mode="settings"
+          >
+            <SettingsIcon size={13} />
+            Settings
+          </button>
           <span className="self-center text-xs text-muted-foreground">
-            {mode === "create"
-              ? "Builds the five campaigns, then splits the leads into them."
-              : "The five campaigns already exist: this only splits the source's not-contacted leads into them."}
+            {showSettings
+              ? "Saved for every run until you change them."
+              : mode === "create"
+                ? "Builds the five campaigns, then splits the leads into them."
+                : "The five campaigns already exist: this only splits the source's not-contacted leads into them."}
           </span>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
+        {showSettings && (
+          <div className="space-y-4" data-settings>
+            <div>
+              <div className="mb-1.5 text-xs font-medium text-muted-foreground">Dominant targeting</div>
+              <div className="flex flex-wrap items-center gap-1.5 text-xs" role="radiogroup" aria-label="Dominant targeting">
+                {DOMINANT_OPTIONS.map((o) => (
+                  <button
+                    key={o.key}
+                    type="button"
+                    role="radio"
+                    aria-checked={draftDominant === o.key}
+                    className={`pv-chip ${draftDominant === o.key ? "pv-chip-active" : "hover:text-foreground"}`}
+                    onClick={() => setDraftDominant(o.key)}
+                    title={o.hint}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Which side gets the leads that are neither Microsoft nor Google. {describeDominant(draftDominant)}
+              </p>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="ct-google-limit">
+                  Google daily limit
+                </label>
+                <input
+                  id="ct-google-limit"
+                  type="number"
+                  className="pv-input"
+                  min={0}
+                  step={1}
+                  placeholder="As duplicated"
+                  value={draftGoogle}
+                  onChange={(e) => setDraftGoogle(e.target.value)}
+                  aria-label="Google daily limit"
+                />
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Maximum emails per day, set on each plain copy the run creates.
+                  {googleProblem && <span className="block text-warning">{googleProblem}</span>}
+                </p>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="ct-microsoft-limit">
+                  Microsoft daily limit
+                </label>
+                <input
+                  id="ct-microsoft-limit"
+                  type="number"
+                  className="pv-input"
+                  min={0}
+                  step={1}
+                  placeholder="As duplicated"
+                  value={draftMicrosoft}
+                  onChange={(e) => setDraftMicrosoft(e.target.value)}
+                  aria-label="Microsoft daily limit"
+                />
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Maximum emails per day, set on each 🔵 copy the run creates.
+                  {microsoftProblem && <span className="block text-warning">{microsoftProblem}</span>}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              A blank limit leaves the copy on whatever it was duplicated with. The source campaign itself is never
+              changed, and Move leads runs set no limits — the campaigns they move into were created, and limited,
+              by an earlier run.
+            </p>
+
+            {settingsError && (
+              <div className="flex items-start gap-2 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2.5 text-sm text-danger">
+                <AlertIcon size={16} className="mt-0.5 shrink-0" />
+                <span>{settingsError}</span>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                className="pv-btn-primary disabled:opacity-50"
+                disabled={!canSave}
+                onClick={handleSaveSettings}
+                data-save-settings
+              >
+                {savingSettings ? <Spinner /> : <CheckIcon size={16} />}
+                Save settings
+              </button>
+              {settingsNote ? (
+                <span className="text-xs text-success">{settingsNote}</span>
+              ) : !settingsLoaded ? (
+                <span className="text-xs text-muted-foreground">Reading the saved settings…</span>
+              ) : draftDirty ? (
+                <span className="text-xs text-muted-foreground">Not saved yet.</span>
+              ) : null}
+            </div>
+          </div>
+        )}
+
+        <div className={`grid gap-4 sm:grid-cols-2 ${showSettings ? "hidden" : ""}`}>
           <div>
             <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
               Workspace
@@ -330,7 +525,7 @@ export function CampaignTypesTool() {
           </div>
         </div>
 
-        {mode === "move" && source && moveMatch && (
+        {!showSettings && mode === "move" && source && moveMatch && (
           <div className="rounded-xl border border-border p-3 sm:p-4" data-move-preview>
             <h3 className="mb-1 text-sm font-medium">
               {missingCount === 0
@@ -400,7 +595,7 @@ export function CampaignTypesTool() {
           </div>
         )}
 
-        {mode === "create" && source && names && (
+        {!showSettings && mode === "create" && source && names && (
           <div className="rounded-xl border border-border p-3 sm:p-4">
             <h3 className="mb-1 text-sm font-medium">
               Five campaigns will be created
@@ -459,6 +654,18 @@ export function CampaignTypesTool() {
               </p>
             )}
 
+            <p className="mt-3 text-xs text-muted-foreground" data-settings-summary>
+              {describeDominant(settings.dominant)} {describeLimits(settings)} —{" "}
+              <button
+                type="button"
+                className="underline hover:text-foreground"
+                onClick={() => setShowSettings(true)}
+              >
+                change in Settings
+              </button>
+              .
+            </p>
+
             <label className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
               <input
                 type="checkbox"
@@ -482,7 +689,7 @@ export function CampaignTypesTool() {
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className={`flex flex-wrap items-center gap-3 ${showSettings ? "hidden" : ""}`}>
           <button
             type="button"
             className="pv-btn-primary disabled:opacity-50"

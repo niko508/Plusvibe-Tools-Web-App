@@ -17,6 +17,19 @@ function base(size = 20, className?: string) {
   };
 }
 
+export function SettingsIcon({ className, size }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <line x1="4" y1="6" x2="20" y2="6" />
+      <line x1="4" y1="12" x2="20" y2="12" />
+      <line x1="4" y1="18" x2="20" y2="18" />
+      <circle cx="9" cy="6" r="2" fill="currentColor" />
+      <circle cx="15" cy="12" r="2" fill="currentColor" />
+      <circle cx="7" cy="18" r="2" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function GaugeIcon({ className, size }: IconProps) {
   return (
     <svg {...base(size, className)}>
