@@ -11,6 +11,8 @@ import {
   normalizeSettings,
   validateProfile,
   validateSetup,
+  isStage,
+  isYmd,
   type Profile,
   type ProfileInput,
   type ProfileKey,
@@ -83,14 +85,38 @@ export async function saveSettings(profiles: Partial<Record<ProfileKey, unknown>
 
 // --- The workspaces set up ----------------------------------------------------------
 
+/**
+ * A stored rotation brought up to the current shape. Records from before the
+ * schedule existed had a "phase" and no start date: they start on Cycle 1 or
+ * the maintaining period, from the day they were set up.
+ */
+function normalizeRotation(raw: unknown): WorkspaceRotation | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<WorkspaceRotation> & { phase?: string };
+  if (typeof r.id !== "string") return null;
+  const createdAt = typeof r.createdAt === "number" ? r.createdAt : Date.now();
+  const rec: WorkspaceRotation = {
+    id: r.id,
+    workspaceId: String(r.workspaceId ?? ""),
+    workspaceName: String(r.workspaceName ?? ""),
+    startingGroup: r.startingGroup as WorkspaceRotation["startingGroup"],
+    startDate: isYmd(r.startDate) ? r.startDate : new Date(createdAt).toISOString().slice(0, 10),
+    stage: isStage(r.stage) ? r.stage : r.phase === "maintaining" ? "maintaining" : 1,
+    picks: r.picks && typeof r.picks === "object" ? r.picks : {},
+    inventory: r.inventory,
+    applied: r.applied && typeof r.applied === "object" ? r.applied : {},
+    lastRun: r.lastRun,
+    createdAt,
+    updatedAt: typeof r.updatedAt === "number" ? r.updatedAt : createdAt,
+  };
+  return validateSetup(rec).length === 0 ? rec : null;
+}
+
 export async function loadRotations(): Promise<WorkspaceRotation[]> {
   try {
     const parsed = JSON.parse(await fs.readFile(ROTATIONS_FILE, "utf8")) as { rotations?: unknown };
     const list = Array.isArray(parsed.rotations) ? parsed.rotations : [];
-    return list.filter(
-      (r): r is WorkspaceRotation =>
-        !!r && typeof r === "object" && typeof (r as WorkspaceRotation).id === "string" && validateSetup(r as WorkspaceRotation).length === 0
-    );
+    return list.map(normalizeRotation).filter((r): r is WorkspaceRotation => r !== null);
   } catch {
     return [];
   }
@@ -99,7 +125,8 @@ export async function loadRotations(): Promise<WorkspaceRotation[]> {
 /**
  * Sets a workspace up, or sets it up again: one workspace has one rotation,
  * so a second set-up for the same workspace replaces the first and keeps its
- * id and creation time.
+ * id and creation time. The schedule starts over — picks and what was applied
+ * belong to the old start date and stage.
  */
 export async function upsertRotation(input: SetupInput): Promise<WorkspaceRotation> {
   const problems = validateSetup(input);
@@ -112,13 +139,40 @@ export async function upsertRotation(input: SetupInput): Promise<WorkspaceRotati
     workspaceId: input.workspaceId,
     workspaceName: input.workspaceName,
     startingGroup: input.startingGroup,
-    phase: input.phase,
+    startDate: input.startDate,
+    stage: input.stage,
+    picks: {},
+    inventory: existing?.inventory,
+    applied: {},
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
   const next = [...list.filter((r) => r.workspaceId !== input.workspaceId), rotation].sort((a, b) => b.updatedAt - a.updatedAt);
   await writeWhole(ROTATIONS_FILE, { rotations: next });
   return rotation;
+}
+
+/**
+ * Changes one rotation in place. Serialised, so two runs touching the file
+ * at once cannot lose each other's write.
+ */
+let chain: Promise<unknown> = Promise.resolve();
+export function updateRotation(
+  id: string,
+  fn: (r: WorkspaceRotation) => WorkspaceRotation
+): Promise<WorkspaceRotation | null> {
+  const run = async () => {
+    const list = await loadRotations();
+    const i = list.findIndex((r) => r.id === id);
+    if (i < 0) return null;
+    const next = { ...fn(list[i]), updatedAt: Date.now() };
+    list[i] = next;
+    await writeWhole(ROTATIONS_FILE, { rotations: list });
+    return next;
+  };
+  const p = chain.then(run, run);
+  chain = p.catch(() => undefined);
+  return p;
 }
 
 export async function removeRotation(id: string): Promise<boolean> {

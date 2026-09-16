@@ -20,5 +20,9 @@ export async function register() {
 
     const blocked = await import("@/lib/jobs/blocked-domains");
     await blocked.bootScheduler();
+
+    // Inbox Rotation: a group switch falls at midnight, with nobody watching.
+    const rotation = await import("@/lib/inbox-rotation/runner");
+    rotation.bootScheduler();
   }
 }

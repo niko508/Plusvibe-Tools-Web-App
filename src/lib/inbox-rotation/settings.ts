@@ -20,9 +20,10 @@
 //
 // Campaign Email Ramp-Up is always off — it is not a setting here.
 //
-// The schedule that applies these is not built yet; this module is the
-// settings and the set-up record only. Pure — the files are in store.ts — so
-// all of it is unit-tested and the client imports it for the forms.
+// This module is the settings and the set-up record. The schedule is in
+// schedule.ts, what is in a workspace in inventory.ts, and the writing of it
+// all in runner.ts. Pure — the files are in store.ts — so all of it is
+// unit-tested and the client imports it for the forms.
 
 export type ProfileKey = "azure50" | "azure25" | "google";
 
@@ -246,23 +247,80 @@ export function describeCycle(c: Cycle): string {
 // --- The per-workspace set-up ---------------------------------------------------
 
 export type Group = 1 | 2;
-export type Phase = "rampUp" | "maintaining";
 
 export const GROUPS: { key: Group; label: string }[] = [
   { key: 1, label: "Sending Group 1" },
   { key: 2, label: "Sending Group 2" },
 ];
 
-export const PHASES: { key: Phase; label: string; hint: string }[] = [
-  { key: "rampUp", label: "Ramp-up period", hint: "Cycles 1 to 5, then maintaining" },
-  { key: "maintaining", label: "Maintaining period", hint: "Straight to the maintaining settings" },
+/** The tag an inbox carries to be in a group, as it is named in Plusvibe. */
+export const GROUP_TAG_NAMES: Record<Group, string> = { 1: "Sending Group 1", 2: "Sending Group 2" };
+
+export function otherGroup(g: Group): Group {
+  return g === 1 ? 2 : 1;
+}
+
+/** Where a workspace starts: one of the five cycles, or the maintaining period. */
+export type Stage = 1 | 2 | 3 | 4 | 5 | "maintaining";
+
+export const STAGES: { key: Stage; label: string }[] = [
+  { key: 1, label: "Cycle 1" },
+  { key: 2, label: "Cycle 2" },
+  { key: 3, label: "Cycle 3" },
+  { key: 4, label: "Cycle 4" },
+  { key: 5, label: "Cycle 5" },
+  { key: "maintaining", label: "Maintaining period" },
 ];
 
 export function isGroup(v: unknown): v is Group {
   return v === 1 || v === 2;
 }
-export function isPhase(v: unknown): v is Phase {
-  return v === "rampUp" || v === "maintaining";
+export function isStage(v: unknown): v is Stage {
+  return v === "maintaining" || v === 1 || v === 2 || v === 3 || v === 4 || v === 5;
+}
+export function stageLabel(stage: Stage): string {
+  return STAGES.find((s) => s.key === stage)?.label ?? String(stage);
+}
+
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+export function isYmd(v: unknown): v is string {
+  return typeof v === "string" && YMD.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`));
+}
+
+/** An inbox's kind for the rotation: one of the three profiles, or none of them. */
+export type InboxClass = ProfileKey | "other";
+export const INBOX_CLASSES: InboxClass[] = ["azure50", "azure25", "google", "other"];
+
+/** How many inboxes each group has, by kind. Counts only — ids are read fresh each time. */
+export interface Inventory {
+  fetchedAt: number;
+  groups: Record<Group, Record<InboxClass, number>>;
+  /** Inboxes in the workspace carrying neither group tag. */
+  untagged: number;
+  /** Which group tags exist in the workspace. */
+  tagsFound: Group[];
+}
+
+/** The segment last written to Plusvibe for one profile. */
+export interface AppliedSegment {
+  /** First day of the segment, YYYY-MM-DD. */
+  start: string;
+  /** Day after the last, YYYY-MM-DD. */
+  end: string;
+  group: Group;
+  stage: Stage;
+  at: number;
+}
+
+export interface RunSummary {
+  startedAt: number;
+  finishedAt?: number;
+  /** As-of day the run applied. */
+  day: string;
+  /** Inboxes written in this run. */
+  updated: number;
+  errors: string[];
+  trigger: "setup" | "manual" | "scheduled";
 }
 
 export interface WorkspaceRotation {
@@ -271,8 +329,18 @@ export interface WorkspaceRotation {
   workspaceName: string;
   /** The group that sends first. */
   startingGroup: Group;
-  /** Where the workspace starts: the ramp-up cycles, or straight into maintaining. */
-  phase: Phase;
+  /** Day 1, YYYY-MM-DD. */
+  startDate: string;
+  /** Where the workspace starts: a cycle, or the maintaining period. */
+  stage: Stage;
+  /**
+   * The maintaining-period day lengths as they were drawn, per profile. Drawn
+   * once and kept, so the schedule is the same however often it is read.
+   */
+  picks: Partial<Record<ProfileKey, number[]>>;
+  inventory?: Inventory;
+  applied: Partial<Record<ProfileKey, AppliedSegment>>;
+  lastRun?: RunSummary;
   createdAt: number;
   updatedAt: number;
 }
@@ -281,7 +349,8 @@ export interface SetupInput {
   workspaceId: string;
   workspaceName: string;
   startingGroup: Group;
-  phase: Phase;
+  startDate: string;
+  stage: Stage;
 }
 
 /** The problems with a set-up as sent. Empty when it can be saved. */
@@ -289,12 +358,12 @@ export function validateSetup(input: Partial<Record<keyof SetupInput, unknown>>)
   const problems: string[] = [];
   if (typeof input.workspaceId !== "string" || input.workspaceId.trim() === "") problems.push("Pick a workspace.");
   if (!isGroup(input.startingGroup)) problems.push("Pick which sending group starts.");
-  if (!isPhase(input.phase)) problems.push("Pick the ramp-up period or the maintaining period.");
+  if (!isYmd(input.startDate)) problems.push("Pick a start date.");
+  if (!isStage(input.stage)) problems.push("Pick the stage to start on.");
   return problems;
 }
 
-/** "Sending Group 1 first · ramp-up period" */
-export function describeSetup(r: Pick<WorkspaceRotation, "startingGroup" | "phase">): string {
-  const phase = PHASES.find((p) => p.key === r.phase)?.label.toLowerCase() ?? r.phase;
-  return `Sending Group ${r.startingGroup} first · ${phase}`;
+/** "Sending Group 1 first · from 2026-09-20 · Cycle 3" */
+export function describeSetup(r: Pick<WorkspaceRotation, "startingGroup" | "startDate" | "stage">): string {
+  return `Sending Group ${r.startingGroup} first · from ${r.startDate} · ${stageLabel(r.stage)}`;
 }

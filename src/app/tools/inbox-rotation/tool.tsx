@@ -6,18 +6,21 @@ import {
   CYCLE_COUNT,
   DEFAULT_SETTINGS,
   GROUPS,
-  PHASES,
   PROFILES,
+  STAGES,
   describeSetup,
+  stageLabel,
   validateProfile,
   cleanProfile,
   type Group,
-  type Phase,
+  type InboxClass,
   type Profile,
   type ProfileKey,
   type RotationSettings,
-  type WorkspaceRotation,
+  type Stage,
 } from "@/lib/inbox-rotation/settings";
+import { describePosition, todayIn } from "@/lib/inbox-rotation/schedule";
+import { groupTotal, profilesPresent } from "@/lib/inbox-rotation/inventory";
 import {
   fetchWorkspaces,
   fetchInboxRotationSettings,
@@ -25,7 +28,9 @@ import {
   fetchInboxRotations,
   setUpInboxRotation,
   removeInboxRotation,
+  applyInboxRotation,
   ApiClientError,
+  type RotationListItem,
 } from "@/lib/api-client";
 import { useApiKey } from "@/lib/use-api-key";
 import { ConnectPrompt } from "@/components/connect-prompt";
@@ -33,8 +38,12 @@ import { Spinner, EmptyState, RemoveJobButton } from "@/components/ui";
 import { AlertIcon, CheckIcon, ChevronDownIcon, RefreshIcon } from "@/components/icons";
 
 // Three views: set a workspace up, edit the settings the rotation applies,
-// and see what is set up. The schedule that does the rotating is not here
-// yet; this is the settings and the set-up records.
+// and see where every workspace stands. The rotating itself is done on the
+// server (inbox-rotation/runner.ts); this page reads its state and can ask
+// it to apply today's settings now.
+
+const POLL_MS = 3000;
+const CLASS_LABEL: Record<InboxClass, string> = { azure50: "Azure (50)", azure25: "Azure (25)", google: "Google", other: "other" };
 
 type View = "setup" | "settings" | "rotations";
 
@@ -147,7 +156,8 @@ export function InboxRotationTool() {
   const [workspacesLoading, setWorkspacesLoading] = useState(false);
   const [workspaceId, setWorkspaceId] = useState("");
   const [startingGroup, setStartingGroup] = useState<Group>(1);
-  const [phase, setPhase] = useState<Phase>("rampUp");
+  const [startDate, setStartDate] = useState<string>(() => todayIn());
+  const [stage, setStage] = useState<Stage>(1);
   const [settingUp, setSettingUp] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -166,15 +176,25 @@ export function InboxRotationTool() {
   }, []);
 
   // --- Rotations -------------------------------------------------------------
-  const [rotations, setRotations] = useState<WorkspaceRotation[]>([]);
+  const [rotations, setRotations] = useState<RotationListItem[]>([]);
+  const [serverKey, setServerKey] = useState(true);
   const [rotationsError, setRotationsError] = useState<string | null>(null);
   const loadRotations = useCallback(async () => {
     try {
-      setRotations((await fetchInboxRotations()).rotations);
+      const r = await fetchInboxRotations();
+      setRotations(r.rotations);
+      setServerKey(r.serverKey);
     } catch (err) {
       setRotationsError(errMessage(err));
     }
   }, []);
+  // A run in progress: keep reading until it has finished.
+  const anyRunning = rotations.some((r) => r.running);
+  useEffect(() => {
+    if (!anyRunning) return;
+    const t = setInterval(() => void loadRotations(), POLL_MS);
+    return () => clearInterval(t);
+  }, [anyRunning, loadRotations]);
 
   useEffect(() => {
     if (ready && hasKey) {
@@ -186,17 +206,18 @@ export function InboxRotationTool() {
 
   const workspace = workspaces.find((w) => w._id === workspaceId) ?? null;
   const alreadySetUp = rotations.find((r) => r.workspaceId === workspaceId) ?? null;
-  const canSetUp = !!workspace && !settingUp;
+  const canSetUp = !!workspace && !settingUp && /^\d{4}-\d{2}-\d{2}$/.test(startDate);
 
   async function handleSetUp() {
     if (!workspace || !canSetUp) return;
     setSettingUp(true);
     setSetupError(null);
     try {
-      await setUpInboxRotation({ workspaceId: workspace._id, workspaceName: workspace.name, startingGroup, phase });
+      await setUpInboxRotation({ workspaceId: workspace._id, workspaceName: workspace.name, startingGroup, startDate, stage });
       await loadRotations();
-      setToast(`${workspace.name} set up — ${describeSetup({ startingGroup, phase })}`);
+      setToast(`${workspace.name} set up — ${describeSetup({ startingGroup, startDate, stage })}`);
       setTimeout(() => setToast(null), 5000);
+      setView("rotations");
     } catch (err) {
       setSetupError(errMessage(err));
     } finally {
@@ -278,23 +299,35 @@ export function InboxRotationTool() {
               </div>
             </div>
             <div>
-              <div className="mb-1.5 text-xs font-medium text-muted-foreground">Starting period</div>
-              <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Starting period">
-                {PHASES.map((p) => (
-                  <button
-                    key={p.key}
-                    type="button"
-                    role="radio"
-                    aria-checked={phase === p.key}
-                    className={`pv-chip ${phase === p.key ? "pv-chip-active" : "hover:text-foreground"}`}
-                    onClick={() => setPhase(p.key)}
-                    title={p.hint}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-              <p className="mt-1.5 text-[11px] text-muted-foreground">{PHASES.find((p) => p.key === phase)?.hint}</p>
+              <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="rotation-start">
+                Start date
+              </label>
+              <input
+                id="rotation-start"
+                type="date"
+                className="pv-input"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                aria-label="Start date"
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-1.5 text-xs font-medium text-muted-foreground">Stage</div>
+            <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Stage">
+              {STAGES.map((st) => (
+                <button
+                  key={String(st.key)}
+                  type="button"
+                  role="radio"
+                  aria-checked={stage === st.key}
+                  className={`pv-chip ${stage === st.key ? "pv-chip-active" : "hover:text-foreground"}`}
+                  onClick={() => setStage(st.key)}
+                >
+                  {st.label}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -409,28 +442,38 @@ export function InboxRotationTool() {
               <span>{rotationsError}</span>
             </div>
           )}
+          {!serverKey && rotations.length > 0 && (
+            <p className="flex gap-1.5 text-xs text-warning">
+              <AlertIcon size={13} className="mt-0.5 shrink-0" />
+              <span>No server API key is set, so switches are only written when this page applies them.</span>
+            </p>
+          )}
           {rotations.length === 0 ? (
             <EmptyState icon={<RefreshIcon />} title="No workspaces set up yet">
               Set one up from the first tab.
             </EmptyState>
           ) : (
             rotations.map((r) => (
-              <div key={r.id} className="pv-card flex flex-wrap items-center justify-between gap-3 p-4">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium">{r.workspaceName || r.workspaceId}</div>
-                  <div className="text-xs text-muted-foreground">{describeSetup(r)} · set up {relativeTime(r.createdAt)}</div>
-                </div>
-                <RemoveJobButton
-                  onRemove={async () => {
-                    try {
-                      await removeInboxRotation(r.id);
-                      await loadRotations();
-                    } catch (err) {
-                      setRotationsError(errMessage(err));
-                    }
-                  }}
-                />
-              </div>
+              <RotationCard
+                key={r.id}
+                r={r}
+                onApply={async () => {
+                  try {
+                    await applyInboxRotation(r.id, true);
+                    await loadRotations();
+                  } catch (err) {
+                    setRotationsError(errMessage(err));
+                  }
+                }}
+                onRemove={async () => {
+                  try {
+                    await removeInboxRotation(r.id);
+                    await loadRotations();
+                  } catch (err) {
+                    setRotationsError(errMessage(err));
+                  }
+                }}
+              />
             ))
           )}
         </div>
@@ -444,6 +487,102 @@ export function InboxRotationTool() {
             </span>
             <span className="text-sm font-medium">{toast}</span>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RotationCard({
+  r,
+  onApply,
+  onRemove,
+}: {
+  r: RotationListItem;
+  onApply: () => Promise<void>;
+  onRemove: () => Promise<void>;
+}) {
+  const inv = r.inventory;
+  const present = inv ? profilesPresent(inv) : [];
+  // One line when every profile stands in the same place, which is the
+  // usual case; a line per profile when their day lengths differ.
+  const lines = present.map((key) => ({ key, text: describePosition(r.positions[key] ?? { kind: "notStarted", startsIn: 0 }) }));
+  const same = lines.length > 0 && lines.every((l) => l.text === lines[0].text);
+  const run = r.lastRun;
+  const groupLine = (g: Group) => {
+    if (!inv) return "not read yet";
+    if (!inv.tagsFound.includes(g)) return "no such tag in this workspace";
+    const parts = (["azure50", "azure25", "google", "other"] as InboxClass[])
+      .filter((c) => (inv.groups[g]?.[c] ?? 0) > 0)
+      .map((c) => `${CLASS_LABEL[c]} ${inv.groups[g][c]}`);
+    const total = groupTotal(inv, g);
+    return `${total} inbox${total === 1 ? "" : "es"}${parts.length > 0 ? ` — ${parts.join(" · ")}` : ""}`;
+  };
+  return (
+    <div className="pv-card space-y-3 p-4" data-rotation={r.workspaceId}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium">{r.workspaceName || r.workspaceId}</div>
+          <div className="text-xs text-muted-foreground">{describeSetup(r)}</div>
+        </div>
+        <div className="flex items-center gap-2">
+          {r.running && (
+            <span className="pv-chip">
+              <Spinner size={10} /> applying
+            </span>
+          )}
+          <button type="button" className="pv-btn-ghost text-xs" disabled={r.running} onClick={() => void onApply()} data-apply>
+            <RefreshIcon size={13} /> Apply now
+          </button>
+          <RemoveJobButton onRemove={onRemove} />
+        </div>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        {GROUPS.map((g) => (
+          <div key={g.key} className="rounded-xl border border-border p-2.5 text-xs">
+            <div className="font-medium">{g.label}</div>
+            <div className="text-muted-foreground">{groupLine(g.key)}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="rounded-xl border border-accent/40 bg-accent/5 p-2.5 text-xs" data-sending>
+        {lines.length === 0 ? (
+          <span className="text-muted-foreground">{inv ? "No inboxes in either group." : "Not applied yet."}</span>
+        ) : same ? (
+          <span className="font-medium">{lines[0].text}</span>
+        ) : (
+          <div className="space-y-0.5">
+            {lines.map((l) => (
+              <div key={l.key}>
+                <span className="text-muted-foreground">{PROFILES.find((p) => p.key === l.key)?.label}: </span>
+                <span className="font-medium">{l.text}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {run && (
+        <div className="text-xs text-muted-foreground">
+          {run.finishedAt
+            ? `Last applied ${relativeTime(run.finishedAt)} for ${run.day} · ${run.updated} inbox${run.updated === 1 ? "" : "es"} written`
+            : `Applying for ${run.day}…`}
+          {inv && inv.untagged > 0 ? ` · ${inv.untagged} untagged left alone` : ""}
+          {(inv?.groups[1]?.other ?? 0) + (inv?.groups[2]?.other ?? 0) > 0
+            ? ` · ${(inv?.groups[1]?.other ?? 0) + (inv?.groups[2]?.other ?? 0)} neither Microsoft nor Google, left alone`
+            : ""}
+        </div>
+      )}
+      {run && run.errors.length > 0 && (
+        <div className="space-y-1">
+          {run.errors.slice(0, 4).map((e, i) => (
+            <p key={i} className="flex gap-1.5 text-xs text-warning">
+              <AlertIcon size={13} className="mt-0.5 shrink-0" />
+              <span>{e}</span>
+            </p>
+          ))}
         </div>
       )}
     </div>

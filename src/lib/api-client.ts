@@ -25,6 +25,7 @@ import type {
   SetupInput,
   WorkspaceRotation,
 } from "@/lib/inbox-rotation/settings";
+import type { Position } from "@/lib/inbox-rotation/schedule";
 import type {
   CampaignDetail,
   CampaignSummary,
@@ -836,8 +837,25 @@ export function saveInboxRotationSettings(profiles: Partial<Record<ProfileKey, P
   });
 }
 
+export type RotationListItem = WorkspaceRotation & {
+  running: boolean;
+  positions: Partial<Record<ProfileKey, Position>>;
+};
+
 export function fetchInboxRotations(signal?: AbortSignal) {
-  return request<{ rotations: WorkspaceRotation[] }>("/api/jobs/inbox-rotation/rotations", { signal });
+  return request<{ rotations: RotationListItem[]; today: string; serverKey: boolean }>(
+    "/api/jobs/inbox-rotation/rotations",
+    { signal }
+  );
+}
+
+/** Re-reads the workspace and writes today's settings now. */
+export function applyInboxRotation(id: string, force = false, signal?: AbortSignal) {
+  return request<{ ok: boolean; running: boolean }>("/api/jobs/inbox-rotation/apply", {
+    method: "POST",
+    body: { id, force },
+    signal,
+  });
 }
 
 export function setUpInboxRotation(input: SetupInput, signal?: AbortSignal) {
