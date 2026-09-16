@@ -13,6 +13,7 @@ import {
   validateSetup,
   isStage,
   isYmd,
+  type MaintainingPick,
   type Profile,
   type ProfileInput,
   type ProfileKey,
@@ -102,7 +103,7 @@ function normalizeRotation(raw: unknown): WorkspaceRotation | null {
     startingGroup: r.startingGroup as WorkspaceRotation["startingGroup"],
     startDate: isYmd(r.startDate) ? r.startDate : new Date(createdAt).toISOString().slice(0, 10),
     stage: isStage(r.stage) ? r.stage : r.phase === "maintaining" ? "maintaining" : 1,
-    picks: r.picks && typeof r.picks === "object" ? r.picks : {},
+    picks: migratePicks(r.picks),
     inventory: r.inventory,
     applied: r.applied && typeof r.applied === "object" ? r.applied : {},
     lastRun: r.lastRun,
@@ -110,6 +111,25 @@ function normalizeRotation(raw: unknown): WorkspaceRotation | null {
     updatedAt: typeof r.updatedAt === "number" ? r.updatedAt : createdAt,
   };
   return validateSetup(rec).length === 0 ? rec : null;
+}
+
+/** Draws made before they carried sends were bare day lengths. */
+function migratePicks(raw: unknown): WorkspaceRotation["picks"] {
+  if (!raw || typeof raw !== "object") return {};
+  const out: WorkspaceRotation["picks"] = {};
+  for (const [key, list] of Object.entries(raw as Record<string, unknown>)) {
+    if (!isProfileKey(key) || !Array.isArray(list)) continue;
+    out[key] = list
+      .map((p): MaintainingPick | null =>
+        typeof p === "number"
+          ? { days: p }
+          : p && typeof p === "object" && typeof (p as MaintainingPick).days === "number"
+            ? (p as MaintainingPick)
+            : null
+      )
+      .filter((p): p is MaintainingPick => p !== null);
+  }
+  return out;
 }
 
 export async function loadRotations(): Promise<WorkspaceRotation[]> {

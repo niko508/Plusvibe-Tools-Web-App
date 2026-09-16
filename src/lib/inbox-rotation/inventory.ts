@@ -104,16 +104,29 @@ export function profilesPresent(inv: Inventory): ProfileKey[] {
   );
 }
 
-/** What a group's inboxes of one profile are written, sending or resting. */
+/**
+ * What a group's inboxes of one profile are written, sending or resting. In
+ * the maintaining stage the daily sends are the turn's draw, passed in.
+ */
 export function settingsFor(
   profile: Profile,
   stage: Stage,
-  sending: boolean
+  sending: boolean,
+  drawnSends?: number
 ): Record<string, number | string> {
   if (!sending) {
     return { daily_limit: 0, warmup_max_daily_limit: profile.resting.warmupEmails, ...RAMP_UP_DISABLED };
   }
-  const c = stage === "maintaining" ? profile.maintaining : profile.cycles[stage - 1];
+  if (stage === "maintaining") {
+    const m = profile.maintaining;
+    return {
+      daily_limit: drawnSends ?? m.dailySendsMin,
+      interval_limit_in_min: m.emailInterval,
+      warmup_max_daily_limit: m.warmupEmails,
+      ...RAMP_UP_DISABLED,
+    };
+  }
+  const c = profile.cycles[stage - 1];
   return {
     daily_limit: c.dailySends,
     interval_limit_in_min: c.emailInterval,

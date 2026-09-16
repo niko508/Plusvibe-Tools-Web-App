@@ -52,7 +52,9 @@ export interface Maintaining {
   /** The switch happens somewhere in this range of days. */
   dayLengthMin: number;
   dayLengthMax: number;
-  dailySends: number;
+  /** Each turn's daily sends are drawn from this range. */
+  dailySendsMin: number;
+  dailySendsMax: number;
   emailInterval: number;
   warmupEmails: number;
 }
@@ -89,7 +91,7 @@ export const DEFAULT_PROFILE: Profile = {
     { dayLength: 4, dailySends: 3, emailInterval: 120, warmupEmails: DEFAULT_WARMUP_SENDING },
     { dayLength: 5, dailySends: 3, emailInterval: 120, warmupEmails: DEFAULT_WARMUP_SENDING },
   ],
-  maintaining: { dayLengthMin: 2, dayLengthMax: 5, dailySends: 3, emailInterval: 120, warmupEmails: DEFAULT_WARMUP_SENDING },
+  maintaining: { dayLengthMin: 2, dayLengthMax: 5, dailySendsMin: 3, dailySendsMax: 3, emailInterval: 120, warmupEmails: DEFAULT_WARMUP_SENDING },
   resting: { warmupEmails: DEFAULT_WARMUP_RESTING },
 };
 
@@ -136,15 +138,21 @@ export function validateCycle(c: Partial<Record<keyof Cycle, unknown>>, label: s
 export function validateMaintaining(m: Partial<Record<keyof Maintaining, unknown>>, label: string): string[] {
   const min = whole(m.dayLengthMin, `${label} · Day Length from`, 1, MAX_DAYS);
   const max = whole(m.dayLengthMax, `${label} · Day Length to`, 1, MAX_DAYS);
+  const sMin = whole(m.dailySendsMin, `${label} · Daily Sends from`, 0, MAX_SENDS);
+  const sMax = whole(m.dailySendsMax, `${label} · Daily Sends to`, 0, MAX_SENDS);
   const problems = [
     min.error,
     max.error,
-    whole(m.dailySends, `${label} · Daily Sends`, 0, MAX_SENDS).error,
+    sMin.error,
+    sMax.error,
     whole(m.emailInterval, `${label} · Email Interval`, 1, MAX_INTERVAL).error,
     whole(m.warmupEmails, `${label} · Warmup Emails`, 0, MAX_WARMUP).error,
   ].filter((e): e is string => !!e);
   if (min.value !== undefined && max.value !== undefined && min.value > max.value) {
     problems.push(`${label} · Day Length: the range runs from the smaller number to the larger.`);
+  }
+  if (sMin.value !== undefined && sMax.value !== undefined && sMin.value > sMax.value) {
+    problems.push(`${label} · Daily Sends: the range runs from the smaller number to the larger.`);
   }
   return problems;
 }
@@ -196,7 +204,8 @@ export function cleanProfile(p: {
     maintaining: {
       dayLengthMin: Number(p.maintaining.dayLengthMin),
       dayLengthMax: Number(p.maintaining.dayLengthMax),
-      dailySends: Number(p.maintaining.dailySends),
+      dailySendsMin: Number(p.maintaining.dailySendsMin),
+      dailySendsMax: Number(p.maintaining.dailySendsMax),
       emailInterval: Number(p.maintaining.emailInterval),
       warmupEmails: Number(p.maintaining.warmupEmails),
     },
@@ -205,18 +214,28 @@ export function cleanProfile(p: {
 }
 
 /**
- * A stored profile with the warmup fields filled in where a file written
- * before they existed has none. Only the missing fields are touched, so the
- * numbers someone did set are kept rather than thrown away with the profile.
+ * A stored profile with the fields a file written by an earlier build lacks
+ * filled in: the warmup numbers take the placeholders, and a maintaining
+ * period saved with one Daily Sends becomes a range of that one number. Only
+ * the missing fields are touched, so the numbers someone did set are kept
+ * rather than thrown away with the profile.
  */
 export function withWarmupDefaults(p: ProfileInput): ProfileInput {
   const fill = (o: unknown, value: number) =>
     o && typeof o === "object" && (o as Record<string, unknown>).warmupEmails === undefined
       ? { ...(o as Record<string, unknown>), warmupEmails: value }
       : o;
+  let maintaining = fill(p.maintaining, DEFAULT_WARMUP_SENDING);
+  if (maintaining && typeof maintaining === "object") {
+    const m = maintaining as Record<string, unknown>;
+    if (m.dailySendsMin === undefined && m.dailySendsMax === undefined && m.dailySends !== undefined) {
+      const { dailySends, ...rest } = m;
+      maintaining = { ...rest, dailySendsMin: dailySends, dailySendsMax: dailySends };
+    }
+  }
   return {
     cycles: Array.isArray(p.cycles) ? p.cycles.map((c) => fill(c, DEFAULT_WARMUP_SENDING)) : p.cycles,
-    maintaining: fill(p.maintaining, DEFAULT_WARMUP_SENDING),
+    maintaining,
     resting: p.resting === undefined ? { warmupEmails: DEFAULT_WARMUP_RESTING } : p.resting,
   };
 }
@@ -287,6 +306,16 @@ export function isYmd(v: unknown): v is string {
   return typeof v === "string" && YMD.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`));
 }
 
+/** One maintaining-period draw. */
+export interface MaintainingPick {
+  days: number;
+  /**
+   * Daily sends for the starting group's turn, then the other group's. Absent
+   * on a draw made before the range existed: the range's low end then.
+   */
+  sends?: [number, number];
+}
+
 /** An inbox's kind for the rotation: one of the three profiles, or none of them. */
 export type InboxClass = ProfileKey | "other";
 export const INBOX_CLASSES: InboxClass[] = ["azure50", "azure25", "google", "other"];
@@ -334,10 +363,11 @@ export interface WorkspaceRotation {
   /** Where the workspace starts: a cycle, or the maintaining period. */
   stage: Stage;
   /**
-   * The maintaining-period day lengths as they were drawn, per profile. Drawn
-   * once and kept, so the schedule is the same however often it is read.
+   * The maintaining-period draws, per profile: a day length, and the daily
+   * sends for each group's turn. Drawn once and kept, so the schedule is the
+   * same however often it is read.
    */
-  picks: Partial<Record<ProfileKey, number[]>>;
+  picks: Partial<Record<ProfileKey, MaintainingPick[]>>;
   inventory?: Inventory;
   applied: Partial<Record<ProfileKey, AppliedSegment>>;
   lastRun?: RunSummary;

@@ -91,7 +91,7 @@ export async function applyRotation(
         const targets = ids[g][key];
         if (targets.length === 0) continue;
         const sending = g === seg.group;
-        updated += await writeSettings(apiKey, rec.workspaceId, targets, settingsFor(profile, seg.stage, sending), (n, message) =>
+        updated += await writeSettings(apiKey, rec.workspaceId, targets, settingsFor(profile, seg.stage, sending, seg.sends), (n, message) =>
           errors.push(`${label} · Sending Group ${g}: ${n} inbox${n === 1 ? "" : "es"} not ${sending ? "set to send" : "rested"}: ${message}`)
         );
       }

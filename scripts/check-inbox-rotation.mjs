@@ -36,7 +36,7 @@ eq("the Azure (50) plan as written up, with the warmup placeholders", DEFAULT_PR
     { dayLength: 4, dailySends: 3, emailInterval: 120, warmupEmails: W },
     { dayLength: 5, dailySends: 3, emailInterval: 120, warmupEmails: W },
   ],
-  maintaining: { dayLengthMin: 2, dayLengthMax: 5, dailySends: 3, emailInterval: 120, warmupEmails: W },
+  maintaining: { dayLengthMin: 2, dayLengthMax: 5, dailySendsMin: 3, dailySendsMax: 3, emailInterval: 120, warmupEmails: W },
   resting: { warmupEmails: DEFAULT_WARMUP_RESTING },
 });
 eq("every profile starts from it", Object.values(DEFAULT_SETTINGS.profiles).every((p) => JSON.stringify(p) === JSON.stringify(DEFAULT_PROFILE)), true);
@@ -54,15 +54,16 @@ eq("an interval of 0 is a problem", validateCycle({ dayLength: 1, dailySends: 1,
 eq("every problem is listed", validateCycle({ dayLength: "x", dailySends: -1, emailInterval: "", warmupEmails: 1.5 }, "C").length, 4);
 eq("a blank warmup is a problem", validateCycle({ dayLength: 1, dailySends: 1, emailInterval: 180, warmupEmails: "" }, "C"), ["C · Warmup Emails: enter a number."]);
 eq("…and so is one for the resting group", validateResting({ warmupEmails: -1 }, "R"), ["R · Warmup Emails: must be at least 0."]);
-eq("a good maintaining period has no problems", validateMaintaining({ dayLengthMin: 2, dayLengthMax: 5, dailySends: 3, emailInterval: 120, warmupEmails: 20 }, "M"), []);
-eq("…the range can be one number", validateMaintaining({ dayLengthMin: 3, dayLengthMax: 3, dailySends: 3, emailInterval: 120, warmupEmails: 20 }, "M"), []);
-eq("…but not backwards", validateMaintaining({ dayLengthMin: 5, dayLengthMax: 2, dailySends: 3, emailInterval: 120, warmupEmails: 20 }, "M"), ["M · Day Length: the range runs from the smaller number to the larger."]);
+eq("a good maintaining period has no problems", validateMaintaining({ dayLengthMin: 2, dayLengthMax: 5, dailySendsMin: 3, dailySendsMax: 3, emailInterval: 120, warmupEmails: 20 }, "M"), []);
+eq("…the range can be one number", validateMaintaining({ dayLengthMin: 3, dayLengthMax: 3, dailySendsMin: 2, dailySendsMax: 4, emailInterval: 120, warmupEmails: 20 }, "M"), []);
+eq("…but not backwards", validateMaintaining({ dayLengthMin: 5, dayLengthMax: 2, dailySendsMin: 3, dailySendsMax: 3, emailInterval: 120, warmupEmails: 20 }, "M"), ["M · Day Length: the range runs from the smaller number to the larger."]);
+eq("…nor the sends range", validateMaintaining({ dayLengthMin: 2, dayLengthMax: 5, dailySendsMin: 4, dailySendsMax: 2, emailInterval: 120, warmupEmails: 20 }, "M"), ["M · Daily Sends: the range runs from the smaller number to the larger."]);
 eq("the default profile validates", validateProfile(DEFAULT_PROFILE, "P"), []);
 eq("fewer than five cycles is a problem", validateProfile({ cycles: DEFAULT_PROFILE.cycles.slice(0, 4), maintaining: DEFAULT_PROFILE.maintaining, resting: DEFAULT_PROFILE.resting }, "P"), ["P: 5 cycles are needed."]);
 eq("a problem names its cycle", validateProfile({ cycles: DEFAULT_PROFILE.cycles.map((c, i) => (i === 2 ? { ...c, dailySends: "" } : c)), maintaining: DEFAULT_PROFILE.maintaining, resting: DEFAULT_PROFILE.resting }, "Azure (50)"), ["Azure (50) · Cycle 3 · Daily Sends: enter a number."]);
 eq("cleaning turns typed strings into numbers", cleanProfile({
   cycles: DEFAULT_PROFILE.cycles.map((c) => ({ dayLength: String(c.dayLength), dailySends: String(c.dailySends), emailInterval: String(c.emailInterval), warmupEmails: String(c.warmupEmails) })),
-  maintaining: { dayLengthMin: "2", dayLengthMax: "5", dailySends: "3", emailInterval: "120", warmupEmails: String(W) },
+  maintaining: { dayLengthMin: "2", dayLengthMax: "5", dailySendsMin: "3", dailySendsMax: "3", emailInterval: "120", warmupEmails: String(W) },
   resting: { warmupEmails: String(DEFAULT_WARMUP_RESTING) },
 }), DEFAULT_PROFILE);
 
@@ -78,11 +79,12 @@ const OLD = {
   cycles: DEFAULT_PROFILE.cycles.map((c) => ({ dayLength: c.dayLength, dailySends: 7, emailInterval: c.emailInterval })),
   maintaining: { dayLengthMin: 2, dayLengthMax: 5, dailySends: 7, emailInterval: 120 },
 };
-eq("an older file gains the warmup fields", withWarmupDefaults(OLD), {
+eq("an older file gains the warmup fields, and its one Daily Sends becomes a range of itself", withWarmupDefaults(OLD), {
   cycles: DEFAULT_PROFILE.cycles.map((c) => ({ dayLength: c.dayLength, dailySends: 7, emailInterval: c.emailInterval, warmupEmails: W })),
-  maintaining: { dayLengthMin: 2, dayLengthMax: 5, dailySends: 7, emailInterval: 120, warmupEmails: W },
+  maintaining: { dayLengthMin: 2, dayLengthMax: 5, emailInterval: 120, warmupEmails: W, dailySendsMin: 7, dailySendsMax: 7 },
   resting: { warmupEmails: DEFAULT_WARMUP_RESTING },
 });
+eq("…and one saved with the range keeps it", withWarmupDefaults({ ...OLD, maintaining: { ...OLD.maintaining, dailySends: undefined, dailySendsMin: 2, dailySendsMax: 6 } }).maintaining.dailySendsMax, 6);
 eq("…and reads back with its own numbers kept", normalizeSettings({ profiles: { azure50: OLD } }).profiles.azure50.cycles.map((c) => [c.dailySends, c.warmupEmails]), [[7, W], [7, W], [7, W], [7, W], [7, W]]);
 eq("…while a warmup that was set is not overwritten", withWarmupDefaults({ ...OLD, resting: { warmupEmails: 55 } }).resting, { warmupEmails: 55 });
 eq("…and a broken one falls back to the default rather than half of itself",
@@ -125,16 +127,23 @@ eq("…which reads as such", describePosition(positionOn("2026-08-30", TL)), "st
 eq("after the cycles the maintaining period needs a draw", positionOn("2026-10-01", TL), { kind: "needPicks", count: 1 });
 eq("…and starting on it needs one at once", positionOn("2026-09-01", { ...TL, stage: "maintaining" }), { kind: "needPicks", count: 1 });
 const fixed = (v) => () => v; // a stand-in rng: 0 draws the minimum, 0.999 the maximum
-eq("a draw is a whole number in the range", [drawPick(DEFAULT_PROFILE, fixed(0)), drawPick(DEFAULT_PROFILE, fixed(0.999)), drawPick(DEFAULT_PROFILE, fixed(0.5))], [2, 5, 4]);
+const ranged = { ...DEFAULT_PROFILE, maintaining: { ...DEFAULT_PROFILE.maintaining, dailySendsMin: 2, dailySendsMax: 6 } };
+eq("a draw is a day length in the range and a sends value per turn", [drawPick(ranged, fixed(0)), drawPick(ranged, fixed(0.999)), drawPick(ranged, fixed(0.5))],
+  [{ days: 2, sends: [2, 2] }, { days: 5, sends: [6, 6] }, { days: 4, sends: [4, 4] }]);
+eq("…with a fixed sends range every draw sends the same", drawPick(DEFAULT_PROFILE, fixed(0.9)).sends, [3, 3]);
 const M = { ...TL, stage: "maintaining" };
-eq("ensurePicks draws what a day needs and no more", ensurePicks("2026-09-01", M, fixed(0.5)), [4]);
-eq("…one draw covers both groups' turns", ensurePicks("2026-09-08", M, fixed(0.5)), [4]);
-eq("…the ninth day needs a second draw", ensurePicks("2026-09-09", M, fixed(0.5)), [4, 4]);
-eq("…and draws already made are kept, not redrawn", ensurePicks("2026-09-09", { ...M, picks: [3] }, fixed(0.5)), [3, 4]);
-eq("…nothing needed returns the same array", ensurePicks("2026-09-02", { ...M, picks: [3] }, fixed(0.5)) === M.picks || ensurePicks("2026-09-02", { ...M, picks: [3] }).length === 1, true);
-eq("a maintaining draw of 3: Group 1 three days, Group 2 three days, then the next draw", groupByDay({ ...M, picks: [3, 2] }, 10), [1, 1, 1, 2, 2, 2, 1, 1, 2, 2]);
-const mp = positionOn("2026-09-05", { ...M, picks: [3, 2] });
-eq("…and reads as the maintaining period", describePosition(mp), "Sending Group 2 · Maintaining period · day 2 of 3 · switches 2026-09-07");
+const P4 = { days: 4, sends: [3, 3] };
+eq("ensurePicks draws what a day needs and no more", ensurePicks("2026-09-01", M, fixed(0.5)), [P4]);
+eq("…one draw covers both groups' turns", ensurePicks("2026-09-08", M, fixed(0.5)), [P4]);
+eq("…the ninth day needs a second draw", ensurePicks("2026-09-09", M, fixed(0.5)), [P4, P4]);
+const P3 = { days: 3, sends: [5, 1] };
+eq("…and draws already made are kept, not redrawn", ensurePicks("2026-09-09", { ...M, picks: [P3] }, fixed(0.5)), [P3, P4]);
+eq("…nothing needed returns the same array", ensurePicks("2026-09-02", { ...M, picks: [P3] }, fixed(0.5)).length, 1);
+eq("a maintaining draw of 3: Group 1 three days, Group 2 three days, then the next draw", groupByDay({ ...M, picks: [P3, { days: 2, sends: [3, 3] }] }, 10), [1, 1, 1, 2, 2, 2, 1, 1, 2, 2]);
+const mp = positionOn("2026-09-05", { ...M, picks: [P3, { days: 2 }] });
+eq("…the second turn carries its own sends draw", mp.segment.sends, 1);
+eq("…and reads as the maintaining period, sends included", describePosition(mp), "Sending Group 2 · Maintaining period · 1/day · day 2 of 3 · switches 2026-09-07");
+eq("a draw made before sends existed falls back to the low end of the range", positionOn("2026-09-07", { ...M, picks: [P3, { days: 2 }] }).segment.sends, 3);
 eq("today is a date in the rotation's zone", /^\d{4}-\d{2}-\d{2}$/.test(todayIn()), true);
 // Profiles with different day lengths keep their own timelines.
 const slow = { ...DEFAULT_PROFILE, cycles: DEFAULT_PROFILE.cycles.map((c) => ({ ...c, dayLength: 2 })) };
@@ -173,7 +182,8 @@ eq("the profiles present", profilesPresent(built.inventory), ["azure50", "azure2
 eq("a workspace with one tag reads that way", buildInventory(INBOXES, { 1: "t1" }).inventory.tagsFound, [1]);
 eq("…and its other group is empty", groupTotal(buildInventory(INBOXES, { 1: "t1" }).inventory, 2), 0);
 eq("sending in cycle 3: the cycle's numbers, ramp-up off", settingsFor(DEFAULT_PROFILE, 3, true), { daily_limit: 2, interval_limit_in_min: 180, warmup_max_daily_limit: W, bulk_is_slow_rampup: "no" });
-eq("sending in the maintaining period: its numbers", settingsFor(DEFAULT_PROFILE, "maintaining", true), { daily_limit: 3, interval_limit_in_min: 120, warmup_max_daily_limit: W, bulk_is_slow_rampup: "no" });
+eq("sending in the maintaining period: the turn's drawn sends", settingsFor(DEFAULT_PROFILE, "maintaining", true, 5), { daily_limit: 5, interval_limit_in_min: 120, warmup_max_daily_limit: W, bulk_is_slow_rampup: "no" });
+eq("…or the range's low end when no draw was passed", settingsFor(DEFAULT_PROFILE, "maintaining", true).daily_limit, 3);
 eq("resting: no sends, the resting warmup, ramp-up off, interval untouched", settingsFor(DEFAULT_PROFILE, 3, false), { daily_limit: 0, warmup_max_daily_limit: DEFAULT_WARMUP_RESTING, bulk_is_slow_rampup: "no" });
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} FAILED`);

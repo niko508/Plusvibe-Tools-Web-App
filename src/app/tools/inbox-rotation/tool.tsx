@@ -56,7 +56,7 @@ const VIEWS: { key: View; label: string }[] = [
 /** A profile as typed: strings, so a field can be cleared while editing. */
 interface ProfileDraft {
   cycles: { dayLength: string; dailySends: string; emailInterval: string; warmupEmails: string }[];
-  maintaining: { dayLengthMin: string; dayLengthMax: string; dailySends: string; emailInterval: string; warmupEmails: string };
+  maintaining: { dayLengthMin: string; dayLengthMax: string; dailySendsMin: string; dailySendsMax: string; emailInterval: string; warmupEmails: string };
   resting: { warmupEmails: string };
 }
 
@@ -71,7 +71,8 @@ function toDraft(p: Profile): ProfileDraft {
     maintaining: {
       dayLengthMin: String(p.maintaining.dayLengthMin),
       dayLengthMax: String(p.maintaining.dayLengthMax),
-      dailySends: String(p.maintaining.dailySends),
+      dailySendsMin: String(p.maintaining.dailySendsMin),
+      dailySendsMax: String(p.maintaining.dailySendsMax),
       emailInterval: String(p.maintaining.emailInterval),
       warmupEmails: String(p.maintaining.warmupEmails),
     },
@@ -382,7 +383,14 @@ export function InboxRotationTool() {
                           <input type="number" className="pv-input px-2 text-sm" min={1} step={1} value={d.maintaining.dayLengthMax} onChange={(e) => setMaintaining(p.key, "dayLengthMax", e.target.value)} aria-label={`${p.label} · Maintaining · Day Length to`} />
                         </div>
                       </div>
-                      <Field label="Daily Sends" aria={`${p.label} · Maintaining · Daily Sends`} value={d.maintaining.dailySends} onChange={(v) => setMaintaining(p.key, "dailySends", v)} />
+                      <div>
+                        <div className="mb-1 text-[11px] text-muted-foreground">Daily Sends</div>
+                        <div className="flex items-center gap-1">
+                          <input type="number" className="pv-input px-2 text-sm" min={0} step={1} value={d.maintaining.dailySendsMin} onChange={(e) => setMaintaining(p.key, "dailySendsMin", e.target.value)} aria-label={`${p.label} · Maintaining · Daily Sends from`} />
+                          <span className="text-xs text-muted-foreground">–</span>
+                          <input type="number" className="pv-input px-2 text-sm" min={0} step={1} value={d.maintaining.dailySendsMax} onChange={(e) => setMaintaining(p.key, "dailySendsMax", e.target.value)} aria-label={`${p.label} · Maintaining · Daily Sends to`} />
+                        </div>
+                      </div>
                       <Field label="Email Interval" aria={`${p.label} · Maintaining · Email Interval`} value={d.maintaining.emailInterval} onChange={(v) => setMaintaining(p.key, "emailInterval", v)} unit="min" />
                       <Field label="Warmup Emails" aria={`${p.label} · Maintaining · Warmup Emails`} value={d.maintaining.warmupEmails} onChange={(v) => setMaintaining(p.key, "warmupEmails", v)} />
                     </div>
@@ -408,7 +416,7 @@ export function InboxRotationTool() {
             <span className="pv-chip" title="Set off on every inbox the rotation touches">
               Campaign Email Ramp-Up · always disabled
             </span>
-            <span className="text-xs text-muted-foreground">Day Length: days until the switch · Daily Sends: daily campaign email limit · Email Interval: minimum minutes between emails · Warmup Emails: warmup daily limit — per cycle while sending, and once for the group not sending cold</span>
+            <span className="text-xs text-muted-foreground">Day Length: days until the switch · Daily Sends: daily campaign email limit · Email Interval: minimum minutes between emails · Warmup Emails: warmup daily limit — per cycle while sending, and once for the group not sending cold · Maintaining ranges: drawn at random for each turn</span>
           </div>
 
           {settingsError && (

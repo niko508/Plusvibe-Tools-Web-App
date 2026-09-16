@@ -10,8 +10,10 @@
 //
 // After Cycle 5 comes the maintaining period: a day length is drawn from the
 // profile's range, the starting group sends for that many days, then the
-// other, then a new length is drawn. The draws are kept on the rotation so
-// the schedule reads the same every time; this module only asks for them.
+// other, then a new length is drawn. Each turn's daily sends are drawn from
+// the profile's sends range at the same time. The draws are kept on the
+// rotation so the schedule reads the same every time; this module only asks
+// for them.
 //
 // Each profile keeps its own timeline, because each has its own day lengths.
 // With the same lengths in every profile — the default — the three timelines
@@ -25,6 +27,7 @@ import {
   otherGroup,
   stageLabel,
   type Group,
+  type MaintainingPick,
   type Profile,
   type Stage,
 } from "./settings";
@@ -69,6 +72,8 @@ export interface Segment {
   /** Day after the last. */
   end: string;
   length: number;
+  /** The daily sends drawn for this turn, in the maintaining stage. */
+  sends?: number;
 }
 
 export interface Timeline {
@@ -76,8 +81,8 @@ export interface Timeline {
   startDate: string;
   startingGroup: Group;
   stage: Stage;
-  /** The maintaining day lengths drawn so far. */
-  picks: number[];
+  /** The maintaining draws made so far. */
+  picks: MaintainingPick[];
 }
 
 export type Position =
@@ -107,19 +112,33 @@ export function positionOn(day: string, tl: Timeline): Position {
     }
   }
   for (let k = 0; ; k++) {
-    const length = tl.picks[k];
-    if (length === undefined) return { kind: "needPicks", count: k + 1 };
-    for (const group of order) {
-      if (d < cursor + length) return at({ stage: "maintaining", pickIndex: k, group, length });
+    const pick = tl.picks[k];
+    if (pick === undefined) return { kind: "needPicks", count: k + 1 };
+    const length = pick.days;
+    for (const [turn, group] of order.entries()) {
+      if (d < cursor + length) {
+        // A draw made before the sends range existed has no sends: the low
+        // end of the range stands in.
+        const sends = pick.sends?.[turn] ?? tl.profile.maintaining.dailySendsMin;
+        return at({ stage: "maintaining", pickIndex: k, group, length, sends });
+      }
       cursor += length;
     }
   }
 }
 
-/** A day length from the profile's maintaining range, whole days inclusive. */
-export function drawPick(profile: Profile, rng: () => number = Math.random): number {
-  const { dayLengthMin: lo, dayLengthMax: hi } = profile.maintaining;
+/** A whole number from lo to hi inclusive. */
+function between(lo: number, hi: number, rng: () => number): number {
   return lo + Math.floor(rng() * (hi - lo + 1));
+}
+
+/** A maintaining draw: a day length, and each turn's daily sends. */
+export function drawPick(profile: Profile, rng: () => number = Math.random): MaintainingPick {
+  const m = profile.maintaining;
+  return {
+    days: between(m.dayLengthMin, m.dayLengthMax, rng),
+    sends: [between(m.dailySendsMin, m.dailySendsMax, rng), between(m.dailySendsMin, m.dailySendsMax, rng)],
+  };
 }
 
 /**
@@ -127,7 +146,7 @@ export function drawPick(profile: Profile, rng: () => number = Math.random): num
  * nothing was needed, so the caller can tell whether there is anything to
  * persist.
  */
-export function ensurePicks(day: string, tl: Timeline, rng: () => number = Math.random): number[] {
+export function ensurePicks(day: string, tl: Timeline, rng: () => number = Math.random): MaintainingPick[] {
   let picks = tl.picks;
   for (;;) {
     const pos = positionOn(day, { ...tl, picks });
@@ -151,5 +170,6 @@ export function describePosition(pos: Position): string {
   if (pos.kind === "notStarted") return `starts in ${pos.startsIn} day${pos.startsIn === 1 ? "" : "s"}`;
   if (pos.kind === "needPicks") return "maintaining period · day length not drawn yet";
   const s = pos.segment;
-  return `Sending Group ${s.group} · ${stageLabel(s.stage)} · day ${pos.dayOfSegment} of ${s.length} · switches ${s.end}`;
+  const sends = s.stage === "maintaining" && s.sends !== undefined ? ` · ${s.sends}/day` : "";
+  return `Sending Group ${s.group} · ${stageLabel(s.stage)}${sends} · day ${pos.dayOfSegment} of ${s.length} · switches ${s.end}`;
 }
