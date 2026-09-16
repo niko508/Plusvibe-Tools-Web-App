@@ -46,8 +46,9 @@ const VIEWS: { key: View; label: string }[] = [
 
 /** A profile as typed: strings, so a field can be cleared while editing. */
 interface ProfileDraft {
-  cycles: { dayLength: string; dailySends: string; emailInterval: string }[];
-  maintaining: { dayLengthMin: string; dayLengthMax: string; dailySends: string; emailInterval: string };
+  cycles: { dayLength: string; dailySends: string; emailInterval: string; warmupEmails: string }[];
+  maintaining: { dayLengthMin: string; dayLengthMax: string; dailySends: string; emailInterval: string; warmupEmails: string };
+  resting: { warmupEmails: string };
 }
 
 function toDraft(p: Profile): ProfileDraft {
@@ -56,13 +57,16 @@ function toDraft(p: Profile): ProfileDraft {
       dayLength: String(c.dayLength),
       dailySends: String(c.dailySends),
       emailInterval: String(c.emailInterval),
+      warmupEmails: String(c.warmupEmails),
     })),
     maintaining: {
       dayLengthMin: String(p.maintaining.dayLengthMin),
       dayLengthMax: String(p.maintaining.dayLengthMax),
       dailySends: String(p.maintaining.dailySends),
       emailInterval: String(p.maintaining.emailInterval),
+      warmupEmails: String(p.maintaining.warmupEmails),
     },
+    resting: { warmupEmails: String(p.resting.warmupEmails) },
   };
 }
 
@@ -113,6 +117,9 @@ export function InboxRotationTool() {
   }
   function setMaintaining(key: ProfileKey, field: keyof ProfileDraft["maintaining"], value: string) {
     setDrafts((prev) => ({ ...prev, [key]: { ...prev[key], maintaining: { ...prev[key].maintaining, [field]: value } } }));
+  }
+  function setResting(key: ProfileKey, value: string) {
+    setDrafts((prev) => ({ ...prev, [key]: { ...prev[key], resting: { warmupEmails: value } } }));
   }
 
   async function handleSaveSettings() {
@@ -323,18 +330,19 @@ export function InboxRotationTool() {
                   {d.cycles.slice(0, CYCLE_COUNT).map((c, i) => (
                     <fieldset key={i} className="rounded-xl border border-border p-2.5">
                       <legend className="px-1 text-xs font-medium">Cycle {i + 1}</legend>
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="grid grid-cols-2 gap-2">
                         <Field label="Day Length" aria={`${p.label} · Cycle ${i + 1} · Day Length`} value={c.dayLength} onChange={(v) => setCycle(p.key, i, "dayLength", v)} />
                         <Field label="Daily Sends" aria={`${p.label} · Cycle ${i + 1} · Daily Sends`} value={c.dailySends} onChange={(v) => setCycle(p.key, i, "dailySends", v)} />
                         <Field label="Email Interval" aria={`${p.label} · Cycle ${i + 1} · Email Interval`} value={c.emailInterval} onChange={(v) => setCycle(p.key, i, "emailInterval", v)} unit="min" />
+                        <Field label="Warmup Emails" aria={`${p.label} · Cycle ${i + 1} · Warmup Emails`} value={c.warmupEmails} onChange={(v) => setCycle(p.key, i, "warmupEmails", v)} />
                       </div>
                     </fieldset>
                   ))}
                   <fieldset className="rounded-xl border border-accent/40 p-2.5">
                     <legend className="px-1 text-xs font-medium">Maintaining Period</legend>
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <div className="mb-1 min-h-[28px] text-[11px] leading-[14px] text-muted-foreground">Day Length</div>
+                        <div className="mb-1 text-[11px] text-muted-foreground">Day Length</div>
                         <div className="flex items-center gap-1">
                           <input type="number" className="pv-input px-2 text-sm" min={1} step={1} value={d.maintaining.dayLengthMin} onChange={(e) => setMaintaining(p.key, "dayLengthMin", e.target.value)} aria-label={`${p.label} · Maintaining · Day Length from`} />
                           <span className="text-xs text-muted-foreground">–</span>
@@ -343,6 +351,13 @@ export function InboxRotationTool() {
                       </div>
                       <Field label="Daily Sends" aria={`${p.label} · Maintaining · Daily Sends`} value={d.maintaining.dailySends} onChange={(v) => setMaintaining(p.key, "dailySends", v)} />
                       <Field label="Email Interval" aria={`${p.label} · Maintaining · Email Interval`} value={d.maintaining.emailInterval} onChange={(v) => setMaintaining(p.key, "emailInterval", v)} unit="min" />
+                      <Field label="Warmup Emails" aria={`${p.label} · Maintaining · Warmup Emails`} value={d.maintaining.warmupEmails} onChange={(v) => setMaintaining(p.key, "warmupEmails", v)} />
+                    </div>
+                  </fieldset>
+                  <fieldset className="rounded-xl border border-border border-dashed p-2.5">
+                    <legend className="px-1 text-xs font-medium">Not sending cold</legend>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Field label="Warmup Emails" aria={`${p.label} · Not sending cold · Warmup Emails`} value={d.resting.warmupEmails} onChange={(v) => setResting(p.key, v)} />
                     </div>
                   </fieldset>
                   {ps.length > 0 && (
@@ -360,7 +375,7 @@ export function InboxRotationTool() {
             <span className="pv-chip" title="Set off on every inbox the rotation touches">
               Campaign Email Ramp-Up · always disabled
             </span>
-            <span className="text-xs text-muted-foreground">Day Length: days until the switch · Daily Sends: daily campaign email limit · Email Interval: minimum minutes between emails</span>
+            <span className="text-xs text-muted-foreground">Day Length: days until the switch · Daily Sends: daily campaign email limit · Email Interval: minimum minutes between emails · Warmup Emails: warmup daily limit — per cycle while sending, and once for the group not sending cold</span>
           </div>
 
           {settingsError && (
@@ -450,9 +465,7 @@ function Field({
 }) {
   return (
     <div>
-      {/* Two lines reserved: "Email Interval (min)" wraps at this width, and
-          the inputs across a cycle should sit on one line. */}
-      <div className="mb-1 min-h-[28px] text-[11px] leading-[14px] text-muted-foreground">
+      <div className="mb-1 text-[11px] text-muted-foreground">
         {label}
         {unit ? ` (${unit})` : ""}
       </div>

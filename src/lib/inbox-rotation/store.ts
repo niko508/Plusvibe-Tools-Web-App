@@ -12,6 +12,7 @@ import {
   validateProfile,
   validateSetup,
   type Profile,
+  type ProfileInput,
   type ProfileKey,
   type RotationSettings,
   type SetupInput,
@@ -64,7 +65,7 @@ export async function saveSettings(profiles: Partial<Record<ProfileKey, unknown>
   for (const [key, raw] of Object.entries(profiles)) {
     if (!isProfileKey(key) || raw === undefined) continue;
     const label = PROFILES.find((p) => p.key === key)?.label ?? key;
-    const p = (raw ?? {}) as { cycles?: unknown; maintaining?: unknown };
+    const p = (raw ?? {}) as ProfileInput;
     const ps = validateProfile(p, label);
     if (ps.length > 0) {
       problems.push(...ps);

@@ -13,6 +13,10 @@
 //   Day Length      how many days before the rotation switches
 //   Daily Sends     the daily campaign email limit
 //   Email Interval  the minimum interval between emails, in minutes
+//   Warmup Emails   the warmup daily limit while the group is sending
+//
+// and, once per profile, the warmup daily limit for the group that is NOT
+// sending cold — the resting group.
 //
 // Campaign Email Ramp-Up is always off — it is not a setting here.
 //
@@ -39,6 +43,8 @@ export interface Cycle {
   dailySends: number;
   /** Minimum interval between emails, in minutes. */
   emailInterval: number;
+  /** Warmup daily limit while sending. */
+  warmupEmails: number;
 }
 
 export interface Maintaining {
@@ -47,11 +53,18 @@ export interface Maintaining {
   dayLengthMax: number;
   dailySends: number;
   emailInterval: number;
+  warmupEmails: number;
+}
+
+export interface Resting {
+  /** Warmup daily limit for the group that is not sending cold. */
+  warmupEmails: number;
 }
 
 export interface Profile {
   cycles: Cycle[];
   maintaining: Maintaining;
+  resting: Resting;
 }
 
 export const CYCLE_COUNT = 5;
@@ -59,16 +72,24 @@ export const CYCLE_COUNT = 5;
 /** The one setting that is not a setting: ramp-up stays off on every inbox the rotation touches. */
 export const RAMP_UP_DISABLED = { bulk_is_slow_rampup: "no" } as const;
 
+/**
+ * Warmup numbers to start from — placeholders, not a plan: the written-up
+ * plan gave none, so these are here to be changed.
+ */
+export const DEFAULT_WARMUP_SENDING = 20;
+export const DEFAULT_WARMUP_RESTING = 40;
+
 /** The Azure (50) plan as written up; the other two start from the same numbers until changed. */
 export const DEFAULT_PROFILE: Profile = {
   cycles: [
-    { dayLength: 1, dailySends: 1, emailInterval: 180 },
-    { dayLength: 2, dailySends: 1, emailInterval: 180 },
-    { dayLength: 3, dailySends: 2, emailInterval: 180 },
-    { dayLength: 4, dailySends: 3, emailInterval: 120 },
-    { dayLength: 5, dailySends: 3, emailInterval: 120 },
+    { dayLength: 1, dailySends: 1, emailInterval: 180, warmupEmails: DEFAULT_WARMUP_SENDING },
+    { dayLength: 2, dailySends: 1, emailInterval: 180, warmupEmails: DEFAULT_WARMUP_SENDING },
+    { dayLength: 3, dailySends: 2, emailInterval: 180, warmupEmails: DEFAULT_WARMUP_SENDING },
+    { dayLength: 4, dailySends: 3, emailInterval: 120, warmupEmails: DEFAULT_WARMUP_SENDING },
+    { dayLength: 5, dailySends: 3, emailInterval: 120, warmupEmails: DEFAULT_WARMUP_SENDING },
   ],
-  maintaining: { dayLengthMin: 2, dayLengthMax: 5, dailySends: 3, emailInterval: 120 },
+  maintaining: { dayLengthMin: 2, dayLengthMax: 5, dailySends: 3, emailInterval: 120, warmupEmails: DEFAULT_WARMUP_SENDING },
+  resting: { warmupEmails: DEFAULT_WARMUP_RESTING },
 };
 
 export interface RotationSettings {
@@ -86,6 +107,7 @@ export const DEFAULT_SETTINGS: RotationSettings = {
 const MAX_DAYS = 365;
 const MAX_SENDS = 10_000;
 const MAX_INTERVAL = 24 * 60;
+const MAX_WARMUP = 1000;
 
 /** A whole number in range, or the problem in words. */
 function whole(raw: unknown, label: string, min: number, max: number): { value?: number; error?: string } {
@@ -106,6 +128,7 @@ export function validateCycle(c: Partial<Record<keyof Cycle, unknown>>, label: s
     whole(c.dayLength, `${label} · Day Length`, 1, MAX_DAYS).error,
     whole(c.dailySends, `${label} · Daily Sends`, 0, MAX_SENDS).error,
     whole(c.emailInterval, `${label} · Email Interval`, 1, MAX_INTERVAL).error,
+    whole(c.warmupEmails, `${label} · Warmup Emails`, 0, MAX_WARMUP).error,
   ].filter((e): e is string => !!e);
 }
 
@@ -117,6 +140,7 @@ export function validateMaintaining(m: Partial<Record<keyof Maintaining, unknown
     max.error,
     whole(m.dailySends, `${label} · Daily Sends`, 0, MAX_SENDS).error,
     whole(m.emailInterval, `${label} · Email Interval`, 1, MAX_INTERVAL).error,
+    whole(m.warmupEmails, `${label} · Warmup Emails`, 0, MAX_WARMUP).error,
   ].filter((e): e is string => !!e);
   if (min.value !== undefined && max.value !== undefined && min.value > max.value) {
     problems.push(`${label} · Day Length: the range runs from the smaller number to the larger.`);
@@ -124,8 +148,19 @@ export function validateMaintaining(m: Partial<Record<keyof Maintaining, unknown
   return problems;
 }
 
+export function validateResting(r: Partial<Record<keyof Resting, unknown>>, label: string): string[] {
+  return [whole(r.warmupEmails, `${label} · Warmup Emails`, 0, MAX_WARMUP).error].filter((e): e is string => !!e);
+}
+
+/** A profile as it may arrive: typed, or stored by an earlier build. */
+export interface ProfileInput {
+  cycles?: unknown;
+  maintaining?: unknown;
+  resting?: unknown;
+}
+
 /** Every problem in a profile as typed. Empty when it can be saved. */
-export function validateProfile(p: { cycles?: unknown; maintaining?: unknown }, label: string): string[] {
+export function validateProfile(p: ProfileInput, label: string): string[] {
   const problems: string[] = [];
   const cycles = Array.isArray(p.cycles) ? p.cycles : [];
   if (cycles.length !== CYCLE_COUNT) problems.push(`${label}: ${CYCLE_COUNT} cycles are needed.`);
@@ -138,23 +173,50 @@ export function validateProfile(p: { cycles?: unknown; maintaining?: unknown }, 
       `${label} · Maintaining`
     )
   );
+  problems.push(
+    ...validateResting(((p.resting ?? {}) as Partial<Record<keyof Resting, unknown>>), `${label} · Not sending cold`)
+  );
   return problems;
 }
 
 /** A profile as typed, with every number a number. Only call once it validates. */
-export function cleanProfile(p: { cycles: Partial<Record<keyof Cycle, unknown>>[]; maintaining: Partial<Record<keyof Maintaining, unknown>> }): Profile {
+export function cleanProfile(p: {
+  cycles: Partial<Record<keyof Cycle, unknown>>[];
+  maintaining: Partial<Record<keyof Maintaining, unknown>>;
+  resting: Partial<Record<keyof Resting, unknown>>;
+}): Profile {
   return {
     cycles: p.cycles.slice(0, CYCLE_COUNT).map((c) => ({
       dayLength: Number(c.dayLength),
       dailySends: Number(c.dailySends),
       emailInterval: Number(c.emailInterval),
+      warmupEmails: Number(c.warmupEmails),
     })),
     maintaining: {
       dayLengthMin: Number(p.maintaining.dayLengthMin),
       dayLengthMax: Number(p.maintaining.dayLengthMax),
       dailySends: Number(p.maintaining.dailySends),
       emailInterval: Number(p.maintaining.emailInterval),
+      warmupEmails: Number(p.maintaining.warmupEmails),
     },
+    resting: { warmupEmails: Number(p.resting.warmupEmails) },
+  };
+}
+
+/**
+ * A stored profile with the warmup fields filled in where a file written
+ * before they existed has none. Only the missing fields are touched, so the
+ * numbers someone did set are kept rather than thrown away with the profile.
+ */
+export function withWarmupDefaults(p: ProfileInput): ProfileInput {
+  const fill = (o: unknown, value: number) =>
+    o && typeof o === "object" && (o as Record<string, unknown>).warmupEmails === undefined
+      ? { ...(o as Record<string, unknown>), warmupEmails: value }
+      : o;
+  return {
+    cycles: Array.isArray(p.cycles) ? p.cycles.map((c) => fill(c, DEFAULT_WARMUP_SENDING)) : p.cycles,
+    maintaining: fill(p.maintaining, DEFAULT_WARMUP_SENDING),
+    resting: p.resting === undefined ? { warmupEmails: DEFAULT_WARMUP_RESTING } : p.resting,
   };
 }
 
@@ -166,7 +228,8 @@ export function normalizeSettings(raw: Partial<RotationSettings> | null | undefi
   const profiles = (raw?.profiles ?? {}) as Partial<Record<ProfileKey, unknown>>;
   const out = {} as Record<ProfileKey, Profile>;
   for (const { key, label } of PROFILES) {
-    const p = profiles[key] as { cycles?: unknown; maintaining?: unknown } | undefined;
+    const stored = profiles[key] as ProfileInput | undefined;
+    const p = stored ? withWarmupDefaults(stored) : undefined;
     out[key] =
       p && validateProfile(p, label).length === 0
         ? cleanProfile(p as Parameters<typeof cleanProfile>[0])
@@ -175,9 +238,9 @@ export function normalizeSettings(raw: Partial<RotationSettings> | null | undefi
   return { profiles: out, updatedAt: typeof raw?.updatedAt === "number" ? raw.updatedAt : 0 };
 }
 
-/** "1 day · 1 send/day · every 180 min" */
+/** "1 day · 1/day · every 180 min · warmup 20" */
 export function describeCycle(c: Cycle): string {
-  return `${c.dayLength} day${c.dayLength === 1 ? "" : "s"} · ${c.dailySends}/day · every ${c.emailInterval} min`;
+  return `${c.dayLength} day${c.dayLength === 1 ? "" : "s"} · ${c.dailySends}/day · every ${c.emailInterval} min · warmup ${c.warmupEmails}`;
 }
 
 // --- The per-workspace set-up ---------------------------------------------------
