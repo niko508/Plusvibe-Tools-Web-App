@@ -19,6 +19,13 @@ import type {
 } from "@/lib/jobs/campaign-types-types";
 import type { CampaignTypesSettings, Dominant } from "@/lib/campaign-types/settings";
 import type {
+  Profile,
+  ProfileKey,
+  RotationSettings,
+  SetupInput,
+  WorkspaceRotation,
+} from "@/lib/inbox-rotation/settings";
+import type {
   CampaignDetail,
   CampaignSummary,
   EmailAccountsResponse,
@@ -810,6 +817,41 @@ export function deleteCampaignTypesJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/campaign-types/delete", {
     method: "POST",
     body: { jobId },
+    signal,
+  });
+}
+
+// --- Inbox Rotation -----------------------------------------------------------
+
+export function fetchInboxRotationSettings(signal?: AbortSignal) {
+  return request<{ settings: RotationSettings }>("/api/jobs/inbox-rotation/settings", { signal });
+}
+
+/** Replaces the profiles given; the rest are kept. Refused whole if any fails to validate. */
+export function saveInboxRotationSettings(profiles: Partial<Record<ProfileKey, Profile>>, signal?: AbortSignal) {
+  return request<{ settings: RotationSettings }>("/api/jobs/inbox-rotation/settings", {
+    method: "PUT",
+    body: { profiles },
+    signal,
+  });
+}
+
+export function fetchInboxRotations(signal?: AbortSignal) {
+  return request<{ rotations: WorkspaceRotation[] }>("/api/jobs/inbox-rotation/rotations", { signal });
+}
+
+export function setUpInboxRotation(input: SetupInput, signal?: AbortSignal) {
+  return request<{ rotation: WorkspaceRotation }>("/api/jobs/inbox-rotation/rotations", {
+    method: "POST",
+    body: input,
+    signal,
+  });
+}
+
+export function removeInboxRotation(id: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/inbox-rotation/rotations", {
+    method: "DELETE",
+    body: { id },
     signal,
   });
 }

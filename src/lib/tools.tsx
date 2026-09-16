@@ -12,6 +12,7 @@ import {
   MoveIcon,
   CopyIcon,
   PlayIcon,
+  RefreshIcon,
 } from "@/components/icons";
 
 // Registry of tools shown on the landing page. Adding a new tool = add an entry
@@ -266,6 +267,16 @@ export const TOOLS: Tool[] = [
     status: "active",
     color: "emerald",
     Icon: PenIcon,
+  },
+  {
+    slug: "inbox-rotation",
+    name: "Inbox Rotation",
+    tagline: "Rotate the sending settings between a workspace's two sending groups",
+    description:
+      "Set a workspace up with the group that sends first and whether it starts on the ramp-up cycles or straight in the maintaining period, and keep the Azure (50), Azure (25) and Google settings the rotation applies.",
+    status: "active",
+    color: "cyan",
+    Icon: RefreshIcon,
   },
   {
     slug: "remove-inboxes",
