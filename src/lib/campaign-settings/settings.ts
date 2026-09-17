@@ -9,6 +9,7 @@
 
 import {
   advScheduleBody,
+  limitsOf,
   parseWeek,
   stringifyWeek,
   validateWeek,
@@ -239,8 +240,8 @@ export function wireValue(spec: SettingSpec, value: string | number): string | n
  *
  * `raw` is the campaign as the listing reports it, needed by settings that
  * are written from more than their own value: the advanced schedule carries
- * the campaign's own daily_limit, which the API requires inside it and which
- * this tool has no business changing.
+ * the campaign's own daily limit and new-lead cap, which the API requires
+ * inside it and which this tool has no business changing.
  */
 export function patchBody(
   workspaceId: string,
@@ -254,8 +255,8 @@ export function patchBody(
     if (spec?.kind === "schedule") {
       const week = parseWeek(c.value);
       if (!week) continue;
-      const limit = Number(raw?.daily_limit);
-      Object.assign(body, advScheduleBody(week, Number.isFinite(limit) ? limit : null));
+      const { dailyLimit, newLeadLimit } = limitsOf(raw);
+      Object.assign(body, advScheduleBody(week, dailyLimit, newLeadLimit));
       continue;
     }
     body[c.key] = spec ? wireValue(spec, c.value) : c.value;

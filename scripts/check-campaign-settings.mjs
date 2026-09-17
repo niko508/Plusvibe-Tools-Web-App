@@ -141,7 +141,7 @@ const sch = await importTs("@/lib/campaign-settings/schedule");
 const {
   WEEKDAYS, SLOTS_PER_DAY, emptySlots, emptyWeek, slotsToWindows, windowsToSlots, slotTime, pretty,
   weekToSlots, slotsToWeek, totalSlots, PRESETS, validateWeek, describeWeek, describeDays,
-  parseWeek, stringifyWeek, advScheduleBody, weekFromCampaign, DEFAULT_TIMEZONE,
+  parseWeek, stringifyWeek, advScheduleBody, limitsOf, weekFromCampaign, DEFAULT_TIMEZONE,
 } = sch;
 
 eq("a day is 48 half-hour slots", [SLOTS_PER_DAY, slotTime(0), slotTime(19), slotTime(47), slotTime(48)], [48, "00:00", "09:30", "23:30", "24:00"]);
@@ -203,9 +203,20 @@ eq("…carries the timezone and only the days that send", [body.adv_schedule.tim
   ["America/New_York", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]]);
 eq("…each as a list of windows", body.adv_schedule.windows.Monday, [{ from: "09:00", to: "17:00" }]);
 eq("…and the campaign's own daily limit, which this tool does not change", body.adv_schedule.daily_limit, 600);
-// Sending a guess at the new-lead cap would silently change it.
-eq("the new-lead cap is never guessed at", "daily_limit_new_lead" in body.adv_schedule, false);
+// The live API refuses a body without daily_limit_new_lead and documents
+// null as "no separate new-lead cap" — so it is always present, and never a guess.
+eq("the new-lead cap is always present, null when there is none to carry", body.adv_schedule.daily_limit_new_lead, null);
+eq("…and the campaign's own when it has one", advScheduleBody(week, 600, 80).adv_schedule.daily_limit_new_lead, 80);
 eq("a campaign with no limit to carry gets none", "daily_limit" in advScheduleBody(week, null).adv_schedule, false);
+// Where the limits come from: the campaign, or the advanced schedule it reports.
+eq("limits off a listed campaign", limitsOf({ daily_limit: 600, daily_limit_new_lead: 80 }), { dailyLimit: 600, newLeadLimit: 80 });
+eq("a new-lead cap of 0 is no cap", limitsOf({ daily_limit: 600, daily_limit_new_lead: 0 }), { dailyLimit: 600, newLeadLimit: null });
+eq("a campaign reporting neither", limitsOf({}), { dailyLimit: null, newLeadLimit: null });
+eq("…or nothing at all", limitsOf(null), { dailyLimit: null, newLeadLimit: null });
+eq("strings are read as numbers", limitsOf({ daily_limit: "150", daily_limit_new_lead: "40" }), { dailyLimit: 150, newLeadLimit: 40 });
+eq("an advanced schedule the campaign reports carries its own, which win",
+  limitsOf({ daily_limit: 600, daily_limit_new_lead: 80, adv_schedule: { daily_limit: 250, daily_limit_new_lead: 100 } }), { dailyLimit: 250, newLeadLimit: 100 });
+eq("…falling back to the campaign's where it has none", limitsOf({ daily_limit: 600, adv_schedule: { daily_limit_new_lead: null } }), { dailyLimit: 600, newLeadLimit: null });
 
 // Reading one off a campaign, to copy it onto others.
 eq("nothing to read", [weekFromCampaign(null), weekFromCampaign({}), weekFromCampaign({ schedule: {} })], [null, null, null]);
@@ -237,10 +248,11 @@ eq("nonsense does not", validateChange({ key: "adv_schedule", value: "not json" 
 // A campaign that doesn't report one always needs the write.
 eq("a campaign that reports no advanced schedule needs it written", diffCampaign(SCHED_CHANGE, { daily_limit: 600 }).length, 1);
 eq("…and one already on it is left alone", diffCampaign(SCHED_CHANGE, { adv_schedule: { timezone: week.timezone, windows: week.windows } }), []);
-eq("the PATCH body carries both fields and the campaign's limit", patchBody("w1", "c1", SCHED_CHANGE, { daily_limit: 250 }), {
+eq("the PATCH body carries both fields and the campaign's limits", patchBody("w1", "c1", SCHED_CHANGE, { daily_limit: 250, daily_limit_new_lead: 60 }), {
   workspace_id: "w1", campaign_id: "c1", use_adv_schedule: true,
-  adv_schedule: { timezone: "America/New_York", windows: advScheduleBody(week, 250).adv_schedule.windows, daily_limit: 250 },
+  adv_schedule: { timezone: "America/New_York", windows: advScheduleBody(week, 250).adv_schedule.windows, daily_limit: 250, daily_limit_new_lead: 60 },
 });
+eq("…with a null new-lead cap when the campaign has none", patchBody("w1", "c1", SCHED_CHANGE, { daily_limit: 250 }).adv_schedule.daily_limit_new_lead, null);
 // The listing doesn't report it, so a written schedule reads back as nothing:
 // that is unconfirmable, not a failed write.
 eq("a schedule that can't be read back is not called unverified", unverified(SCHED_CHANGE, { daily_limit: 600 }), []);

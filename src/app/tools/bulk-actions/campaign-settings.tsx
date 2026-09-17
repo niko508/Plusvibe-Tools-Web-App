@@ -274,7 +274,8 @@ export function CampaignSettings({
             <AlertIcon size={13} className="mt-0.5 shrink-0 text-warning" />
             <span>
               The campaign listing doesn&apos;t report an advanced schedule, so every active campaign gets it written
-              and none of them can be read back to confirm it. Each campaign keeps its own daily limit.
+              and none of them can be read back to confirm it. Each campaign keeps its own daily limit and new-lead
+              cap; one that reports no new-lead cap is written with none.
             </span>
           </p>
         )}

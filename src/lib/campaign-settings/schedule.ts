@@ -302,16 +302,16 @@ function normalizeWeek(raw: unknown): WeekSchedule | null {
 }
 
 /**
- * The two fields the API takes. `daily_limit` is required inside
- * adv_schedule, so the campaign's own is carried through rather than invented
- * — this tool sets the schedule, not the volume.
+ * The two fields the API takes. Both limits are required inside
+ * adv_schedule, so the campaign's own are carried through rather than
+ * invented — this tool sets the schedule, not the volume.
  *
- * `daily_limit_new_lead` is deliberately left out: it is not in the campaign
- * listing, so there is nothing to carry, and sending a guess would silently
- * change the new-lead cap. The plain schedule is written the same way
- * elsewhere in this app.
+ * `daily_limit_new_lead` is required too, but nullable: the live API refuses
+ * a body without it ('"adv_schedule.daily_limit_new_lead" is required') and
+ * documents null as "no separate new-lead cap". So the campaign's own cap is
+ * sent when it reports one, and null otherwise.
  */
-export function advScheduleBody(week: WeekSchedule, dailyLimit: number | null): Record<string, unknown> {
+export function advScheduleBody(week: WeekSchedule, dailyLimit: number | null, newLeadLimit: number | null = null): Record<string, unknown> {
   const windows = {} as Record<string, Window[]>;
   for (const d of WEEKDAYS) {
     const list = week.windows[d] ?? [];
@@ -319,7 +319,29 @@ export function advScheduleBody(week: WeekSchedule, dailyLimit: number | null): 
   }
   const adv: Record<string, unknown> = { timezone: week.timezone, windows };
   if (dailyLimit !== null) adv.daily_limit = dailyLimit;
+  adv.daily_limit_new_lead = newLeadLimit;
   return { use_adv_schedule: true, adv_schedule: adv };
+}
+
+/**
+ * The limits a campaign reports, to carry into its advanced schedule. The
+ * listing puts them on the campaign; an advanced schedule it does report
+ * carries its own, which win. A new-lead cap of 0 is "no cap", the way the
+ * rest of this app reads it, and goes out as null.
+ */
+export function limitsOf(raw: Record<string, unknown> | null | undefined): { dailyLimit: number | null; newLeadLimit: number | null } {
+  const adv = (raw?.adv_schedule ?? {}) as Record<string, unknown>;
+  const pick = (k: string): unknown => (adv[k] !== undefined && adv[k] !== null ? adv[k] : raw?.[k]);
+  const num = (v: unknown): number | null => {
+    if (v === undefined || v === null || v === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const newLead = num(pick("daily_limit_new_lead"));
+  return {
+    dailyLimit: num(pick("daily_limit")),
+    newLeadLimit: newLead !== null && newLead > 0 ? newLead : null,
+  };
 }
 
 export interface CampaignWeek {
