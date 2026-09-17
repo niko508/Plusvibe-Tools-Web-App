@@ -7,7 +7,16 @@
 // catalogue, validation, the per-campaign diff and the read-back check, with
 // no API calls, so all of it is unit-tested.
 
-export type SettingKind = "toggle" | "choice" | "number" | "ratio";
+import {
+  advScheduleBody,
+  parseWeek,
+  stringifyWeek,
+  validateWeek,
+  describeWeek,
+  weekFromCampaign,
+} from "./schedule";
+
+export type SettingKind = "toggle" | "choice" | "number" | "ratio" | "schedule";
 
 export interface SettingSpec {
   key: string;
@@ -73,7 +82,23 @@ export const SETTINGS: SettingSpec[] = [
     min: 0,
     max: 100,
   },
+  {
+    key: "adv_schedule",
+    label: "Advanced scheduling",
+    hint: "A different sending window — or several — for each day of the week.",
+    kind: "schedule",
+  },
 ];
+
+/**
+ * Settings the campaign listing reports, so a write can be read back and
+ * confirmed. Advanced scheduling is not among them: /campaign/list-all does
+ * not return `adv_schedule`, so a campaign that has one looks exactly like a
+ * campaign that has none.
+ */
+export function confirmable(spec: SettingSpec): boolean {
+  return spec.kind !== "schedule";
+}
 
 export function specFor(key: string): SettingSpec | undefined {
   return SETTINGS.find((s) => s.key === key);
@@ -92,6 +117,15 @@ export interface SettingChange {
  * Null when the campaign doesn't report it (or reports garbage).
  */
 export function readValue(spec: SettingSpec, raw: unknown): string | number | null {
+  if (spec.kind === "schedule") {
+    // Read only the ADVANCED shape, and only when the campaign reports it:
+    // the simple `schedule` every campaign carries says nothing about whether
+    // an advanced one is set, so treating it as one would skip campaigns that
+    // still need the write. Null here means "can't tell", which diffCampaign
+    // reads as "needs writing".
+    const week = weekFromCampaign(raw as Record<string, unknown> | null);
+    return week?.exact ? stringifyWeek(week.week) : null;
+  }
   if (raw === undefined || raw === null) return null;
   if (spec.kind === "ratio") {
     // On the wire this is `send_priority`: the FOLLOW-UP share, 0 to 1. The
@@ -126,6 +160,11 @@ export function validateChange(c: SettingChange): string[] {
   }
   if (spec.kind === "choice") {
     return spec.choices?.some((o) => o.value === c.value) ? [] : [`${spec.label}: pick one of the options.`];
+  }
+  if (spec.kind === "schedule") {
+    const week = parseWeek(c.value);
+    if (!week) return [`${spec.label}: the weekly schedule could not be read.`];
+    return validateWeek(week);
   }
   if (spec.kind === "ratio") {
     const n = typeof c.value === "number" ? c.value : String(c.value).trim() === "" ? NaN : Number(c.value);
@@ -169,12 +208,15 @@ export function prepareChanges(inputs: SettingChange[]): ChangesResult {
  * The changes a campaign actually needs: those whose current value differs
  * from the wanted one. A setting the campaign doesn't report is treated as
  * needing the write — better one harmless write than a silent skip.
+ *
+ * A schedule is read from the whole campaign rather than one field of it,
+ * since the API spreads it across several.
  */
 export function diffCampaign(changes: SettingChange[], raw: Record<string, unknown>): SettingChange[] {
   return changes.filter((c) => {
     const spec = specFor(c.key);
     if (!spec) return false;
-    const current = readValue(spec, raw[c.key]);
+    const current = readValue(spec, spec.kind === "schedule" ? raw : raw[c.key]);
     return current === null || current !== c.value;
   });
 }
@@ -192,19 +234,62 @@ export function wireValue(spec: SettingSpec, value: string | number): string | n
   return Math.round((100 - percent)) / 100;
 }
 
-/** The PATCH body for a set of changes. */
-export function patchBody(workspaceId: string, campaignId: string, changes: SettingChange[]): Record<string, unknown> {
+/**
+ * The PATCH body for a set of changes.
+ *
+ * `raw` is the campaign as the listing reports it, needed by settings that
+ * are written from more than their own value: the advanced schedule carries
+ * the campaign's own daily_limit, which the API requires inside it and which
+ * this tool has no business changing.
+ */
+export function patchBody(
+  workspaceId: string,
+  campaignId: string,
+  changes: SettingChange[],
+  raw?: Record<string, unknown>
+): Record<string, unknown> {
   const body: Record<string, unknown> = { workspace_id: workspaceId, campaign_id: campaignId };
   for (const c of changes) {
     const spec = specFor(c.key);
+    if (spec?.kind === "schedule") {
+      const week = parseWeek(c.value);
+      if (!week) continue;
+      const limit = Number(raw?.daily_limit);
+      Object.assign(body, advScheduleBody(week, Number.isFinite(limit) ? limit : null));
+      continue;
+    }
     body[c.key] = spec ? wireValue(spec, c.value) : c.value;
   }
   return body;
 }
 
-/** After a write: the changes that did NOT read back as wanted. */
+/**
+ * After a write: the changes that did NOT read back as wanted.
+ *
+ * Settings the listing doesn't report are left out — an advanced schedule
+ * reads back as nothing whether it was stored or not, so calling it
+ * unverified would report every successful write as a failure. What they are
+ * is unconfirmable, which is a different thing and said separately.
+ */
 export function unverified(changes: SettingChange[], raw: Record<string, unknown>): SettingChange[] {
-  return diffCampaign(changes, raw);
+  return diffCampaign(
+    changes.filter((c) => {
+      const spec = specFor(c.key);
+      if (!spec) return false;
+      if (confirmable(spec)) return true;
+      // Unless the API did report it, in which case it can be checked.
+      return readValue(spec, raw) !== null;
+    }),
+    raw
+  );
+}
+
+/** Changes that were written but cannot be read back to confirm. */
+export function unconfirmable(changes: SettingChange[], raw: Record<string, unknown>): SettingChange[] {
+  return changes.filter((c) => {
+    const spec = specFor(c.key);
+    return !!spec && !confirmable(spec) && readValue(spec, raw) === null;
+  });
 }
 
 /** "ESP matching → On, Stop on reply → Off" */
@@ -220,7 +305,9 @@ export function describeChanges(changes: SettingChange[]): string {
             ? spec.choices?.find((o) => o.value === c.value)?.label ?? String(c.value)
             : spec.kind === "ratio"
               ? describeRatio(Number(c.value))
-              : `${spec.unit === "$" ? "$" : ""}${c.value}${spec.unit === "%" ? "%" : ""}`;
+              : spec.kind === "schedule"
+                ? describeScheduleValue(c.value)
+                : `${spec.unit === "$" ? "$" : ""}${c.value}${spec.unit === "%" ? "%" : ""}`;
       return `${spec.label} → ${v}`;
     })
     .join(", ");
@@ -231,6 +318,12 @@ export function describeRatio(newLeads: number): string {
   const preset = RATIO_PRESETS.find((p) => p.newLeads === newLeads);
   if (preset) return preset.label;
   return `${newLeads}% new / ${100 - newLeads}% follow-ups`;
+}
+
+/** "Mon–Fri 9am–5pm (America/New_York)" */
+export function describeScheduleValue(value: string | number): string {
+  const week = parseWeek(value);
+  return week ? `${describeWeek(week)} (${week.timezone})` : "a weekly schedule";
 }
 
 /** Statuses the job touches: live campaigns only. */

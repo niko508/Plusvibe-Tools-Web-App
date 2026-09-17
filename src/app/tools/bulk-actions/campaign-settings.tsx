@@ -11,6 +11,13 @@ import {
   type SettingChange,
 } from "@/lib/campaign-settings/settings";
 import {
+  DEFAULT_TIMEZONE,
+  PRESETS as SCHEDULE_PRESETS,
+  slotsToWeek,
+  stringifyWeek,
+} from "@/lib/campaign-settings/schedule";
+import { ScheduleEditor } from "./schedule-editor";
+import {
   startCampaignSettings,
   listCampaignSettingsJobs,
   abortCampaignSettingsJob,
@@ -74,7 +81,11 @@ export function CampaignSettings({
             ? spec.choices?.[0].value ?? ""
             : spec?.kind === "ratio"
               ? 50 // Balanced, the middle of Plusvibe's own presets
-              : spec?.min ?? 0;
+              : spec?.kind === "schedule"
+                ? // Business hours to start from: a blank grid would stop
+                  // every campaign it was applied to.
+                  stringifyWeek(slotsToWeek(SCHEDULE_PRESETS[0].build(), DEFAULT_TIMEZONE))
+                : spec?.min ?? 0;
       return next;
     });
   }
@@ -218,6 +229,16 @@ export function CampaignSettings({
                       </div>
                     </div>
                   )}
+                  {/* The grid needs the full width of the card. */}
+                  {on && s.kind === "schedule" && (
+                    <div className="w-full pl-[26px]">
+                      <ScheduleEditor
+                        value={String(value ?? "")}
+                        onChange={(next) => setValue(s.key, next)}
+                        workspaces={workspaces}
+                      />
+                    </div>
+                  )}
                   {on && s.kind === "number" && (
                     <div className="flex items-center gap-1.5 text-sm">
                       {s.unit === "$" && <span className="text-muted-foreground">$</span>}
@@ -248,6 +269,15 @@ export function CampaignSettings({
           draft, completed and archived campaigns are left alone. Only the ticked settings are written, and only on
           campaigns where they differ; each campaign is read back afterwards to confirm.
         </p>
+        {"adv_schedule" in picked && (
+          <p className="flex gap-1.5 text-xs text-muted-foreground">
+            <AlertIcon size={13} className="mt-0.5 shrink-0 text-warning" />
+            <span>
+              The campaign listing doesn&apos;t report an advanced schedule, so every active campaign gets it written
+              and none of them can be read back to confirm it. Each campaign keeps its own daily limit.
+            </span>
+          </p>
+        )}
 
         {prepared.problems.length > 0 && (
           <p className="flex gap-1.5 text-xs text-warning">
@@ -433,6 +463,14 @@ function JobCard({
                             {c.state === "changed" && (
                               <span className={c.verified ? "text-success" : "text-warning"}>
                                 changed{c.verified ? "" : ` · not confirmed: ${(c.unverified ?? []).map(labelFor).join(", ")}`}
+                                {/* Written, but the listing can't report it — said plainly rather than
+                                    counted as confirmed or as a failure. */}
+                                {(c.unconfirmed ?? []).length > 0 && (
+                                  <span className="text-muted-foreground">
+                                    {" "}
+                                    · written, not checkable: {(c.unconfirmed ?? []).map(labelFor).join(", ")}
+                                  </span>
+                                )}
                               </span>
                             )}
                             {c.state === "updating" && <Spinner size={10} />}

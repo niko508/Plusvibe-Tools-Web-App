@@ -14,6 +14,7 @@ import {
   patchBody,
   prepareChanges,
   unverified,
+  unconfirmable,
 } from "@/lib/campaign-settings/settings";
 import type {
   CampaignOutcome,
@@ -238,7 +239,9 @@ async function runJob(id: string) {
           state: needed.length === 0 ? "already" : "pending",
           needed: needed.map((c) => c.key),
         };
-        return { outcome, needed };
+        // The raw campaign travels with the plan: the advanced schedule is
+        // written with the campaign's own daily_limit inside it.
+        return { outcome, needed, raw };
       });
       ws.campaigns = plans.map((p) => p.outcome);
       rec.progress.campaignsFound += ws.campaigns.length;
@@ -246,7 +249,7 @@ async function runJob(id: string) {
       await touch();
 
       let sinceFlush = 0;
-      for (const { outcome: c, needed } of plans) {
+      for (const { outcome: c, needed, raw } of plans) {
         check();
         if (c.state === "already") {
           rec.progress.already += 1;
@@ -259,7 +262,7 @@ async function runJob(id: string) {
           await plusvibePatch<unknown>({
             apiKey,
             path: "/campaign/update/campaign",
-            body: patchBody(ws.workspaceId, c.campaignId, needed),
+            body: patchBody(ws.workspaceId, c.campaignId, needed, raw),
           });
           // Read back: the PATCH response doesn't echo the settings.
           await acquireSlot();
@@ -267,6 +270,8 @@ async function runJob(id: string) {
           const missing = after ? unverified(needed, after) : needed;
           c.verified = missing.length === 0;
           c.unverified = missing.map((x) => x.key);
+          const unsure = after ? unconfirmable(needed, after) : [];
+          if (unsure.length > 0) c.unconfirmed = unsure.map((x) => x.key);
           c.state = "changed";
           rec.progress.changed += 1;
           if (!c.verified) {

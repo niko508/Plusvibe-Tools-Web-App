@@ -23,6 +23,11 @@ export interface CampaignOutcome {
   verified?: boolean;
   /** Settings that did not read back as wanted. */
   unverified?: string[];
+  /**
+   * Settings written but not readable back, so nothing here can confirm them
+   * — the advanced schedule, which the campaign listing does not report.
+   */
+  unconfirmed?: string[];
   error?: string;
 }
 

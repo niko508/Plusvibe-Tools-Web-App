@@ -18,6 +18,7 @@ import type {
   CampaignTypesStartPayload,
 } from "@/lib/jobs/campaign-types-types";
 import type { CampaignTypesSettings, Dominant } from "@/lib/campaign-types/settings";
+import type { WeekSchedule } from "@/lib/campaign-settings/schedule";
 import type {
   Profile,
   ProfileKey,
@@ -872,6 +873,18 @@ export function removeInboxRotation(id: string, signal?: AbortSignal) {
     body: { id },
     signal,
   });
+}
+
+/** One campaign's sending schedule as a week, for copying it onto others. */
+export function fetchCampaignSchedule(
+  params: { workspace_id: string; campaign_id: string },
+  signal?: AbortSignal
+) {
+  const qs = new URLSearchParams(params);
+  return request<{ week: WeekSchedule; exact: boolean }>(
+    `/api/bulk-actions/campaign-schedule?${qs.toString()}`,
+    { signal }
+  );
 }
 
 export function fetchCampaignTypesSettings(signal?: AbortSignal) {
