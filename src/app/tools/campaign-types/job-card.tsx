@@ -78,7 +78,8 @@ export function JobCard({
               summary = `${sourcesDone} / ${sources.length} original${sources.length === 1 ? "" : "s"}`;
             } else {
               const done = tagTargets.filter((t) => t.state === "done").length;
-              summary = `${done} / ${tagTargets.length} tagged${tagging.tagsCreated?.length ? ` · created ${tagging.tagsCreated.join(", ")}` : ""}`;
+              const removed = tagTargets.filter((t) => t.removed).length;
+              summary = `${done} / ${tagTargets.length} tagged${removed ? ` · ${removed} had the other pool's tag taken off` : ""}${tagging.tagsCreated?.length ? ` · created ${tagging.tagsCreated.join(", ")}` : ""}`;
             }
           }
           return (
@@ -182,7 +183,11 @@ export function JobCard({
             <SourceDetails key={s.campaignId || s.campaignName} source={s} many={sources.length > 1} />
           ))}
           {tagTargets.map((t) => (
-            <Detail key={`tag-${t.campaignId}`} label={`${t.tag} · ${shortName(t.name)}`} value={t.state === "error" ? t.error || "failed" : t.state} />
+            <Detail
+              key={`tag-${t.campaignId}`}
+              label={`${t.tag} · ${shortName(t.name)}`}
+              value={t.state === "error" ? t.error || "failed" : t.removed ? `${t.state} · ${t.removed} taken off` : t.state}
+            />
           ))}
         </div>
       )}

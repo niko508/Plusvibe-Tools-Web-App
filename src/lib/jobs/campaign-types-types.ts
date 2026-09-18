@@ -233,6 +233,8 @@ export interface TagTarget {
   name: string;
   /** "google-pool" or "microsoft-pool". */
   tag: string;
+  /** The other pool's tag, found on the campaign and taken off. */
+  removed?: string;
   state: PhaseState;
   error?: string;
 }

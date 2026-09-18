@@ -17,7 +17,7 @@ import { buildReuseIndex, matchCompanions, normalizeName } from "@/lib/campaign-
 import { rolesFor, type CampaignKind } from "@/lib/campaign-types/kinds";
 import { poolOf, sidesFor } from "@/lib/campaign-types/pools";
 import { planSegmentMoves, segmentKey, type SegmentRule } from "@/lib/campaign-types/segments";
-import { assignCampaignTag, resolvePoolTags } from "@/lib/campaign-types/tag-campaigns";
+import { assignCampaignTag, readCampaignTags, resolvePoolTags, unassignCampaignTag } from "@/lib/campaign-types/tag-campaigns";
 import type { CampaignSummary } from "@/lib/plusvibe-types";
 import type {
   ActivationTarget,
@@ -1072,14 +1072,38 @@ async function runTagging(ctx: RunCtx) {
     return;
   }
 
+  // What every campaign carries now. A copy duplicated from an original that
+  // was already tagged arrives with that tag, so the wrong pool's tag has to
+  // come off — and only off the campaigns found carrying it.
+  let carried = new Map<string, string[]>();
+  try {
+    check();
+    carried = await readCampaignTags(apiKey, workspaceId);
+  } catch (err) {
+    if (err instanceof AbortedError || ctx.m.aborted) throw err;
+    pushError(rec, `Could not read the campaigns' current tags: ${msg(err)}. The pool tags were added, but a copy that inherited the other pool's tag keeps it — check the 🔵 campaigns for google-pool.`);
+  }
+
   let failed = false;
   for (const pool of ["google", "microsoft"] as const) {
     check();
-    const tagName = pool === "google" ? "google-pool" : "microsoft-pool";
+    const other = pool === "google" ? "microsoft" : "google";
+    const tagName = `${pool}-pool`;
+    const wrongName = `${other}-pool`;
     const mine = targets.filter((t) => t.tag === tagName);
     if (mine.length === 0) continue;
     for (const t of mine) t.state = "running";
     await persist(id);
+
+    const wrong = mine.filter((t) => (carried.get(t.campaignId) ?? []).includes(ids[other]));
+    try {
+      await unassignCampaignTag(apiKey, workspaceId, wrong.map((t) => t.campaignId), ids[other]);
+      for (const t of wrong) t.removed = wrongName;
+    } catch (err) {
+      if (err instanceof AbortedError || ctx.m.aborted) throw err;
+      failed = true;
+      pushError(rec, `Could not take ${wrongName} off ${wrong.length} campaign${wrong.length === 1 ? "" : "s"} that inherited it: ${msg(err)}. Remove it in Plusvibe; nothing else is affected.`);
+    }
     try {
       await assignCampaignTag(apiKey, workspaceId, mine.map((t) => t.campaignId), ids[pool]);
       for (const t of mine) t.state = "done";
