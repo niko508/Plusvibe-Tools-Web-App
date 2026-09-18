@@ -4,28 +4,20 @@ import { createHash, randomUUID } from "crypto";
 import { promises as fs, mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import { onShutdownFlush } from "@/lib/jobs/shutdown";
-import {
-  fetchCampaignLeads,
-  leadToPayload,
-  type LeadPayload,
-  type RawLead,
-} from "@/lib/plusvibe-leads";
+import { fetchCampaignLeads, leadToPayload, type LeadPayload, type RawLead } from "@/lib/plusvibe-leads";
 import { listCampaigns } from "@/lib/plusvibe-campaigns";
 import { moveLeadChunk, MOVE_CHUNK } from "@/lib/move-leads-core";
 import { UNMOVED_LABELS, type UnmovedLead, type UnmovedReason } from "@/lib/move-leads-plan";
 import { resolveLeadEsps } from "@/lib/campaign-types/resolve-esp";
-import {
-  ALL_AVAILABLE,
-  planSplitFor,
-  type Availability,
-} from "@/lib/campaign-types/split";
+import { planSplitFor, type Availability } from "@/lib/campaign-types/split";
 import { applyOptOutToCampaign } from "@/lib/campaign-types/apply-opt-out";
 import { applySignatureToCampaign } from "@/lib/campaign-types/apply-signature";
 import { duplicateCampaign, launchCampaign } from "@/lib/campaign-types/duplicate";
-import { setCampaignDailyLimit } from "@/lib/campaign-types/daily-limit";
-import { buildReuseIndex, matchMoveTargets, normalizeName } from "@/lib/campaign-types/match";
-import { limitForRole, runSettingsOf, sidesFor } from "@/lib/campaign-types/settings";
-import { loadSettings } from "@/lib/campaign-types/settings-store";
+import { buildReuseIndex, matchCompanions, normalizeName } from "@/lib/campaign-types/match";
+import { rolesFor, type CampaignKind } from "@/lib/campaign-types/kinds";
+import { poolOf, sidesFor } from "@/lib/campaign-types/pools";
+import { planSegmentMoves, segmentKey, type SegmentRule } from "@/lib/campaign-types/segments";
+import { assignCampaignTag, resolvePoolTags } from "@/lib/campaign-types/tag-campaigns";
 import type { CampaignSummary } from "@/lib/plusvibe-types";
 import type {
   ActivationTarget,
@@ -36,6 +28,9 @@ import type {
   CreatedRole,
   MoveTarget,
   PhaseState,
+  SourceInput,
+  SourceRun,
+  TagTarget,
 } from "@/lib/jobs/campaign-types-types";
 import {
   MAX_STORED_ERRORS,
@@ -47,25 +42,24 @@ import {
 
 // Server-side manager for Create All Campaign Types jobs.
 //
-// Four phases, in order:
-//   1 sorting     collect the source's NOT_CONTACTED leads, resolve each to
-//                 Microsoft / Google / neither by MX lookup, and put the
-//                 neither-leads on whichever side the dominant targeting
-//                 setting says
-//   2 duplicating create the five copies (sub-sequences included), set each
-//                 one's daily limit from the settings, add the opt-out spintax
-//                 to step 1 of the two Opt Out copies and swap the sign-off on
-//                 the two Signature copies
-//   3 moving      move each side into its campaigns (add → verify → delete)
-//   4 activating  launch all six, sub-sequences included
-//
-// The settings are read once, when the job is queued, and stored on it.
+// Three phases, in order:
+//   1 segmenting  read every original's NOT_CONTACTED leads, and move each
+//                 into the original its Segment field names — so a campaign
+//                 holds one segment's leads before it is copied
+//   2 building    each original in turn: sort its leads by mailbox provider
+//                 (Google stays plain, Microsoft and everyone else goes 🔵),
+//                 duplicate the copies asked for, add the opt-out line and
+//                 swap the sign-off, move each side into its campaigns
+//                 (add → verify → delete), launch everything
+//   3 tagging     every plain campaign is tagged google-pool, every 🔵 one
+//                 microsoft-pool; the tags are created in the workspace when
+//                 missing
 //
 // Runs in the Node process so the work survives the tab closing, and persists
 // to disk so a job can be read back later. The API key is memory-only.
 //
 // ONE JOB AT A TIME per API key, with the rest QUEUED behind it. The phases
-// create campaigns and move leads out of a live one, so two overlapping runs
+// create campaigns and move leads out of live ones, so two overlapping runs
 // would duplicate both and interleave the campaigns they produce. Starting a
 // second job while one is going therefore queues it rather than refusing it —
 // the run order is the order you pressed Start in.
@@ -116,19 +110,14 @@ async function persist(id: string) {
   if (!rec || !m) return;
   try {
     await ensureDir();
-    await fs.writeFile(
-      fileFor(id),
-      JSON.stringify({ ...rec, fingerprint: m.fingerprint }),
-      "utf8"
-    );
+    await fs.writeFile(fileFor(id), JSON.stringify({ ...rec, fingerprint: m.fingerprint }), "utf8");
   } catch {
     // best-effort; a failed write must not kill the run
   }
 }
 
 function flushRunningSync() {
-  const live = (r: CampaignTypesJob) =>
-    r.status === "running" || r.status === "queued";
+  const live = (r: CampaignTypesJob) => r.status === "running" || r.status === "queued";
   if (![...records.values()].some(live)) return;
   try {
     mkdirSync(JOBS_DIR, { recursive: true });
@@ -142,11 +131,7 @@ function flushRunningSync() {
     rec.status = "interrupted";
     rec.updatedAt = Date.now();
     try {
-      writeFileSync(
-        fileFor(id),
-        JSON.stringify({ ...rec, fingerprint: m.fingerprint }),
-        "utf8"
-      );
+      writeFileSync(fileFor(id), JSON.stringify({ ...rec, fingerprint: m.fingerprint }), "utf8");
     } catch {
       // best-effort
     }
@@ -155,117 +140,139 @@ function flushRunningSync() {
 
 onShutdownFlush(flushRunningSync);
 
+const emptySorting = () => ({
+  leadsFound: 0,
+  microsoft: 0,
+  google: 0,
+  other: 0,
+  domainsTotal: 0,
+  domainsResolved: 0,
+  unresolvedDomains: 0,
+  fromLeadField: 0,
+});
+
+const emptyMoving = () => ({ targets: [], staysInSource: 0, processed: 0, plannedTotal: 0 });
+
 /**
  * Brings a persisted record up to the current shape.
  *
- * Jobs written before this tool did its own duplication have no `created`,
- * `activation` or `sourceCampaignName`, and name their second phase
- * "optOutCopy". Rendering those crashed the whole page, so old records are
- * translated rather than trusted — and every array is defaulted, so a record
- * from any past or future shape can still be listed.
+ * Records from before this tool took several originals at once have one
+ * source spread over the record itself — sorting, created, moving,
+ * activation and a four-step phase — and no segment or tagging phase. They
+ * are folded into a single-entry `sources` with the two new phases skipped.
+ * Older still are records from before the tool did its own duplication.
+ * Rendering those crashed the whole page, so old records are translated
+ * rather than trusted — and every array is defaulted, so a record from any
+ * past or future shape can still be listed.
  */
 function migrateRecord(raw: CampaignTypesJob): CampaignTypesJob {
   const legacy = raw as unknown as {
-    campaigns?: { role: string; campaignId: string; name: string }[];
-    optOut?: {
-      role: string;
-      name: string;
-      state: PhaseState;
-      applied?: string[];
-      alreadyPresent?: string[];
-      error?: string;
-    }[];
+    sourceCampaignId?: string;
+    sourceCampaignName?: string;
+    sorting?: SourceRun["sorting"];
+    created?: CreatedCampaign[];
+    moving?: SourceRun["moving"];
+    activation?: ActivationTarget[];
+    phase?: string;
     phaseStates?: Record<string, PhaseState>;
+    campaigns?: { role: string; campaignId: string; name: string }[];
+    optOut?: { role: string; name: string; state: PhaseState; applied?: string[]; alreadyPresent?: string[]; error?: string }[];
   };
-
   const rec = raw as CampaignTypesJob;
-  const byRole = new Map(
-    (legacy.campaigns ?? []).map((c) => [c.role, c] as const)
-  );
-  const legacyOptOut = new Map(
-    (legacy.optOut ?? []).map((o) => [o.role, o] as const)
-  );
 
-  if (!Array.isArray(rec.created)) {
-    rec.created = CREATED_ROLES.map((role) => {
-      const old = byRole.get(role);
-      const optOut = legacyOptOut.get(role);
-      return {
-        role,
-        name: old?.name ?? role,
-        campaignId: old?.campaignId,
-        // These campaigns were made by hand back then, so they were adopted
-        // rather than duplicated — "reused" is the honest label.
-        reused: old ? true : undefined,
-        state: old ? ("done" as PhaseState) : ("pending" as PhaseState),
-        ...(OPT_OUT_ROLES.includes(role)
-          ? {
-              optOut: {
-                state: optOut?.state ?? ("pending" as PhaseState),
-                applied: optOut?.applied ?? [],
-                alreadyPresent: optOut?.alreadyPresent ?? [],
-                error: optOut?.error,
-              },
-            }
-          : {}),
-      };
-    });
+  if (!Array.isArray(rec.sources)) {
+    // A single-source record: fold it into sources[0].
+    const byRole = new Map((legacy.campaigns ?? []).map((c) => [c.role, c] as const));
+    const legacyOptOut = new Map((legacy.optOut ?? []).map((o) => [o.role, o] as const));
+    const created: CreatedCampaign[] = Array.isArray(legacy.created)
+      ? legacy.created
+      : CREATED_ROLES.map((role) => {
+          const old = byRole.get(role);
+          const optOut = legacyOptOut.get(role);
+          return {
+            role,
+            name: old?.name ?? role,
+            campaignId: old?.campaignId,
+            // Made by hand back then, so adopted rather than duplicated.
+            reused: old ? true : undefined,
+            state: old ? ("done" as PhaseState) : ("pending" as PhaseState),
+            ...(OPT_OUT_ROLES.includes(role)
+              ? {
+                  optOut: {
+                    state: optOut?.state ?? ("pending" as PhaseState),
+                    applied: optOut?.applied ?? [],
+                    alreadyPresent: optOut?.alreadyPresent ?? [],
+                    error: optOut?.error,
+                  },
+                }
+              : {}),
+          };
+        });
+    const sourceName = legacy.sourceCampaignName || byRole.get("source")?.name || rec.label || "";
+    const sourceId = legacy.sourceCampaignId || byRole.get("source")?.campaignId || "";
+    const ps = (legacy.phaseStates ?? {}) as Record<string, PhaseState>;
+    const oldPhase = legacy.phase === "optOutCopy" ? "duplicating" : legacy.phase;
+    const sourcePhase = (["sorting", "duplicating", "moving", "activating", "finished"] as const).find((p) => p === oldPhase) ?? "finished";
+    const phaseStates = {
+      sorting: ps.sorting ?? "pending",
+      duplicating: ps.duplicating ?? ps.optOutCopy ?? "pending",
+      moving: ps.moving ?? "pending",
+      activating: ps.activating ?? "skipped",
+    };
+    const activation: ActivationTarget[] = Array.isArray(legacy.activation)
+      ? legacy.activation
+      : (["source", ...CREATED_ROLES] as CampaignRole[]).map((role) => ({
+          role,
+          name: role === "source" ? sourceName : (created.find((c) => c.role === role)?.name ?? role),
+          state: "skipped" as PhaseState,
+        }));
+    const moving = legacy.moving ?? emptyMoving();
+    moving.targets = Array.isArray(moving.targets) ? moving.targets : [];
+    const anyError = Object.values(phaseStates).includes("error");
+    rec.sources = [
+      {
+        campaignId: sourceId,
+        campaignName: sourceName,
+        state: rec.status === "done" ? "done" : anyError || rec.status === "error" ? "error" : rec.status === "running" ? "running" : "pending",
+        phase: sourcePhase,
+        phaseStates,
+        sorting: legacy.sorting ?? emptySorting(),
+        created,
+        moving,
+        activation,
+      },
+    ];
+    const building: PhaseState = Object.values(phaseStates).every((s) => s === "pending")
+      ? "pending"
+      : anyError
+        ? "error"
+        : rec.status === "running"
+          ? "running"
+          : "done";
+    rec.phaseStates = { segmenting: "skipped", building, tagging: "skipped" };
+    rec.phase = rec.status === "running" || rec.status === "queued" ? "building" : "finished";
+    rec.kinds = ["default", "optOut", "signature"];
+    for (const k of ["sourceCampaignId", "sourceCampaignName", "sorting", "created", "moving", "activation", "settings", "campaigns", "optOut"]) {
+      delete (rec as unknown as Record<string, unknown>)[k];
+    }
   }
-
-  if (!rec.sourceCampaignName) {
-    rec.sourceCampaignName = byRole.get("source")?.name ?? rec.label ?? "";
-  }
-  if (!rec.sourceCampaignId) {
-    rec.sourceCampaignId = byRole.get("source")?.campaignId ?? "";
-  }
-
-  // Activation didn't exist then, so it's shown as skipped rather than pending
-  // — those runs were never going to launch anything.
-  if (!Array.isArray(rec.activation)) {
-    rec.activation = (["source", ...CREATED_ROLES] as CampaignRole[]).map(
-      (role) => ({
-        role,
-        name:
-          role === "source"
-            ? rec.sourceCampaignName
-            : (rec.created.find((c) => c.role === role)?.name ?? role),
-        state: "skipped" as PhaseState,
-      })
-    );
-  }
-
-  const ps = (legacy.phaseStates ?? {}) as Record<string, PhaseState>;
-  rec.phaseStates = {
-    sorting: ps.sorting ?? "pending",
-    duplicating: ps.duplicating ?? ps.optOutCopy ?? "pending",
-    moving: ps.moving ?? "pending",
-    activating: ps.activating ?? "skipped",
-  };
-  if ((rec.phase as string) === "optOutCopy") rec.phase = "duplicating";
 
   // Everything the UI iterates, defaulted.
   rec.errors = Array.isArray(rec.errors) ? rec.errors : [];
-  rec.moving = rec.moving ?? {
-    targets: [],
-    staysInSource: 0,
-    processed: 0,
-    plannedTotal: 0,
-  };
-  rec.moving.targets = Array.isArray(rec.moving.targets)
-    ? rec.moving.targets
-    : [];
-  rec.sorting = rec.sorting ?? {
-    leadsFound: 0,
-    microsoft: 0,
-    other: 0,
-    domainsTotal: 0,
-    domainsResolved: 0,
-    unresolvedDomains: 0,
-    fromLeadField: 0,
-  };
-
-  delete (rec as unknown as { campaigns?: unknown }).campaigns;
-  delete (rec as unknown as { optOut?: unknown }).optOut;
+  rec.sources = rec.sources.map((s) => ({
+    ...s,
+    sorting: s.sorting ?? emptySorting(),
+    created: Array.isArray(s.created) ? s.created : [],
+    moving: { ...(s.moving ?? emptyMoving()), targets: Array.isArray(s.moving?.targets) ? s.moving.targets : [] },
+    activation: Array.isArray(s.activation) ? s.activation : [],
+    phaseStates: s.phaseStates ?? { sorting: "pending", duplicating: "pending", moving: "pending", activating: "pending" },
+  }));
+  rec.segmenting = rec.segmenting ?? { rules: [], leadsFound: 0, stayed: 0, unmapped: 0, unmappedSegments: [], plannedTotal: 0, processed: 0, moved: 0 };
+  rec.segmenting.rules = Array.isArray(rec.segmenting.rules) ? rec.segmenting.rules : [];
+  rec.tagging = rec.tagging ?? { targets: [], tagsCreated: [] };
+  rec.tagging.targets = Array.isArray(rec.tagging.targets) ? rec.tagging.targets : [];
+  rec.kinds = Array.isArray(rec.kinds) ? rec.kinds : ["default", "optOut", "signature"];
+  rec.phaseStates = rec.phaseStates ?? { segmenting: "pending", building: "pending", tagging: "pending" };
   return rec;
 }
 
@@ -278,9 +285,7 @@ async function loadOnce() {
       if (!f.endsWith(".json")) continue;
       try {
         const raw = await fs.readFile(path.join(JOBS_DIR, f), "utf8");
-        const parsed = JSON.parse(raw) as CampaignTypesJob & {
-          fingerprint?: string;
-        };
+        const parsed = JSON.parse(raw) as CampaignTypesJob & { fingerprint?: string };
         const fingerprint = parsed.fingerprint ?? "";
         delete (parsed as { fingerprint?: string }).fingerprint;
         // A queued job is as dead as a running one across a restart: the API
@@ -306,7 +311,10 @@ async function loadOnce() {
 
 /** Raised when a job can't even be queued. */
 export class QueueRejectedError extends Error {
-  constructor(message: string, readonly existingJobId?: string) {
+  constructor(
+    message: string,
+    readonly existingJobId?: string
+  ) {
     super(message);
     this.name = "QueueRejectedError";
   }
@@ -365,13 +373,9 @@ function pump(fp: string) {
     const rec = records.get(id);
     const m = meta.get(id);
     // Deleted, cancelled, or missing its key — not runnable, take the next.
-    if (!rec || !m || rec.status !== "queued" || m.aborted || !m.apiKey) {
-      continue;
-    }
+    if (!rec || !m || rec.status !== "queued" || m.aborted || !m.apiKey) continue;
 
     rec.status = "running";
-    rec.phase = "sorting";
-    rec.phaseStates.sorting = "running";
     rec.startedAt = Date.now();
     rec.updatedAt = rec.startedAt;
     void persist(id);
@@ -382,102 +386,37 @@ function pump(fp: string) {
   }
 }
 
+/** "🟡 A (August)", or "🟡 A (August) + 2 more". */
+export function labelFor(sources: { campaignName: string }[]): string {
+  if (sources.length === 0) return "";
+  const first = sources[0].campaignName;
+  return sources.length === 1 ? first : `${first} + ${sources.length - 1} more`;
+}
 
-export async function createJob(
-  apiKey: string,
-  payload: CampaignTypesStartPayload
-): Promise<string> {
-  await loadOnce();
-  const fp = fingerprintKey(apiKey);
-
-  // Queueing the SAME source campaign twice is almost always a double-click or
-  // a forgotten earlier press. The second run would find the three copies
-  // already there and adopt them, so it wouldn't corrupt anything — but it
-  // would sort and move the same leads again for no reason, and read as a
-  // second batch in the list. Re-running after one finishes is still allowed;
-  // this only blocks a duplicate that hasn't had its turn yet.
-  for (const [otherId, m] of meta) {
-    if (m.fingerprint !== fp) continue;
-    const other = records.get(otherId);
-    if (!other) continue;
-    if (other.status !== "queued" && other.status !== "running") continue;
-    if (other.sourceCampaignId !== payload.sourceCampaignId) continue;
-    throw new QueueRejectedError(
-      other.status === "running"
-        ? `"${other.sourceCampaignName}" is being processed right now. Wait for it to finish before running it again.`
-        : `"${other.sourceCampaignName}" is already waiting in the queue.`,
-      otherId
-    );
-  }
-
-  const waiting = queue.filter((id) => meta.get(id)?.fingerprint === fp).length;
-  if (waiting >= MAX_QUEUED) {
-    throw new QueueRejectedError(
-      `The queue is full (${MAX_QUEUED} waiting). Let some finish before adding more.`
-    );
-  }
-
-  const id = randomUUID();
-  const now = Date.now();
-  const mode = payload.mode === "move" ? "move" : "create";
-  // Taken now rather than when the run starts: what the user saw when they
-  // pressed Start is what a queued job does, however long it waits.
-  const settings = runSettingsOf(await loadSettings());
-
+function newSourceRun(src: SourceInput, roles: CreatedRole[], mode: "create" | "move", activate: boolean): SourceRun {
   // A move run edits no copy: the campaigns it finds already carry their
   // opt-out line and sign-off, and touching them again is not its business.
-  // It sets no limit either — those campaigns were created, and limited, by
-  // an earlier run.
-  const created: CreatedCampaign[] = CREATED_ROLES.map((role) => ({
+  const created: CreatedCampaign[] = roles.map((role) => ({
     role,
-    name: payload.names[role],
+    name: src.names[role],
     state: "pending" as const,
-    ...(mode === "create" && limitForRole(role, settings) !== null
-      ? { dailyLimit: { value: limitForRole(role, settings) as number, state: "pending" as const } }
-      : {}),
-    ...(mode === "create" && OPT_OUT_ROLES.includes(role)
-      ? { optOut: { state: "pending" as const, applied: [], alreadyPresent: [] } }
-      : {}),
+    ...(mode === "create" && OPT_OUT_ROLES.includes(role) ? { optOut: { state: "pending" as const, applied: [], alreadyPresent: [] } } : {}),
     ...(mode === "create" && SIGNATURE_ROLES.includes(role)
-      ? {
-          signature: {
-            state: "pending" as const,
-            applied: [],
-            alreadyPresent: [],
-            missing: [],
-          },
-        }
+      ? { signature: { state: "pending" as const, applied: [], alreadyPresent: [], missing: [] } }
       : {}),
   }));
-
-  const moving: MoveTarget[] = CREATED_ROLES.map((role) => ({
-    role,
-    name: payload.names[role],
-    planned: 0,
-    moved: 0,
-    state: "pending" as const,
-  }));
-
-  const activation: ActivationTarget[] =
-    mode === "move"
-      ? []
-      : (["source", ...CREATED_ROLES] as CampaignRole[]).map((role) => ({
-          role,
-          name:
-            role === "source"
-              ? payload.sourceCampaignName
-              : payload.names[role as CreatedRole],
-          state: "pending" as const,
-        }));
-
-  const record: CampaignTypesJob = {
-    id,
-    label: payload.sourceCampaignName,
-    mode,
-    // Always queued to begin with, even when nothing else is going: pump()
-    // starts it in the same tick, so there is one path into a run rather than
-    // two that could drift apart.
-    status: "queued",
+  const moving: MoveTarget[] = roles.map((role) => ({ role, name: src.names[role], planned: 0, moved: 0, state: "pending" as const }));
+  const activation: ActivationTarget[] = activate
+    ? (["source", ...roles] as CampaignRole[]).map((role) => ({
+        role,
+        name: role === "source" ? src.campaignName : src.names[role as CreatedRole],
+        state: "pending" as const,
+      }))
+    : [];
+  return {
+    campaignId: src.campaignId,
+    campaignName: src.campaignName,
+    state: "pending",
     phase: "sorting",
     phaseStates: {
       sorting: "pending",
@@ -485,30 +424,83 @@ export async function createJob(
       moving: "pending",
       // A move run launches nothing: the campaigns it moves into are already
       // running, and resuming a paused one is the user's decision.
-      activating:
-        mode === "move" || payload.activate === false ? "skipped" : "pending",
+      activating: activate ? "pending" : "skipped",
+    },
+    sorting: emptySorting(),
+    created,
+    moving: { targets: moving, staysInSource: 0, processed: 0, plannedTotal: 0 },
+    activation,
+  };
+}
+
+export async function createJob(apiKey: string, payload: CampaignTypesStartPayload): Promise<string> {
+  await loadOnce();
+  const fp = fingerprintKey(apiKey);
+
+  // Queueing the SAME original twice is almost always a double-click or a
+  // forgotten earlier press. The second run would find the copies already
+  // there and adopt them, so it wouldn't corrupt anything — but it would sort
+  // and move the same leads again for no reason, and read as a second batch
+  // in the list. Re-running after one finishes is still allowed; this only
+  // blocks a duplicate that hasn't had its turn yet.
+  const wanted = new Set(payload.sources.map((s) => s.campaignId));
+  for (const [otherId, m] of meta) {
+    if (m.fingerprint !== fp) continue;
+    const other = records.get(otherId);
+    if (!other) continue;
+    if (other.status !== "queued" && other.status !== "running") continue;
+    const clash = other.sources.find((s) => wanted.has(s.campaignId));
+    if (!clash) continue;
+    throw new QueueRejectedError(
+      other.status === "running"
+        ? `"${clash.campaignName}" is being processed right now. Wait for it to finish before running it again.`
+        : `"${clash.campaignName}" is already waiting in the queue.`,
+      otherId
+    );
+  }
+
+  const waiting = queue.filter((id) => meta.get(id)?.fingerprint === fp).length;
+  if (waiting >= MAX_QUEUED) {
+    throw new QueueRejectedError(`The queue is full (${MAX_QUEUED} waiting). Let some finish before adding more.`);
+  }
+
+  const id = randomUUID();
+  const now = Date.now();
+  const mode = payload.mode === "move" ? "move" : "create";
+  const activate = mode === "create" && payload.activate !== false;
+  const roles = rolesFor(payload.kinds);
+
+  const record: CampaignTypesJob = {
+    id,
+    label: labelFor(payload.sources),
+    mode,
+    // Always queued to begin with, even when nothing else is going: pump()
+    // starts it in the same tick, so there is one path into a run rather than
+    // two that could drift apart.
+    status: "queued",
+    phase: "segmenting",
+    phaseStates: {
+      segmenting: payload.rules.length > 0 ? "pending" : "skipped",
+      building: "pending",
+      tagging: "pending",
     },
     createdAt: now,
     updatedAt: now,
     workspaceId: payload.workspaceId,
     workspaceName: payload.workspaceName,
-    sourceCampaignId: payload.sourceCampaignId,
-    sourceCampaignName: payload.sourceCampaignName,
-    settings,
-    sorting: {
+    kinds: payload.kinds,
+    segmenting: {
+      rules: payload.rules.map((r) => ({ ...r, planned: 0, moved: 0, state: "pending" as const })),
       leadsFound: 0,
-      microsoft: 0,
-      google: 0,
-      other: 0,
-      dominant: settings.dominant,
-      domainsTotal: 0,
-      domainsResolved: 0,
-      unresolvedDomains: 0,
-      fromLeadField: 0,
+      stayed: 0,
+      unmapped: 0,
+      unmappedSegments: [],
+      plannedTotal: 0,
+      processed: 0,
+      moved: 0,
     },
-    created,
-    moving: { targets: moving, staysInSource: 0, processed: 0, plannedTotal: 0 },
-    activation,
+    sources: payload.sources.map((s) => newSourceRun(s, roles, mode, activate)),
+    tagging: { targets: [], tagsCreated: [] },
     errors: [],
   };
 
@@ -536,99 +528,618 @@ function pushError(rec: CampaignTypesJob, text: string) {
   else rec.errorsTruncated = true;
 }
 
+/** What one run's helpers share. */
+interface RunCtx {
+  id: string;
+  rec: CampaignTypesJob;
+  m: JobMeta;
+  apiKey: string;
+  workspaceId: string;
+  check: () => void;
+  /** Plusvibe's lead quota was reached; every further add would be refused. */
+  quotaHit: boolean;
+  sinceFlush: number;
+}
+
+interface MoveResult {
+  moved: number;
+  unmoved: UnmovedLead[];
+  /** Chunks that landed in the destination but could not be deleted from the source. */
+  inBoth: number;
+}
+
+/**
+ * Moves leads from one campaign into another, chunk by chunk, the way the
+ * split has always done it: a failed add is retried once, a lead Plusvibe
+ * turns away is named and left where it was, and a chunk that cannot be
+ * deleted from the source is counted as moved (the destination has it) and
+ * flagged. Nothing here stops the run.
+ */
+async function moveInto(
+  ctx: RunCtx,
+  opts: { from: string; to: string; toName: string; leads: RawLead[]; onProgress: (n: number) => void }
+): Promise<MoveResult> {
+  const { rec, m, apiKey, workspaceId, check } = ctx;
+  const result: MoveResult = { moved: 0, unmoved: [], inBoth: 0 };
+  const payloads: LeadPayload[] = opts.leads.map(leadToPayload).filter((p) => p.email);
+
+  for (let i = 0; i < payloads.length; i += MOVE_CHUNK) {
+    check();
+    const chunk = payloads.slice(i, i + MOVE_CHUNK);
+    const range = `${i + 1}–${i + chunk.length}`;
+
+    if (ctx.quotaHit) {
+      // The plan is full; every further add would be turned away.
+      result.unmoved.push(...chunk.map((c) => ({ email: c.email, reason: "overflow" as UnmovedReason })));
+      opts.onProgress(chunk.length);
+      continue;
+    }
+
+    const attempt = () =>
+      moveLeadChunk({
+        apiKey,
+        workspaceId,
+        sourceCampaignId: opts.from,
+        destinationCampaignId: opts.to,
+        chunk,
+        isAborted: () => m.aborted,
+      });
+    let outcome = await attempt();
+    // A failed add changed nothing, so it gets one more go after a pause:
+    // the usual cause is a passing 5xx or a rate-limit hiccup.
+    if (!outcome.ok && outcome.stage === "add" && outcome.reason !== "aborted") {
+      await sleep(2000);
+      check();
+      outcome = await attempt();
+    }
+
+    if (!outcome.ok) {
+      if (outcome.reason === "aborted") throw new AbortedError();
+      if (outcome.stage === "delete") {
+        // In the destination, and still in the source. Counted as moved —
+        // the destination has them — and flagged for cleaning up.
+        pushError(rec, `Moving leads ${range} to "${opts.toName}": ${outcome.reason}`);
+        result.moved += chunk.length;
+        result.inBoth += chunk.length;
+      } else {
+        pushError(rec, `Moving leads ${range} to "${opts.toName}" failed twice at the add step: ${outcome.reason}. Those leads stayed where they were.`);
+        result.unmoved.push(
+          ...outcome.unmoved,
+          ...chunk
+            .filter((c) => !outcome.unmoved.some((u) => u.email === c.email))
+            .map((c) => ({ email: c.email, reason: "add-failed" as UnmovedReason }))
+        );
+      }
+    } else {
+      result.moved += outcome.deleted;
+      result.unmoved.push(...outcome.unmoved);
+      if (outcome.quotaHit) {
+        ctx.quotaHit = true;
+        pushError(
+          rec,
+          `Plusvibe's lead quota was reached while moving to "${opts.toName}". The leads it turned away stayed where they were, and the rest of the moves were skipped; they can be moved once there is room.`
+        );
+      }
+    }
+
+    opts.onProgress(chunk.length);
+    rec.updatedAt = Date.now();
+    if (++ctx.sinceFlush >= PERSIST_EVERY) {
+      ctx.sinceFlush = 0;
+      void persist(ctx.id);
+    }
+  }
+  return result;
+}
+
+/** "3 duplicate address in the batch, 1 not a valid email address" */
+function describeReasons(reasons: Record<string, number>): string {
+  return Object.entries(reasons)
+    .sort((a, b) => b[1] - a[1])
+    .map(([reason, n]) => `${n} ${UNMOVED_LABELS[reason as UnmovedReason] ?? reason}`)
+    .join(", ");
+}
+
+function countReasons(list: UnmovedLead[], into: Record<string, number>) {
+  for (const u of list) into[u.reason] = (into[u.reason] ?? 0) + 1;
+}
+
+// --- Phase 1: sorting by segment ---------------------------------------------
+
+async function runSegmenting(ctx: RunCtx, rules: SegmentRule[]) {
+  const { rec, apiKey, workspaceId, check, id } = ctx;
+  const seg = rec.segmenting;
+  rec.phase = "segmenting";
+  rec.phaseStates.segmenting = "running";
+  await persist(id);
+
+  // Every original's leads first, then the plan: a lead moved from A to B
+  // must not be read again out of B and sent somewhere else.
+  const snapshot: { campaignId: string; leads: RawLead[] }[] = [];
+  for (const src of rec.sources) {
+    check();
+    const { leads, hitPageLimit, wrongStatus } = await fetchCampaignLeads(apiKey, workspaceId, src.campaignId, MAX_LEADS);
+    if (hitPageLimit) {
+      pushError(rec, `Stopped collecting "${src.campaignName}" at ${leads.length} leads — the paging budget ran out before the campaign did. Run again for the rest.`);
+    }
+    if (wrongStatus > 0) {
+      pushError(rec, `${wrongStatus} lead(s) of "${src.campaignName}" came back with a status other than NOT_CONTACTED and were skipped.`);
+    }
+    snapshot.push({ campaignId: src.campaignId, leads });
+    seg.leadsFound += leads.length;
+    rec.updatedAt = Date.now();
+    await persist(id);
+  }
+  check();
+
+  const plan = planSegmentMoves(snapshot, rules);
+  seg.stayed = plan.counts.stayed;
+  seg.unmapped = plan.counts.unmapped;
+  seg.unmappedSegments = plan.counts.unmappedSegments;
+  seg.plannedTotal = plan.counts.planned;
+  for (const r of seg.rules) {
+    const planned = plan.counts.perRule.find((p) => p.campaignId === r.campaignId && segmentKey(p.segment) === segmentKey(r.segment));
+    r.planned = planned?.planned ?? 0;
+    if (r.planned === 0) r.state = "done";
+  }
+  if (seg.unmapped > 0) {
+    const examples = seg.unmappedSegments.length > 0 ? ` (${seg.unmappedSegments.map((s) => `"${s}"`).join(", ")})` : "";
+    pushError(rec, `${seg.unmapped} lead(s) carry a segment no row covers${examples}. They stayed where they were.`);
+  }
+  await persist(id);
+
+  const reasons: Record<string, number> = {};
+  let problems = false;
+  for (const move of plan.moves) {
+    check();
+    const rule = seg.rules.find((r) => r.campaignId === move.toCampaignId && segmentKey(r.segment) === segmentKey(move.segment));
+    if (rule) rule.state = "running";
+    const res = await moveInto(ctx, {
+      from: move.fromCampaignId,
+      to: move.toCampaignId,
+      toName: move.toCampaignName,
+      leads: move.leads,
+      onProgress: (n) => {
+        seg.processed += n;
+      },
+    });
+    seg.moved += res.moved;
+    if (rule) rule.moved += res.moved;
+    if (res.unmoved.length > 0) {
+      countReasons(res.unmoved, reasons);
+      seg.unmoved = (seg.unmoved ?? 0) + res.unmoved.length;
+      seg.unmovedReasons = { ...reasons };
+      if (rule) rule.unmoved = (rule.unmoved ?? 0) + res.unmoved.length;
+      problems = true;
+    }
+    if (res.inBoth > 0) problems = true;
+    await persist(id);
+  }
+  for (const r of seg.rules) if (r.state !== "done") r.state = (r.unmoved ?? 0) > 0 ? "error" : "done";
+  if ((seg.unmoved ?? 0) > 0) {
+    pushError(rec, `${seg.unmoved} lead${seg.unmoved === 1 ? "" : "s"} could not be moved to their segment's campaign: ${describeReasons(reasons)}. They were not deleted from anywhere.`);
+  }
+  rec.phaseStates.segmenting = problems ? "error" : "done";
+  rec.updatedAt = Date.now();
+  await persist(id);
+}
+
+// --- Phase 2: one original at a time ------------------------------------------
+
+async function runSource(
+  ctx: RunCtx,
+  src: SourceRun,
+  opts: { mode: "create" | "move"; activate: boolean; existingByName: Map<string, string>; workspaceCampaigns: CampaignSummary[]; roles: CreatedRole[] }
+) {
+  const { rec, m, apiKey, workspaceId, check, id } = ctx;
+  const { mode, activate, existingByName, workspaceCampaigns } = opts;
+  const sourceCampaignId = src.campaignId;
+  // With several originals, every message says which one it is about.
+  const who = rec.sources.length > 1 ? `${src.campaignName}: ` : "";
+  src.state = "running";
+
+  // --- sorting leads by provider ------------------------------------------
+  src.phase = "sorting";
+  src.phaseStates.sorting = "running";
+  await persist(id);
+
+  const { leads, wrongStatus, hitPageLimit } = await fetchCampaignLeads(apiKey, workspaceId, sourceCampaignId, MAX_LEADS);
+  check();
+  src.sorting.leadsFound = leads.length;
+  src.sorting.hitPageLimit = hitPageLimit;
+  if (hitPageLimit) {
+    pushError(rec, `${who}Stopped collecting at ${leads.length} leads — the paging budget ran out before the campaign did. Those collected are still split and moved; run again for the rest.`);
+  }
+  if (wrongStatus > 0) {
+    pushError(rec, `${who}${wrongStatus} lead(s) came back with a status other than NOT_CONTACTED and were skipped — the API's status filter appears not to be applied. Nothing already-contacted was moved.`);
+  }
+  await persist(id);
+
+  const resolution = await resolveLeadEsps(leads, {
+    isAborted: () => m.aborted,
+    onProgress: (done, total) => {
+      src.sorting.domainsResolved = done;
+      src.sorting.domainsTotal = total;
+      rec.updatedAt = Date.now();
+    },
+  });
+  check();
+  const sides = sidesFor(resolution.classified);
+  src.sorting.microsoft = resolution.counts.microsoft;
+  src.sorting.google = resolution.counts.google;
+  src.sorting.other = resolution.counts.other;
+  src.sorting.unresolvedDomains = resolution.unresolvedDomains.length;
+  src.sorting.fromLeadField = resolution.fromLeadField;
+  src.sorting.domainsTotal = resolution.domainsLookedUp;
+  src.sorting.domainsResolved = resolution.domainsLookedUp;
+  if (resolution.unresolvedDomains.length > 0) {
+    pushError(
+      rec,
+      `${who}${resolution.unresolvedDomains.length} domain(s) could not be resolved (e.g. ${resolution.unresolvedDomains.slice(0, 5).join(", ")}). Their leads were treated as neither Microsoft nor Google, which puts them in the 🔵 campaigns.`
+    );
+  }
+  src.phaseStates.sorting = "done";
+  await persist(id);
+
+  // --- duplicating (move: finding) -------------------------------------------
+  src.phase = "duplicating";
+  src.phaseStates.duplicating = "running";
+  await persist(id);
+
+  if (mode === "move") {
+    // Nothing is created here: the copies were made by an earlier run and are
+    // found by name among the live ones. A name that isn't there, or that two
+    // campaigns share, is skipped — its share stays with the others in its
+    // pool — so the run never guesses which campaign was meant.
+    const found = matchCompanions(src.campaignName, workspaceCampaigns, sourceCampaignId, opts.roles);
+    for (const target of src.created) {
+      const hit = found.matches.find((x) => x.role === target.role);
+      if (hit?.match) {
+        target.campaignId = hit.match.id;
+        target.reused = true;
+        target.state = "done";
+        // The stored name, not the derived one: that is the campaign the
+        // leads actually go to, and both the card and any error should say so.
+        target.name = hit.match.name;
+        const mv = src.moving.targets.find((t) => t.role === target.role);
+        if (mv) mv.name = hit.match.name;
+        if (hit.loose) pushError(rec, `${who}"${hit.match.name}" was matched to "${hit.expectedName}" by ignoring separators. Check it is the right campaign.`);
+      } else {
+        target.state = "skipped";
+        target.error = hit?.ambiguous ? "more than one campaign has this name" : "no campaign with this name";
+        const mv = src.moving.targets.find((t) => t.role === target.role);
+        if (mv) mv.state = "skipped";
+        pushError(
+          rec,
+          hit?.ambiguous
+            ? `${who}More than one campaign is called "${target.name}", so there is no telling which was meant. Nothing was moved into it.`
+            : `${who}No campaign called "${target.name}" in this workspace, so its share went to the other campaigns in its pool.`
+        );
+      }
+    }
+    if (!src.created.some((c) => c.campaignId)) {
+      pushError(rec, `${who}None of its copies are in this workspace, so there is nowhere to move anything. Check the names in Plusvibe, and that they are not archived.`);
+      src.phaseStates.duplicating = "error";
+      src.state = "error";
+      return;
+    }
+    rec.updatedAt = Date.now();
+    await persist(id);
+  }
+
+  for (const target of src.created) {
+    if (mode === "move") break;
+    check();
+    target.state = "running";
+    rec.updatedAt = Date.now();
+    await persist(id);
+
+    // The 🔵 copies are duplicated from 🔵 when there is one, else from the
+    // source — the two are the same campaign apart from the name.
+    const blueId = src.created.find((c) => c.role === "blue")?.campaignId;
+    const from = FROM_BLUE_ROLES.includes(target.role) && blueId ? blueId : sourceCampaignId;
+
+    try {
+      const already = existingByName.get(normalizeName(target.name));
+      if (already) {
+        target.campaignId = already;
+        target.reused = true;
+      } else {
+        target.campaignId = await duplicateCampaign({ apiKey, workspaceId, sourceCampaignId: from, newName: target.name });
+        existingByName.set(normalizeName(target.name), target.campaignId);
+      }
+      target.state = "done";
+    } catch (err) {
+      if (err instanceof AbortedError || m.aborted) throw err;
+      target.state = "error";
+      target.error = msg(err);
+      pushError(rec, `${who}Could not create "${target.name}": ${msg(err)}`);
+    }
+    rec.updatedAt = Date.now();
+    await persist(id);
+  }
+
+  // Opt-out copy on the Opt Out campaigns.
+  for (const target of src.created) {
+    if (!target.optOut || !target.campaignId || target.state === "error") continue;
+    check();
+    target.optOut.state = "running";
+    await persist(id);
+    try {
+      const res = await applyOptOutToCampaign({ apiKey, workspaceId, campaignId: target.campaignId });
+      target.optOut.applied = res.applied;
+      target.optOut.alreadyPresent = res.alreadyPresent;
+      target.optOut.state = "done";
+      if (!res.verified) pushError(rec, `${who}Opt-out copy was written to "${target.name}" but the re-read didn't confirm it. Check step 1 in Plusvibe before launching.`);
+    } catch (err) {
+      if (err instanceof AbortedError || m.aborted) throw err;
+      target.optOut.state = "error";
+      target.optOut.error = msg(err);
+      pushError(rec, `${who}Opt-out copy failed for "${target.name}": ${msg(err)}`);
+    }
+    rec.updatedAt = Date.now();
+    await persist(id);
+  }
+
+  // Sign-off swap on the Signature campaigns.
+  for (const target of src.created) {
+    if (!target.signature || !target.campaignId || target.state === "error") continue;
+    check();
+    target.signature.state = "running";
+    await persist(id);
+    try {
+      const res = await applySignatureToCampaign({ apiKey, workspaceId, campaignId: target.campaignId });
+      target.signature.applied = res.applied;
+      target.signature.alreadyPresent = res.alreadyPresent;
+      target.signature.missing = res.missing;
+      target.signature.state = "done";
+      if (res.missing.length > 0) {
+        pushError(
+          rec,
+          `${who}Step 1 variation(s) ${res.missing.join(", ")} of "${target.name}" carry neither {{sender_first_name}} nor {{sender_signature}}, so nothing was swapped on them. They will send exactly as the source does.`
+        );
+      }
+      if (!res.verified) pushError(rec, `${who}The sign-off was swapped on "${target.name}" but the re-read didn't confirm it. Check step 1 in Plusvibe before launching.`);
+    } catch (err) {
+      if (err instanceof AbortedError || m.aborted) throw err;
+      target.signature.state = "error";
+      target.signature.error = msg(err);
+      pushError(rec, `${who}Sign-off swap failed for "${target.name}": ${msg(err)}`);
+    }
+    rec.updatedAt = Date.now();
+    await persist(id);
+  }
+
+  const setupFailed = src.created.some((c) => c.state === "error" || c.optOut?.state === "error" || c.signature?.state === "error");
+  src.phaseStates.duplicating = setupFailed ? "error" : "done";
+  await persist(id);
+
+  // Moving leads into a campaign that is missing, lacks its opt-out line or
+  // still signs off with the wrong variable would send the wrong email — and
+  // the move is the irreversible half.
+  if (setupFailed) {
+    pushError(
+      rec,
+      `${who}Stopped before moving any leads: a campaign is missing, lacks its opt-out copy or still has the wrong sign-off. Fix it in Plusvibe, then run again — the copies already made are reused, both copy steps are idempotent, and no leads have moved.`
+    );
+    src.state = "error";
+    return;
+  }
+
+  // --- moving leads ------------------------------------------------------------
+  src.phase = "moving";
+  src.phaseStates.moving = "running";
+
+  // A campaign that was not asked for, or was not found, is not a destination:
+  // its share stays with the campaigns in the same pool that are there.
+  const availability: Availability = { blue: false, blueOptOut: false, blueSignature: false, optOut: false, signature: false };
+  for (const role of CREATED_ROLES) availability[role] = !!src.created.find((c) => c.role === role)?.campaignId;
+  const plan = planSplitFor(sides.blue, sides.plain, availability);
+  src.moving.staysInSource = plan.counts.source;
+  for (const t of src.moving.targets) t.planned = plan.counts[t.role];
+  src.moving.plannedTotal = src.moving.targets.reduce((n, t) => n + t.planned, 0);
+  await persist(id);
+
+  // What did not move stays in the source, which is launched too, so a
+  // refused lead is recorded and the split carries on — it is never a
+  // reason to stop, and never a reason not to activate.
+  let moveProblems = false;
+  const reasons: Record<string, number> = {};
+  for (const move of plan.moves) {
+    check();
+    const target = src.moving.targets.find((t) => t.role === move.destination);
+    const destinationCampaignId = src.created.find((c) => c.role === move.destination)?.campaignId;
+    if (!target || !destinationCampaignId) continue;
+    if (move.leads.length === 0) {
+      target.state = "done";
+      continue;
+    }
+    target.state = "running";
+    const res = await moveInto(ctx, {
+      from: sourceCampaignId,
+      to: destinationCampaignId,
+      toName: target.name,
+      leads: move.leads as RawLead[],
+      onProgress: (n) => {
+        src.moving.processed += n;
+      },
+    });
+    target.moved += res.moved;
+    if (res.unmoved.length > 0) {
+      countReasons(res.unmoved, reasons);
+      target.unmoved = (target.unmoved ?? 0) + res.unmoved.length;
+      src.moving.unmoved = (src.moving.unmoved ?? 0) + res.unmoved.length;
+      src.moving.unmovedReasons = { ...reasons };
+      moveProblems = true;
+    }
+    if (res.inBoth > 0) moveProblems = true;
+    if (ctx.quotaHit) src.moving.quotaHit = true;
+    target.state = (target.unmoved ?? 0) > 0 ? "error" : "done";
+    await persist(id);
+  }
+
+  if ((src.moving.unmoved ?? 0) > 0) {
+    pushError(
+      rec,
+      `${who}${src.moving.unmoved} lead${src.moving.unmoved === 1 ? "" : "s"} stayed in the source campaign: ${describeReasons(reasons)}. They were not deleted from anywhere; the source is launched with them in it.`
+    );
+  }
+  src.phaseStates.moving = moveProblems ? "error" : "done";
+  await persist(id);
+
+  // --- activating ----------------------------------------------------------------
+  if (!activate) {
+    src.phaseStates.activating = "skipped";
+    for (const a of src.activation) a.state = "skipped";
+    src.state = moveProblems ? "error" : "done";
+    src.phase = "finished";
+    await persist(id);
+    return;
+  }
+
+  src.phase = "activating";
+  src.phaseStates.activating = "running";
+  await persist(id);
+
+  for (const target of src.activation) {
+    check();
+    const campaignId = target.role === "source" ? sourceCampaignId : src.created.find((c) => c.role === target.role)?.campaignId;
+    if (!campaignId) {
+      target.state = "error";
+      target.error = "no campaign id";
+      continue;
+    }
+    target.state = "running";
+    await persist(id);
+    try {
+      await launchCampaign({ apiKey, workspaceId, campaignId });
+      target.state = "done";
+    } catch (err) {
+      if (err instanceof AbortedError || m.aborted) throw err;
+      target.state = "error";
+      target.error = msg(err);
+      pushError(rec, `${who}Could not activate "${target.name}": ${msg(err)}`);
+    }
+    rec.updatedAt = Date.now();
+    await persist(id);
+  }
+
+  const activationFailed = src.activation.some((a) => a.state === "error");
+  src.phaseStates.activating = activationFailed ? "error" : "done";
+  // Everything real is done by this point — the campaigns exist, carry the
+  // right copy and hold the right leads. A failed launch is a one-click fix
+  // in Plusvibe, so it is reported without discarding the run.
+  src.state = activationFailed || moveProblems ? "error" : "done";
+  src.phase = "finished";
+  await persist(id);
+}
+
+// --- Phase 3: the pool tags -------------------------------------------------------
+
+async function runTagging(ctx: RunCtx) {
+  const { rec, apiKey, workspaceId, check, id } = ctx;
+  rec.phase = "tagging";
+  rec.phaseStates.tagging = "running";
+
+  // Every campaign that exists, by pool: the originals and plain copies are
+  // Google campaigns, the 🔵 copies Microsoft ones.
+  const targets: TagTarget[] = [];
+  for (const src of rec.sources) {
+    targets.push({ campaignId: src.campaignId, name: src.campaignName, tag: "google-pool", state: "pending" });
+    for (const c of src.created) {
+      if (!c.campaignId) continue;
+      targets.push({ campaignId: c.campaignId, name: c.name, tag: poolOf(c.role) === "google" ? "google-pool" : "microsoft-pool", state: "pending" });
+    }
+  }
+  rec.tagging.targets = targets;
+  await persist(id);
+
+  let ids: Record<"google" | "microsoft", string>;
+  try {
+    check();
+    const r = await resolvePoolTags(apiKey, workspaceId);
+    ids = r.ids;
+    rec.tagging.tagsCreated = r.created;
+  } catch (err) {
+    if (err instanceof AbortedError || ctx.m.aborted) throw err;
+    for (const t of targets) {
+      t.state = "error";
+      t.error = msg(err);
+    }
+    pushError(rec, `Could not find or create the pool tags in this workspace: ${msg(err)}. No campaign was tagged; the campaigns and their leads are unaffected.`);
+    rec.phaseStates.tagging = "error";
+    await persist(id);
+    return;
+  }
+
+  let failed = false;
+  for (const pool of ["google", "microsoft"] as const) {
+    check();
+    const tagName = pool === "google" ? "google-pool" : "microsoft-pool";
+    const mine = targets.filter((t) => t.tag === tagName);
+    if (mine.length === 0) continue;
+    for (const t of mine) t.state = "running";
+    await persist(id);
+    try {
+      await assignCampaignTag(apiKey, workspaceId, mine.map((t) => t.campaignId), ids[pool]);
+      for (const t of mine) t.state = "done";
+    } catch (err) {
+      if (err instanceof AbortedError || ctx.m.aborted) throw err;
+      failed = true;
+      for (const t of mine) {
+        t.state = "error";
+        t.error = msg(err);
+      }
+      pushError(rec, `Could not tag ${mine.length} campaign${mine.length === 1 ? "" : "s"} ${tagName}: ${msg(err)}. Add the tag in Plusvibe; nothing else is affected.`);
+    }
+    rec.updatedAt = Date.now();
+    await persist(id);
+  }
+  rec.phaseStates.tagging = failed ? "error" : "done";
+  await persist(id);
+}
+
 async function runJob(id: string) {
   const rec = records.get(id);
   const m = meta.get(id);
   if (!rec || !m || !m.apiKey || !m.payload) return;
 
-  const apiKey = m.apiKey;
-  const { workspaceId, sourceCampaignId } = {
-    workspaceId: m.payload.workspaceId,
-    sourceCampaignId: m.payload.sourceCampaignId,
-  };
   const mode = rec.mode ?? "create";
   const activate = mode !== "move" && m.payload.activate !== false;
-  const check = () => {
-    if (m.aborted) throw new AbortedError();
+  const ctx: RunCtx = {
+    id,
+    rec,
+    m,
+    apiKey: m.apiKey,
+    workspaceId: m.payload.workspaceId,
+    check: () => {
+      if (m.aborted) throw new AbortedError();
+    },
+    quotaHit: false,
+    sinceFlush: 0,
   };
 
   try {
-    // --- Phase 1: sorting leads ------------------------------------------
-    rec.phase = "sorting";
-    rec.phaseStates.sorting = "running";
-    await persist(id);
+    // --- Phase 1 --------------------------------------------------------------
+    if (m.payload.rules.length > 0) await runSegmenting(ctx, m.payload.rules);
+    else rec.phaseStates.segmenting = "skipped";
 
-    const { leads, wrongStatus, hitPageLimit } = await fetchCampaignLeads(
-      apiKey,
-      workspaceId,
-      sourceCampaignId,
-      MAX_LEADS
-    );
-    check();
-
-    rec.sorting.leadsFound = leads.length;
-    rec.sorting.hitPageLimit = hitPageLimit;
-    if (hitPageLimit) {
-      pushError(
-        rec,
-        `Stopped collecting at ${leads.length} leads — the paging budget ran out before the campaign did. Those collected are still split and moved; run again for the rest.`
-      );
-    }
-    if (wrongStatus > 0) {
-      pushError(
-        rec,
-        `${wrongStatus} lead(s) came back with a status other than NOT_CONTACTED and were skipped — the API's status filter appears not to be applied. Nothing already-contacted was moved.`
-      );
-    }
-    await persist(id);
-
-    const resolution = await resolveLeadEsps(leads, {
-      isAborted: () => m.aborted,
-      onProgress: (done, total) => {
-        rec.sorting.domainsResolved = done;
-        rec.sorting.domainsTotal = total;
-        rec.updatedAt = Date.now();
-      },
-    });
-    check();
-
-    // A record from before the setting existed has none stored; Google
-    // dominant is what those runs did.
-    const dominant = rec.settings?.dominant ?? "google";
-    const sides = sidesFor(resolution.classified, dominant);
-    rec.sorting.microsoft = resolution.counts.microsoft;
-    rec.sorting.google = resolution.counts.google;
-    rec.sorting.other = resolution.counts.other;
-    rec.sorting.dominant = dominant;
-    rec.sorting.unresolvedDomains = resolution.unresolvedDomains.length;
-    rec.sorting.fromLeadField = resolution.fromLeadField;
-    rec.sorting.domainsTotal = resolution.domainsLookedUp;
-    rec.sorting.domainsResolved = resolution.domainsLookedUp;
-    if (resolution.unresolvedDomains.length > 0) {
-      pushError(
-        rec,
-        `${resolution.unresolvedDomains.length} domain(s) could not be resolved (e.g. ${resolution.unresolvedDomains.slice(0, 5).join(", ")}). Their leads were treated as neither Microsoft nor Google, which puts them in the ${dominant === "microsoft" ? "🔵" : "plain"} campaigns.`
-      );
-    }
-    rec.phaseStates.sorting = "done";
-    await persist(id);
-
-    // --- Phase 2: duplicating campaigns (move: finding them) -------------
-    rec.phase = "duplicating";
-    rec.phaseStates.duplicating = "running";
+    // --- Phase 2 --------------------------------------------------------------
+    rec.phase = "building";
+    rec.phaseStates.building = "running";
     await persist(id);
 
     // The workspace's live campaigns. A create run uses them to adopt copies
     // it already made instead of making a second set under the same names —
     // duplication is not idempotent on its own. A move run uses them to find
-    // the five campaigns to move into.
+    // the campaigns to move into.
     //
     // Archived campaigns are excluded either way: adopting or matching one is
     // silently fatal, since it reads as a success and then cannot take a
     // single lead.
     let workspaceCampaigns: CampaignSummary[] = [];
     try {
-      workspaceCampaigns = await listCampaigns(apiKey, workspaceId);
+      workspaceCampaigns = await listCampaigns(ctx.apiKey, ctx.workspaceId);
     } catch (err) {
       // Without the list we can't tell a resumed run from a fresh one, and
       // duplicating blind could leave a second set of campaigns behind.
@@ -638,431 +1149,30 @@ async function runJob(id: string) {
           ? `Could not list the workspace's campaigns to find the ones to move into: ${msg(err)}. Nothing was moved.`
           : `Could not list the workspace's campaigns to check for copies already made: ${msg(err)}. Stopped before duplicating anything.`
       );
-      rec.phaseStates.duplicating = "error";
+      rec.phaseStates.building = "error";
+      rec.phaseStates.tagging = "skipped";
       rec.status = "error";
       return;
     }
+    const existingByName = mode === "create" ? buildReuseIndex(workspaceCampaigns) : new Map<string, string>();
+    const roles = rolesFor(rec.kinds as CampaignKind[]);
 
-    if (mode === "move") {
-      // Nothing is created here: the five campaigns were made by an earlier
-      // run and are found by name among the live ones. A name that isn't
-      // there, or that two campaigns share, stops the run before any lead
-      // moves — picking the wrong campaign would put thousands of leads in it.
-      const found = matchMoveTargets(
-        rec.sourceCampaignName,
-        workspaceCampaigns,
-        sourceCampaignId
-      );
-      for (const target of rec.created) {
-        const hit = found.matches.find((x) => x.role === target.role);
-        if (hit?.match) {
-          target.campaignId = hit.match.id;
-          target.reused = true;
-          target.state = "done";
-          // The stored name, not the derived one: that is the campaign the
-          // leads actually go to, and both the card and any error should
-          // say so.
-          target.name = hit.match.name;
-          const mv = rec.moving.targets.find((t) => t.role === target.role);
-          if (mv) mv.name = hit.match.name;
-          if (hit.loose) {
-            pushError(
-              rec,
-              `"${hit.match.name}" was matched to "${hit.expectedName}" by ignoring separators. Check it is the right campaign.`
-            );
-          }
-        } else {
-          // Not an error: the run goes ahead with the campaigns that are
-          // there, and this one's share stays with the others in its group.
-          target.state = "skipped";
-          target.error = hit?.ambiguous
-            ? "more than one campaign has this name"
-            : "no campaign with this name";
-          const mv = rec.moving.targets.find((t) => t.role === target.role);
-          if (mv) mv.state = "skipped";
-          pushError(
-            rec,
-            hit?.ambiguous
-              ? `More than one campaign is called "${target.name}", so there is no telling which was meant. Nothing was moved into it.`
-              : `No campaign called "${target.name}" in this workspace, so its share went to the other campaigns in its group.`
-          );
-        }
-      }
-      if (!rec.created.some((c) => c.campaignId)) {
-        pushError(
-          rec,
-          "None of the five campaigns are in this workspace, so there is nowhere to move anything. Check the names in Plusvibe, and that they are not archived."
-        );
-        rec.phaseStates.duplicating = "error";
-        rec.status = "error";
-        return;
-      }
+    for (const src of rec.sources) {
+      ctx.check();
+      await runSource(ctx, src, { mode, activate, existingByName, workspaceCampaigns, roles });
       rec.updatedAt = Date.now();
       await persist(id);
     }
-
-    const existingByName =
-      mode === "create"
-        ? buildReuseIndex(workspaceCampaigns)
-        : new Map<string, string>();
-
-    for (const target of rec.created) {
-      // A move run has its campaigns already; it creates nothing.
-      if (mode === "move") break;
-      check();
-      target.state = "running";
-      rec.updatedAt = Date.now();
-      await persist(id);
-
-      // The 🔵 copies are duplicated from 🔵, the rest from the source.
-      const from = FROM_BLUE_ROLES.includes(target.role)
-        ? rec.created.find((c) => c.role === "blue")?.campaignId
-        : sourceCampaignId;
-
-      try {
-        const already = existingByName.get(normalizeName(target.name));
-        if (already) {
-          target.campaignId = already;
-          target.reused = true;
-        } else {
-          if (!from) {
-            throw new Error(
-              "the 🔵 copy it duplicates from was not created, so there is nothing to copy"
-            );
-          }
-          target.campaignId = await duplicateCampaign({
-            apiKey,
-            workspaceId,
-            sourceCampaignId: from,
-            newName: target.name,
-          });
-          existingByName.set(normalizeName(target.name), target.campaignId);
-        }
-        target.state = "done";
-      } catch (err) {
-        if (err instanceof AbortedError || m.aborted) throw err;
-        target.state = "error";
-        target.error = msg(err);
-        pushError(rec, `Could not create "${target.name}": ${msg(err)}`);
-      }
-      rec.updatedAt = Date.now();
-      await persist(id);
-    }
-
-    // Daily limits, on every copy that has one to set — reused copies too, so
-    // a re-run brings them onto the current setting. Failing here leaves the
-    // copy on the limit it was duplicated with, which is not a wrong email
-    // going out, so the run carries on and says so at the end.
-    let limitFailed = false;
-    for (const target of rec.created) {
-      if (!target.dailyLimit || !target.campaignId || target.state === "error") continue;
-      check();
-      target.dailyLimit.state = "running";
-      await persist(id);
-      try {
-        await setCampaignDailyLimit({
-          apiKey,
-          workspaceId,
-          campaignId: target.campaignId,
-          dailyLimit: target.dailyLimit.value,
-        });
-        target.dailyLimit.state = "done";
-      } catch (err) {
-        if (err instanceof AbortedError || m.aborted) throw err;
-        limitFailed = true;
-        target.dailyLimit.state = "error";
-        target.dailyLimit.error = msg(err);
-        pushError(
-          rec,
-          `Could not set the daily limit of "${target.name}" to ${target.dailyLimit.value}: ${msg(err)}. It keeps the limit it was duplicated with.`
-        );
-      }
-      rec.updatedAt = Date.now();
-      await persist(id);
-    }
-
-    // Opt-out copy on the two Opt Out campaigns.
-    for (const target of rec.created) {
-      if (!target.optOut || !target.campaignId || target.state === "error") continue;
-      check();
-      target.optOut.state = "running";
-      await persist(id);
-      try {
-        const res = await applyOptOutToCampaign({
-          apiKey,
-          workspaceId,
-          campaignId: target.campaignId,
-        });
-        target.optOut.applied = res.applied;
-        target.optOut.alreadyPresent = res.alreadyPresent;
-        target.optOut.state = "done";
-        if (!res.verified) {
-          pushError(
-            rec,
-            `Opt-out copy was written to "${target.name}" but the re-read didn't confirm it. Check step 1 in Plusvibe before launching.`
-          );
-        }
-      } catch (err) {
-        if (err instanceof AbortedError || m.aborted) throw err;
-        target.optOut.state = "error";
-        target.optOut.error = msg(err);
-        pushError(rec, `Opt-out copy failed for "${target.name}": ${msg(err)}`);
-      }
-      rec.updatedAt = Date.now();
-      await persist(id);
-    }
-
-    // Sign-off swap on the two Signature campaigns.
-    for (const target of rec.created) {
-      if (!target.signature || !target.campaignId || target.state === "error") continue;
-      check();
-      target.signature.state = "running";
-      await persist(id);
-      try {
-        const res = await applySignatureToCampaign({
-          apiKey,
-          workspaceId,
-          campaignId: target.campaignId,
-        });
-        target.signature.applied = res.applied;
-        target.signature.alreadyPresent = res.alreadyPresent;
-        target.signature.missing = res.missing;
-        target.signature.state = "done";
-        if (res.missing.length > 0) {
-          pushError(
-            rec,
-            `Step 1 variation(s) ${res.missing.join(", ")} of "${target.name}" carry neither {{sender_first_name}} nor {{sender_signature}}, so nothing was swapped on them. They will send exactly as the source does.`
-          );
-        }
-        if (!res.verified) {
-          pushError(
-            rec,
-            `The sign-off was swapped on "${target.name}" but the re-read didn't confirm it. Check step 1 in Plusvibe before launching.`
-          );
-        }
-      } catch (err) {
-        if (err instanceof AbortedError || m.aborted) throw err;
-        target.signature.state = "error";
-        target.signature.error = msg(err);
-        pushError(rec, `Sign-off swap failed for "${target.name}": ${msg(err)}`);
-      }
-      rec.updatedAt = Date.now();
-      await persist(id);
-    }
-
-    const setupFailed = rec.created.some(
-      (c) =>
-        c.state === "error" ||
-        c.optOut?.state === "error" ||
-        c.signature?.state === "error"
-    );
-    rec.phaseStates.duplicating = setupFailed ? "error" : "done";
+    const buildingFailed = rec.sources.some((s) => s.state === "error");
+    rec.phaseStates.building = buildingFailed ? "error" : "done";
     await persist(id);
 
-    // Moving leads into a campaign that is missing, lacks its opt-out line or
-    // still signs off with the wrong variable would send the wrong email — and
-    // the move is the irreversible half.
-    if (setupFailed) {
-      pushError(
-        rec,
-        mode === "move"
-          ? "Stopped before moving any lead: one of the five campaigns could not be found in this workspace. Check the names in Plusvibe — they have to read exactly as listed above, and an archived campaign does not count — then run again. Nothing has moved."
-          : "Stopped before moving any leads: a campaign is missing, lacks its opt-out copy or still has the wrong sign-off. Fix it in Plusvibe, then run again — the copies already made are reused, both copy steps are idempotent, and no leads have moved."
-      );
-      rec.status = "error";
-      return;
-    }
+    // --- Phase 3 --------------------------------------------------------------
+    await runTagging(ctx);
 
-    // --- Phase 3: moving leads -------------------------------------------
-    rec.phase = "moving";
-    rec.phaseStates.moving = "running";
-
-    // A move run splits into the campaigns it found; a create run just made
-    // all five, so everything is available.
-    const availability: Availability = { ...ALL_AVAILABLE };
-    if (mode === "move") {
-      for (const role of CREATED_ROLES) {
-        availability[role] = !!rec.created.find((c) => c.role === role)?.campaignId;
-      }
-    }
-    const plan = planSplitFor(sides.blue, sides.plain, availability);
-    rec.moving.staysInSource = plan.counts.source;
-    for (const t of rec.moving.targets) t.planned = plan.counts[t.role];
-    rec.moving.plannedTotal =
-      plan.counts.blue +
-      plan.counts.blueOptOut +
-      plan.counts.optOut +
-      plan.counts.signature +
-      plan.counts.blueSignature;
-    await persist(id);
-
-    // What did not move stays in the source, which is launched too, so a
-    // refused lead is recorded and the split carries on — it is never a
-    // reason to stop, and never a reason not to activate.
-    let sinceFlush = 0;
-    let moveProblems = false;
-    let quotaHit = false;
-    const reasons: Record<string, number> = {};
-    const noteUnmoved = (target: MoveTarget, list: UnmovedLead[]) => {
-      if (list.length === 0) return;
-      for (const u of list) reasons[u.reason] = (reasons[u.reason] ?? 0) + 1;
-      target.unmoved = (target.unmoved ?? 0) + list.length;
-      rec.moving.unmoved = (rec.moving.unmoved ?? 0) + list.length;
-      rec.moving.unmovedReasons = { ...reasons };
-      moveProblems = true;
-    };
-
-    for (const move of plan.moves) {
-      check();
-      const target = rec.moving.targets.find((t) => t.role === move.destination);
-      const destinationCampaignId = rec.created.find(
-        (c) => c.role === move.destination
-      )?.campaignId;
-      if (!target || !destinationCampaignId) continue;
-
-      if (move.leads.length === 0) {
-        target.state = "done";
-        continue;
-      }
-
-      target.state = "running";
-      const payloads: LeadPayload[] = (move.leads as RawLead[])
-        .map(leadToPayload)
-        .filter((p) => p.email);
-
-      for (let i = 0; i < payloads.length; i += MOVE_CHUNK) {
-        check();
-        const chunk = payloads.slice(i, i + MOVE_CHUNK);
-        const range = `${i + 1}–${i + chunk.length}`;
-
-        if (quotaHit) {
-          // The plan is full; every further add would be turned away.
-          noteUnmoved(target, chunk.map((c) => ({ email: c.email, reason: "overflow" as UnmovedReason })));
-          rec.moving.processed += chunk.length;
-          continue;
-        }
-
-        const attempt = () =>
-          moveLeadChunk({
-            apiKey,
-            workspaceId,
-            sourceCampaignId,
-            destinationCampaignId,
-            chunk,
-            isAborted: () => m.aborted,
-          });
-        let outcome = await attempt();
-        // A failed add changed nothing, so it gets one more go after a pause:
-        // the usual cause is a passing 5xx or a rate-limit hiccup.
-        if (!outcome.ok && outcome.stage === "add" && outcome.reason !== "aborted") {
-          await sleep(2000);
-          check();
-          outcome = await attempt();
-        }
-
-        if (!outcome.ok) {
-          if (outcome.reason === "aborted") throw new AbortedError();
-          if (outcome.stage === "delete") {
-            // In the destination, and still in the source. Counted as moved —
-            // the destination has them — and flagged for cleaning up.
-            pushError(rec, `Moving leads ${range} to "${target.name}": ${outcome.reason}`);
-            target.moved += chunk.length;
-            moveProblems = true;
-          } else {
-            pushError(
-              rec,
-              `Moving leads ${range} to "${target.name}" failed twice at the add step: ${outcome.reason}. Those leads stayed in the source.`
-            );
-            noteUnmoved(target, [
-              ...outcome.unmoved,
-              ...chunk
-                .filter((c) => !outcome.unmoved.some((u) => u.email === c.email))
-                .map((c) => ({ email: c.email, reason: "add-failed" as UnmovedReason })),
-            ]);
-          }
-        } else {
-          target.moved += outcome.deleted;
-          noteUnmoved(target, outcome.unmoved);
-          if (outcome.quotaHit) {
-            quotaHit = true;
-            rec.moving.quotaHit = true;
-            pushError(
-              rec,
-              `Plusvibe's lead quota was reached while moving to "${target.name}". The leads it turned away stayed in the source, and the rest of the split was skipped; they can be moved once there is room.`
-            );
-          }
-        }
-
-        rec.moving.processed += chunk.length;
-        rec.updatedAt = Date.now();
-        if (++sinceFlush >= PERSIST_EVERY) {
-          sinceFlush = 0;
-          void persist(id);
-        }
-      }
-
-      target.state = (target.unmoved ?? 0) > 0 ? "error" : "done";
-      await persist(id);
-    }
-
-    if ((rec.moving.unmoved ?? 0) > 0) {
-      const parts = Object.entries(reasons)
-        .sort((a, b) => b[1] - a[1])
-        .map(([reason, n]) => `${n} ${UNMOVED_LABELS[reason as UnmovedReason] ?? reason}`);
-      pushError(
-        rec,
-        `${rec.moving.unmoved} lead${rec.moving.unmoved === 1 ? "" : "s"} stayed in the source campaign: ${parts.join(", ")}. They were not deleted from anywhere; the source is launched with them in it.`
-      );
-    }
-    rec.phaseStates.moving = moveProblems ? "error" : "done";
-    await persist(id);
-
-    // --- Phase 4: activating campaigns -----------------------------------
-    if (!activate) {
-      rec.phaseStates.activating = "skipped";
-      for (const a of rec.activation) a.state = "skipped";
-      rec.status = limitFailed ? "error" : "done";
-      await persist(id);
-      return;
-    }
-
-    rec.phase = "activating";
-    rec.phaseStates.activating = "running";
-    await persist(id);
-
-    for (const target of rec.activation) {
-      check();
-      const campaignId =
-        target.role === "source"
-          ? sourceCampaignId
-          : rec.created.find((c) => c.role === target.role)?.campaignId;
-      if (!campaignId) {
-        target.state = "error";
-        target.error = "no campaign id";
-        continue;
-      }
-      target.state = "running";
-      await persist(id);
-      try {
-        await launchCampaign({ apiKey, workspaceId, campaignId });
-        target.state = "done";
-      } catch (err) {
-        if (err instanceof AbortedError || m.aborted) throw err;
-        target.state = "error";
-        target.error = msg(err);
-        pushError(rec, `Could not activate "${target.name}": ${msg(err)}`);
-      }
-      rec.updatedAt = Date.now();
-      await persist(id);
-    }
-
-    const activationFailed = rec.activation.some((a) => a.state === "error");
-    rec.phaseStates.activating = activationFailed ? "error" : "done";
-    // Everything real is done by this point — the campaigns exist, carry the
-    // right copy and hold the right leads. A failed launch or a limit that
-    // did not take is a one-click fix in Plusvibe, so either is reported
-    // without discarding the run.
-    rec.status = activationFailed || limitFailed ? "error" : "done";
+    const failed =
+      rec.phaseStates.segmenting === "error" || buildingFailed || rec.phaseStates.tagging === "error";
+    rec.status = failed ? "error" : "done";
   } catch (err) {
     if (err instanceof AbortedError || m.aborted) {
       rec.status = "aborted";
@@ -1071,6 +1181,11 @@ async function runJob(id: string) {
       rec.status = "error";
       const phase = rec.phase;
       if (phase !== "finished") rec.phaseStates[phase] = "error";
+      const src = rec.sources.find((s) => s.state === "running");
+      if (src) {
+        src.state = "error";
+        if (src.phase !== "finished") src.phaseStates[src.phase] = "error";
+      }
     }
   } finally {
     rec.phase = "finished";
@@ -1094,10 +1209,7 @@ function withPosition(rec: CampaignTypesJob, fp: string): CampaignTypesJob {
   return { ...rec, queuePosition: positionOf(rec.id, fp) };
 }
 
-export async function getJob(
-  apiKey: string,
-  id: string
-): Promise<CampaignTypesJob | null> {
+export async function getJob(apiKey: string, id: string): Promise<CampaignTypesJob | null> {
   await loadOnce();
   const fp = fingerprintKey(apiKey);
   const rec = records.get(id);

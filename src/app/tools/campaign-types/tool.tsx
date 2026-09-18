@@ -2,11 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Workspace, CampaignSummary } from "@/lib/plusvibe-types";
-import type {
-  CampaignTypesJob,
-  CampaignTypesMode,
-} from "@/lib/jobs/campaign-types-types";
-import { CREATED_ROLES } from "@/lib/jobs/campaign-types-types";
+import type { CampaignTypesJob, CampaignTypesMode, CreatedRole, RoleNames } from "@/lib/jobs/campaign-types-types";
 import {
   fetchWorkspaces,
   fetchCampaigns,
@@ -14,47 +10,38 @@ import {
   listCampaignTypesJobs,
   abortCampaignTypes,
   deleteCampaignTypesJob,
-  fetchCampaignTypesSettings,
-  saveCampaignTypesSettings,
   ApiClientError,
 } from "@/lib/api-client";
-import {
-  DEFAULT_SETTINGS,
-  DOMINANT_OPTIONS,
-  describeDominant,
-  describeLimits,
-  parseLimit,
-  type CampaignTypesSettings,
-  type Dominant,
-} from "@/lib/campaign-types/settings";
+import { KIND_HINTS, KIND_LABELS, KIND_ORDER, rolesFor, type CampaignKind } from "@/lib/campaign-types/kinds";
+import { MAX_RULES, validateRules, type SegmentRule } from "@/lib/campaign-types/segments";
 import { useApiKey } from "@/lib/use-api-key";
 import { formatNumber } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { Spinner, EmptyState } from "@/components/ui";
-import {
-  LayersIcon,
-  AlertIcon,
-  ChevronDownIcon,
-  CheckIcon,
-  MoveIcon,
-  SettingsIcon,
-} from "@/components/icons";
+import { LayersIcon, AlertIcon, ChevronDownIcon, CheckIcon, MoveIcon } from "@/components/icons";
 import { deriveNames } from "@/lib/campaign-types/names";
-import {
-  isArchived,
-  matchMoveTargets,
-  normalizeName,
-} from "@/lib/campaign-types/match";
+import { isArchived, matchCompanions, normalizeName } from "@/lib/campaign-types/match";
 import { JobCard } from "./job-card";
 
 const POLL_MS = 2000;
-const ROLE_LABELS = {
+const JOBS_OPEN_KEY = "pv_ct_jobs_open";
+/** Segment rows, besides the one for leads with no segment. */
+const SEGMENT_ROWS = MAX_RULES - 1;
+
+const ROLE_LABELS: Record<CreatedRole, string> = {
   blue: "Microsoft leads",
   optOut: "Opt-out copy on step 1",
   blueOptOut: "Microsoft leads + opt-out copy",
   signature: "Signs off with the signature",
   blueSignature: "Microsoft leads + signature sign-off",
-} as const;
+};
+
+interface SegmentRow {
+  segment: string;
+  campaignId: string;
+}
+
+const emptyRows = (): SegmentRow[] => Array.from({ length: SEGMENT_ROWS }, () => ({ segment: "", campaignId: "" }));
 
 export function CampaignTypesTool() {
   const { hasKey, ready } = useApiKey();
@@ -65,71 +52,17 @@ export function CampaignTypesTool() {
 
   const [campaigns, setCampaigns] = useState<CampaignSummary[] | null>(null);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
-  const [sourceId, setSourceId] = useState<string>("");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [filter, setFilter] = useState("");
+
+  const [rows, setRows] = useState<SegmentRow[]>(emptyRows);
+  const [emptyTo, setEmptyTo] = useState("");
+  const [kinds, setKinds] = useState<CampaignKind[]>(KIND_ORDER);
   const [activate, setActivate] = useState(true);
   const [mode, setMode] = useState<CampaignTypesMode>("create");
-  // The Settings tab sits beside the two modes but starts no job; the mode
-  // it was opened from is kept, so closing it goes back to where you were.
-  const [showSettings, setShowSettings] = useState(false);
-
-  // --- Settings: read once, saved on request, kept as typed in between ------
-  const [settings, setSettings] = useState<CampaignTypesSettings>(DEFAULT_SETTINGS);
-  const [settingsLoaded, setSettingsLoaded] = useState(false);
-  const [draftDominant, setDraftDominant] = useState<Dominant>(DEFAULT_SETTINGS.dominant);
-  const [draftGoogle, setDraftGoogle] = useState("");
-  const [draftMicrosoft, setDraftMicrosoft] = useState("");
-  const [savingSettings, setSavingSettings] = useState(false);
-  const [settingsNote, setSettingsNote] = useState<string | null>(null);
-  const [settingsError, setSettingsError] = useState<string | null>(null);
-
-  const applyToDraft = useCallback((s: CampaignTypesSettings) => {
-    setDraftDominant(s.dominant);
-    setDraftGoogle(s.googleDailyLimit === null ? "" : String(s.googleDailyLimit));
-    setDraftMicrosoft(s.microsoftDailyLimit === null ? "" : String(s.microsoftDailyLimit));
-  }, []);
-
-  const loadSettings = useCallback(async () => {
-    try {
-      const { settings: s } = await fetchCampaignTypesSettings();
-      setSettings(s);
-      applyToDraft(s);
-      setSettingsLoaded(true);
-    } catch (err) {
-      setSettingsError(errMessage(err));
-    }
-  }, [applyToDraft]);
-
-  const googleProblem = parseLimit(draftGoogle, "Google daily limit").error ?? null;
-  const microsoftProblem = parseLimit(draftMicrosoft, "Microsoft daily limit").error ?? null;
-  const draftDirty =
-    draftDominant !== settings.dominant ||
-    (parseLimit(draftGoogle, "").value ?? null) !== settings.googleDailyLimit ||
-    (parseLimit(draftMicrosoft, "").value ?? null) !== settings.microsoftDailyLimit;
-  const canSave = settingsLoaded && draftDirty && !googleProblem && !microsoftProblem && !savingSettings;
-
-  async function handleSaveSettings() {
-    if (!canSave) return;
-    setSavingSettings(true);
-    setSettingsError(null);
-    setSettingsNote(null);
-    try {
-      const { settings: s } = await saveCampaignTypesSettings({
-        dominant: draftDominant,
-        googleDailyLimit: parseLimit(draftGoogle, "").value,
-        microsoftDailyLimit: parseLimit(draftMicrosoft, "").value,
-      });
-      setSettings(s);
-      applyToDraft(s);
-      setSettingsNote("Saved — every run from now on uses these.");
-      setTimeout(() => setSettingsNote(null), 5000);
-    } catch (err) {
-      setSettingsError(errMessage(err));
-    } finally {
-      setSavingSettings(false);
-    }
-  }
 
   const [jobs, setJobs] = useState<CampaignTypesJob[]>([]);
+  const [jobsOpen, setJobsOpen] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -160,18 +93,35 @@ export function CampaignTypesTool() {
   }, []);
 
   useEffect(() => {
+    try {
+      setJobsOpen(localStorage.getItem(JOBS_OPEN_KEY) === "1");
+    } catch {
+      // storage may be unavailable; the list just starts folded
+    }
+  }, []);
+
+  function toggleJobs(next?: boolean) {
+    setJobsOpen((prev) => {
+      const v = next ?? !prev;
+      try {
+        localStorage.setItem(JOBS_OPEN_KEY, v ? "1" : "0");
+      } catch {
+        // fine
+      }
+      return v;
+    });
+  }
+
+  useEffect(() => {
     if (ready && hasKey) {
       void loadWorkspaces();
       void refreshJobs();
-      void loadSettings();
     }
-  }, [ready, hasKey, loadWorkspaces, refreshJobs, loadSettings]);
+  }, [ready, hasKey, loadWorkspaces, refreshJobs]);
 
   // Queued jobs need polling too — nothing else tells the page when one of them
   // reaches the front and starts.
-  const anyRunning = jobs.some(
-    (j) => j.status === "running" || j.status === "queued"
-  );
+  const anyRunning = jobs.some((j) => j.status === "running" || j.status === "queued");
   useEffect(() => {
     if (!anyRunning) return;
     const t = setInterval(() => void refreshJobs(), POLL_MS);
@@ -181,7 +131,10 @@ export function CampaignTypesTool() {
   const loadCampaigns = useCallback(async (wsId: string) => {
     setCampaignsLoading(true);
     setCampaigns(null);
-    setSourceId("");
+    setSelected([]);
+    setRows(emptyRows());
+    setEmptyTo("");
+    setFilter("");
     setError(null);
     try {
       const { campaigns: list } = await fetchCampaigns({ workspace_id: wsId });
@@ -198,20 +151,37 @@ export function CampaignTypesTool() {
   }, [workspaceId, loadCampaigns]);
 
   // --- Derived -------------------------------------------------------------
-  // Sub-sequences are separate campaign records and are never the source.
-  const parents = useMemo(
-    () => (campaigns ?? []).filter((c) => c.campaignType !== "subseq"),
-    [campaigns]
-  );
-  const source = parents.find((c) => c.id === sourceId) ?? null;
-  const names = source ? deriveNames(source.name) : null;
+  // Sub-sequences are separate campaign records and are never an original.
+  const parents = useMemo(() => (campaigns ?? []).filter((c) => c.campaignType !== "subseq"), [campaigns]);
+  const visible = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    return q ? parents.filter((c) => c.name.toLowerCase().includes(q)) : parents;
+  }, [parents, filter]);
+  // In list order, whatever order they were ticked in, so the run is predictable.
+  const sources = useMemo(() => parents.filter((c) => selected.includes(c.id)), [parents, selected]);
+  const roles = useMemo(() => rolesFor(kinds), [kinds]);
+
+  // A rule pointing at a campaign that was un-ticked is cleared: the leads
+  // it names can only go to one of the originals.
+  useEffect(() => {
+    setRows((prev) => prev.map((r) => (r.campaignId && !selected.includes(r.campaignId) ? { ...r, campaignId: "" } : r)));
+    setEmptyTo((prev) => (prev && !selected.includes(prev) ? "" : prev));
+  }, [selected]);
+
+  const rules = useMemo<SegmentRule[]>(() => {
+    const nameOf = (id: string) => sources.find((s) => s.id === id)?.name ?? "";
+    const out: SegmentRule[] = rows
+      .filter((r) => r.segment.trim() !== "" || r.campaignId)
+      .map((r) => ({ segment: r.segment, campaignId: r.campaignId, campaignName: nameOf(r.campaignId) }));
+    if (emptyTo) out.push({ segment: null, campaignId: emptyTo, campaignName: nameOf(emptyTo) });
+    return out;
+  }, [rows, emptyTo, sources]);
+  const ruleProblems = useMemo(() => validateRules(rules, sources.map((s) => s.id)), [rules, sources]);
 
   // Names already taken in this workspace. The job adopts an existing campaign
   // rather than making a second one under the same name, so a re-run after an
-  // interruption is safe — this shows that before it happens.
-  //
-  // Archived ones are skipped, matching what the run does: their name is free
-  // again, so the preview must not promise a reuse the run won't make.
+  // interruption is safe — this shows that before it happens. Archived ones
+  // are skipped, matching what the run does.
   const existing = useMemo(() => {
     const map = new Map<string, CampaignSummary>();
     for (const c of parents) {
@@ -222,69 +192,76 @@ export function CampaignTypesTool() {
     return map;
   }, [parents]);
 
-  // A name whose only holder is archived: the run makes a fresh campaign under
-  // it, which is worth saying plainly rather than showing nothing.
-  const archivedNames = useMemo(() => {
-    const set = new Set<string>();
-    for (const c of parents) if (isArchived(c)) set.add(normalizeName(c.name));
-    for (const key of existing.keys()) set.delete(key);
-    return set;
-  }, [parents, existing]);
-
-  const rows = names
-    ? CREATED_ROLES.map((role) => ({
-        role,
-        name: names[role],
-        reused: existing.get(normalizeName(names[role])) ?? null,
-        replacesArchived: archivedNames.has(normalizeName(names[role])),
-      }))
-    : [];
-  const reusedCount = rows.filter((r) => r.reused).length;
-  const archivedCount = rows.filter((r) => r.replacesArchived).length;
-
-  // Move Leads: the five campaigns the leads would go into, found by name the
-  // same way the run finds them — so what is shown here is what will happen.
-  // Archived campaigns are left out: they cannot take a lead.
-  const moveMatch = useMemo(
-    () => (source ? matchMoveTargets(source.name, parents, source.id) : null),
-    [source, parents]
+  const previews = useMemo(
+    () =>
+      sources.map((source) => {
+        const names = deriveNames(source.name);
+        const rowsFor = roles.map((role) => ({
+          role,
+          name: names[role],
+          reused: existing.get(normalizeName(names[role])) ?? null,
+        }));
+        const match = mode === "move" ? matchCompanions(source.name, parents, source.id, roles) : null;
+        return { source, names, rows: rowsFor, match };
+      }),
+    [sources, roles, existing, mode, parents]
   );
-  const missingCount = moveMatch
-    ? moveMatch.matches.filter((m) => !m.match).length
-    : 0;
-  const foundCount = moveMatch ? moveMatch.matches.length - missingCount : 0;
-  // Which 🔵 campaigns are there decides where the Microsoft leads can go: with
-  // none of them, those leads have nowhere to belong and stay in the source.
-  const blueFound = moveMatch
-    ? moveMatch.matches.some(
-        (m) =>
-          m.match &&
-          (m.role === "blue" || m.role === "blueOptOut" || m.role === "blueSignature")
-      )
-    : false;
+
+  // Two originals whose copies would share a name — "X" and "🔵 X" picked
+  // together, say — cannot both run; the server refuses it, and it is clearer
+  // said here.
+  const nameClash = useMemo(() => {
+    const taken = new Map<string, string>();
+    for (const s of sources) taken.set(normalizeName(s.name), s.name);
+    for (const p of previews) {
+      for (const r of p.rows) {
+        const key = normalizeName(r.name);
+        const holder = taken.get(key);
+        if (holder) return `"${r.name}" would be both a copy of "${p.source.name}" and ${holder === r.name ? "an original you picked" : `a name belonging to "${holder}"`}. Un-tick one of them.`;
+        taken.set(key, `a copy of "${p.source.name}"`);
+      }
+    }
+    return null;
+  }, [sources, previews]);
+
+  const reusedCount = previews.reduce((n, p) => n + p.rows.filter((r) => r.reused).length, 0);
+  const toCreate = previews.reduce((n, p) => n + p.rows.length, 0);
+  const foundCount = previews.reduce((n, p) => n + (p.match?.matches.filter((m) => m.match).length ?? 0), 0);
 
   const activeJob = jobs.find((j) => j.status === "running") ?? null;
   const queuedCount = jobs.filter((j) => j.status === "queued").length;
   // Already-pending work no longer blocks Start — it queues behind it. The one
-  // thing that is still refused is the same source campaign twice over, which
-  // the server rejects and the button disables here so it isn't even offered.
-  const alreadyPending = jobs.some(
-    (j) =>
-      (j.status === "running" || j.status === "queued") &&
-      j.sourceCampaignId === sourceId
+  // thing still refused is the same original twice over, which the server
+  // rejects and the button disables here so it isn't even offered.
+  const pendingClash = jobs.find(
+    (j) => (j.status === "running" || j.status === "queued") && j.sources.some((s) => selected.includes(s.campaignId))
   );
   const canStart =
-    !!source &&
-    !showSettings &&
-    !alreadyPending &&
+    sources.length > 0 &&
+    kinds.length > 0 &&
+    ruleProblems.length === 0 &&
+    !nameClash &&
+    !pendingClash &&
     !starting &&
-    // A move needs somewhere to move to, but not all five: the campaigns that
-    // are there take the share of the ones that are not.
+    // A move needs somewhere to move to, but not every copy: the campaigns
+    // that are there take the share of the ones that are not.
     (mode === "create" || foundCount > 0);
 
   // --- Actions -------------------------------------------------------------
+  function toggleSource(id: string) {
+    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  function toggleKind(kind: CampaignKind) {
+    setKinds((prev) => (prev.includes(kind) ? prev.filter((k) => k !== kind) : KIND_ORDER.filter((k) => k === kind || prev.includes(k))));
+  }
+
+  function setRow(i: number, patch: Partial<SegmentRow>) {
+    setRows((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  }
+
   async function handleStart() {
-    if (!source || !names || startLock.current) return;
+    if (!canStart || startLock.current) return;
     startLock.current = true;
     setStarting(true);
     setError(null);
@@ -293,17 +270,14 @@ export function CampaignTypesTool() {
         mode,
         workspaceId: workspaceId!,
         workspaceName: workspaces.find((w) => w._id === workspaceId)?.name ?? "",
-        sourceCampaignId: source.id,
-        sourceCampaignName: source.name,
-        names,
+        sources: previews.map((p) => ({ campaignId: p.source.id, campaignName: p.source.name, names: p.names as RoleNames })),
+        kinds,
+        rules,
         activate: mode === "create" && activate,
       });
-      setToast(
-        activeJob || queuedCount > 0
-          ? "Added to the queue — it starts when the ones ahead finish"
-          : "Job started — you can close this tab"
-      );
+      setToast(activeJob || queuedCount > 0 ? "Added to the queue — it starts when the ones ahead finish" : "Job started — you can close this tab");
       setTimeout(() => setToast(null), 5000);
+      toggleJobs(true);
       await refreshJobs();
     } catch (err) {
       setError(errMessage(err));
@@ -316,6 +290,17 @@ export function CampaignTypesTool() {
   // --- Render --------------------------------------------------------------
   if (!ready) return <div className="pv-card h-40 animate-pulse" />;
   if (!hasKey) return <ConnectPrompt onConnected={loadWorkspaces} />;
+
+  const campaignOptions = (
+    <>
+      <option value="">{sources.length === 0 ? "Pick the originals first…" : "Campaign…"}</option>
+      {sources.map((c) => (
+        <option key={c.id} value={c.id}>
+          {c.name}
+        </option>
+      ))}
+    </>
+  );
 
   return (
     <div className="space-y-5">
@@ -331,158 +316,35 @@ export function CampaignTypesTool() {
               key={value}
               type="button"
               role="tab"
-              aria-selected={!showSettings && mode === value}
-              className={`pv-chip ${!showSettings && mode === value ? "pv-chip-active" : "hover:text-foreground"}`}
-              onClick={() => {
-                setMode(value);
-                setShowSettings(false);
-              }}
+              aria-selected={mode === value}
+              className={`pv-chip ${mode === value ? "pv-chip-active" : "hover:text-foreground"}`}
+              onClick={() => setMode(value)}
               data-mode={value}
             >
               {label}
             </button>
           ))}
-          {/* Warning-toned so it stands apart from the two modes it sits beside. */}
-          <button
-            type="button"
-            role="tab"
-            aria-selected={showSettings}
-            className={`pv-chip border-warning/50 text-warning hover:bg-warning/10 ${
-              showSettings ? "bg-warning/15" : ""
-            }`}
-            onClick={() => setShowSettings(true)}
-            data-mode="settings"
-          >
-            <SettingsIcon size={13} />
-            Settings
-          </button>
           <span className="self-center text-xs text-muted-foreground">
-            {showSettings
-              ? "Saved for every run until you change them."
-              : mode === "create"
-                ? "Builds the five campaigns, then splits the leads into them."
-                : "The five campaigns already exist: this only splits the source's not-contacted leads into them."}
+            {mode === "create"
+              ? "Sorts the leads by segment, builds the campaign types for each original, splits the leads into them and tags the pools."
+              : "The copies already exist: this sorts by segment, splits each original's not-contacted leads into them and tags the pools."}
           </span>
         </div>
 
-        {showSettings && (
-          <div className="space-y-4" data-settings>
-            <div>
-              <div className="mb-1.5 text-xs font-medium text-muted-foreground">Dominant targeting</div>
-              <div className="flex flex-wrap items-center gap-1.5 text-xs" role="radiogroup" aria-label="Dominant targeting">
-                {DOMINANT_OPTIONS.map((o) => (
-                  <button
-                    key={o.key}
-                    type="button"
-                    role="radio"
-                    aria-checked={draftDominant === o.key}
-                    className={`pv-chip ${draftDominant === o.key ? "pv-chip-active" : "hover:text-foreground"}`}
-                    onClick={() => setDraftDominant(o.key)}
-                    title={o.hint}
-                  >
-                    {o.label}
-                  </button>
-                ))}
-              </div>
-              <p className="mt-1.5 text-xs text-muted-foreground">
-                Which side gets the leads that are neither Microsoft nor Google. {describeDominant(draftDominant)}
-              </p>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="ct-google-limit">
-                  Google daily limit
-                </label>
-                <input
-                  id="ct-google-limit"
-                  type="number"
-                  className="pv-input"
-                  min={0}
-                  step={1}
-                  placeholder="As duplicated"
-                  value={draftGoogle}
-                  onChange={(e) => setDraftGoogle(e.target.value)}
-                  aria-label="Google daily limit"
-                />
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  Maximum emails per day, set on each plain copy the run creates.
-                  {googleProblem && <span className="block text-warning">{googleProblem}</span>}
-                </p>
-              </div>
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="ct-microsoft-limit">
-                  Microsoft daily limit
-                </label>
-                <input
-                  id="ct-microsoft-limit"
-                  type="number"
-                  className="pv-input"
-                  min={0}
-                  step={1}
-                  placeholder="As duplicated"
-                  value={draftMicrosoft}
-                  onChange={(e) => setDraftMicrosoft(e.target.value)}
-                  aria-label="Microsoft daily limit"
-                />
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  Maximum emails per day, set on each 🔵 copy the run creates.
-                  {microsoftProblem && <span className="block text-warning">{microsoftProblem}</span>}
-                </p>
-              </div>
-            </div>
-
-            <p className="text-xs text-muted-foreground">
-              A blank limit leaves the copy on whatever it was duplicated with. The source campaign itself is never
-              changed, and Move leads runs set no limits — the campaigns they move into were created, and limited,
-              by an earlier run.
-            </p>
-
-            {settingsError && (
-              <div className="flex items-start gap-2 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2.5 text-sm text-danger">
-                <AlertIcon size={16} className="mt-0.5 shrink-0" />
-                <span>{settingsError}</span>
-              </div>
-            )}
-
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                className="pv-btn-primary disabled:opacity-50"
-                disabled={!canSave}
-                onClick={handleSaveSettings}
-                data-save-settings
-              >
-                {savingSettings ? <Spinner /> : <CheckIcon size={16} />}
-                Save settings
-              </button>
-              {settingsNote ? (
-                <span className="text-xs text-success">{settingsNote}</span>
-              ) : !settingsLoaded ? (
-                <span className="text-xs text-muted-foreground">Reading the saved settings…</span>
-              ) : draftDirty ? (
-                <span className="text-xs text-muted-foreground">Not saved yet.</span>
-              ) : null}
-            </div>
-          </div>
-        )}
-
-        <div className={`grid gap-4 sm:grid-cols-2 ${showSettings ? "hidden" : ""}`}>
+        {/* Workspace + originals */}
+        <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-              Workspace
-            </label>
+            <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Workspace</label>
             <div className="relative">
               <select
                 className="pv-input appearance-none pr-9"
                 value={workspaceId ?? ""}
                 disabled={workspacesLoading || workspaces.length === 0}
                 onChange={(e) => setWorkspaceId(e.target.value)}
+                aria-label="Workspace"
               >
                 {workspacesLoading && <option>Loading workspaces…</option>}
-                {!workspacesLoading && workspaces.length === 0 && (
-                  <option>No workspaces found</option>
-                )}
+                {!workspacesLoading && workspaces.length === 0 && <option>No workspaces found</option>}
                 {!workspacesLoading &&
                   workspaces.map((w) => (
                     <option key={w._id} value={w._id}>
@@ -490,195 +352,216 @@ export function CampaignTypesTool() {
                     </option>
                   ))}
               </select>
-              <ChevronDownIcon
-                size={16}
-                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
+              <ChevronDownIcon size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             </div>
           </div>
 
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-              Original campaign
-            </label>
-            <div className="relative">
-              <select
-                className="pv-input appearance-none pr-9"
-                value={sourceId}
-                disabled={campaignsLoading || parents.length === 0}
-                onChange={(e) => setSourceId(e.target.value)}
-              >
-                <option value="">
-                  {campaignsLoading ? "Loading campaigns…" : "Select a campaign…"}
-                </option>
-                {parents.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDownIcon
-                size={16}
-                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
+            <div className="mb-1.5 flex items-baseline justify-between gap-2">
+              <label className="block text-xs font-medium text-muted-foreground" htmlFor="ct-filter">
+                Original campaigns
+              </label>
+              <span className="text-[11px] text-muted-foreground" data-selected-count>
+                {selected.length} selected
+                {selected.length > 0 && (
+                  <>
+                    {" · "}
+                    <button type="button" className="underline hover:text-foreground" onClick={() => setSelected([])}>
+                      clear
+                    </button>
+                  </>
+                )}
+              </span>
+            </div>
+            <input
+              id="ct-filter"
+              type="text"
+              className="pv-input mb-1.5 text-sm"
+              placeholder={campaignsLoading ? "Loading campaigns…" : "Filter campaigns…"}
+              value={filter}
+              disabled={campaignsLoading || parents.length === 0}
+              onChange={(e) => setFilter(e.target.value)}
+            />
+            <div className="max-h-52 overflow-y-auto rounded-xl border border-border" data-source-list>
+              {campaignsLoading ? (
+                <p className="p-3 text-xs text-muted-foreground">Loading campaigns…</p>
+              ) : visible.length === 0 ? (
+                <p className="p-3 text-xs text-muted-foreground">{parents.length === 0 ? "No campaigns in this workspace." : "Nothing matches."}</p>
+              ) : (
+                visible.map((c) => {
+                  const on = selected.includes(c.id);
+                  return (
+                    <label
+                      key={c.id}
+                      className={`flex cursor-pointer items-center gap-2 border-b border-border/60 px-3 py-1.5 text-sm last:border-b-0 hover:bg-muted/50 ${on ? "bg-accent/5" : ""}`}
+                    >
+                      <input type="checkbox" checked={on} onChange={() => toggleSource(c.id)} aria-label={`Pick ${c.name}`} data-source-option={c.id} />
+                      <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                      {isArchived(c) && <span className="shrink-0 text-[11px] text-muted-foreground">archived</span>}
+                    </label>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>
 
-        {!showSettings && mode === "move" && source && moveMatch && (
-          <div className="rounded-xl border border-border p-3 sm:p-4" data-move-preview>
+        {/* Segments */}
+        <div data-segments>
+          <div className="mb-1.5 text-xs font-medium text-muted-foreground">Segments</div>
+          <p className="mb-2 text-xs text-muted-foreground">
+            Before anything is built, every lead is moved to the campaign its Segment field names. Only the originals picked
+            above can be chosen. A segment on no row stays where it is.
+          </p>
+          <div className="space-y-2">
+            {rows.map((r, i) => (
+              <div key={i} className="grid gap-2 sm:grid-cols-[1fr_1fr]" data-segment-row={i + 1}>
+                <input
+                  type="text"
+                  className="pv-input text-sm"
+                  placeholder={`Segment ${i + 1}`}
+                  value={r.segment}
+                  onChange={(e) => setRow(i, { segment: e.target.value })}
+                  aria-label={`Segment ${i + 1}`}
+                />
+                <div className="relative">
+                  <select
+                    className="pv-input appearance-none pr-9 text-sm"
+                    value={r.campaignId}
+                    disabled={sources.length === 0}
+                    onChange={(e) => setRow(i, { campaignId: e.target.value })}
+                    aria-label={`Campaign for segment ${i + 1}`}
+                  >
+                    {campaignOptions}
+                  </select>
+                  <ChevronDownIcon size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                </div>
+              </div>
+            ))}
+            <div className="grid gap-2 sm:grid-cols-[1fr_1fr]" data-segment-row="empty">
+              <div className="pv-input flex items-center text-sm text-muted-foreground">Leads with no segment</div>
+              <div className="relative">
+                <select
+                  className="pv-input appearance-none pr-9 text-sm"
+                  value={emptyTo}
+                  disabled={sources.length === 0}
+                  onChange={(e) => setEmptyTo(e.target.value)}
+                  aria-label="Campaign for leads with no segment"
+                >
+                  <option value="">{sources.length === 0 ? "Pick the originals first…" : "Leave them where they are"}</option>
+                  {sources.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDownIcon size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              </div>
+            </div>
+          </div>
+          {ruleProblems.length > 0 && (
+            <p className="mt-2 flex gap-1.5 text-xs text-warning" data-rule-problems>
+              <AlertIcon size={13} className="mt-0.5 shrink-0" />
+              <span>{ruleProblems.join(" ")}</span>
+            </p>
+          )}
+        </div>
+
+        {/* Campaign types */}
+        <div data-kinds>
+          <div className="mb-1.5 text-xs font-medium text-muted-foreground">Campaign types</div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {KIND_ORDER.map((k) => {
+              const on = kinds.includes(k);
+              return (
+                <label key={k} className={`flex cursor-pointer items-start gap-2 rounded-xl border p-2.5 ${on ? "border-accent/50 bg-accent/5" : "border-border"}`}>
+                  <input type="checkbox" className="mt-0.5" checked={on} onChange={() => toggleKind(k)} aria-label={`Type ${KIND_LABELS[k]}`} />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium">{KIND_LABELS[k]}</span>
+                    <span className="block text-[11px] text-muted-foreground">{KIND_HINTS[k]}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          {kinds.length === 0 && (
+            <p className="mt-2 flex gap-1.5 text-xs text-warning">
+              <AlertIcon size={13} className="mt-0.5 shrink-0" />
+              <span>Tick at least one type.</span>
+            </p>
+          )}
+        </div>
+
+        {/* Preview */}
+        {sources.length > 0 && roles.length > 0 && (
+          <div className="rounded-xl border border-border p-3 sm:p-4" data-preview>
             <h3 className="mb-1 text-sm font-medium">
-              {missingCount === 0
-                ? "Leads go to these five campaigns"
+              {mode === "create"
+                ? `${formatNumber(toCreate)} campaign${toCreate === 1 ? "" : "s"} will be created from ${sources.length === 1 ? "this original" : `${sources.length} originals`}`
                 : foundCount === 0
-                  ? "None of these five campaigns are in this workspace"
-                  : `Leads go to the ${formatNumber(foundCount)} campaigns that are there`}
+                  ? "None of the copies are in this workspace"
+                  : `Leads go to the ${formatNumber(foundCount)} cop${foundCount === 1 ? "y" : "ies"} that ${foundCount === 1 ? "is" : "are"} there`}
             </h3>
             <p className="mb-3 text-xs text-muted-foreground">
-              Found by name in this workspace. Archived campaigns don&apos;t
-              count — an active, paused or completed one all take leads. Nothing
-              is created, no copy is changed and nothing is launched.
+              {mode === "create"
+                ? "Duplicated with their sub-sequences. Leads aren't copied — they're split deliberately afterwards. Google leads stay in the plain campaigns; Microsoft and other-ESP leads go to the 🔵 ones."
+                : "Found by name in this workspace. Archived campaigns don't count — an active, paused or completed one all take leads. Nothing is created, no copy is changed and nothing is launched."}
             </p>
-            <div className="space-y-2">
-              {moveMatch.matches.map((m) => (
-                <div
-                  key={m.role}
-                  className="flex flex-col gap-1 rounded-lg border border-border/70 p-2.5 sm:flex-row sm:items-center sm:justify-between"
-                  data-move-row={m.role}
-                >
-                  <div className="min-w-0">
-                    <div className="truncate font-mono text-xs">
-                      {m.match?.name ?? m.expectedName}
-                    </div>
-                    <div className="mt-0.5 text-[11px] text-muted-foreground">
-                      {ROLE_LABELS[m.role]}
-                    </div>
+            <div className="space-y-3">
+              {previews.map((p) => (
+                <div key={p.source.id} data-preview-source={p.source.id}>
+                  <div className="mb-1 truncate text-xs font-medium">{p.source.name}</div>
+                  <div className="space-y-1.5">
+                    {mode === "create"
+                      ? p.rows.map((r) => (
+                          <div key={r.role} className="flex flex-col gap-1 rounded-lg border border-border/70 px-2.5 py-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="min-w-0">
+                              <div className="truncate font-mono text-xs">{r.name}</div>
+                              <div className="mt-0.5 text-[11px] text-muted-foreground">{ROLE_LABELS[r.role]}</div>
+                            </div>
+                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${r.reused ? "bg-warning/10 text-warning" : "bg-success/10 text-success"}`}>
+                              {r.reused ? "already exists — will be reused" : "will be created"}
+                            </span>
+                          </div>
+                        ))
+                      : (p.match?.matches ?? []).map((m) => (
+                          <div key={m.role} className="flex flex-col gap-1 rounded-lg border border-border/70 px-2.5 py-2 sm:flex-row sm:items-center sm:justify-between" data-move-row={m.role}>
+                            <div className="min-w-0">
+                              <div className="truncate font-mono text-xs">{m.match?.name ?? m.expectedName}</div>
+                              <div className="mt-0.5 text-[11px] text-muted-foreground">{ROLE_LABELS[m.role]}</div>
+                            </div>
+                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${m.match ? "bg-success/10 text-success" : "bg-danger/10 text-danger"}`}>
+                              {m.match ? (m.loose ? "found — check it is the right one" : "found") : m.ambiguous ? "two share this name — skipped" : "not found — skipped"}
+                            </span>
+                          </div>
+                        ))}
                   </div>
-                  <span
-                    className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                      m.match
-                        ? "bg-success/10 text-success"
-                        : "bg-danger/10 text-danger"
-                    }`}
-                  >
-                    {m.match
-                      ? m.loose
-                        ? "found — check it is the right one"
-                        : "found"
-                      : m.ambiguous
-                        ? "two share this name — skipped"
-                        : "not found — skipped"}
-                  </span>
                 </div>
               ))}
             </div>
-            {foundCount === 0 && (
-              <p className="mt-3 text-xs text-danger">
-                There is nowhere to move anything. Check the names in Plusvibe
-                read exactly as above, and that none of them is archived.
+            {mode === "create" && reusedCount > 0 && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                {reusedCount === 1 ? "A campaign" : `${reusedCount} campaigns`} with {reusedCount === 1 ? "this name" : "these names"} already exist
+                {reusedCount === 1 ? "s" : ""}, so {reusedCount === 1 ? "it" : "they"} will be used as-is rather than duplicated again. That&apos;s what makes
+                re-running after an interrupted job safe.
+              </p>
+            )}
+            {nameClash && (
+              <p className="mt-3 flex gap-1.5 text-xs text-warning" data-name-clash>
+                <AlertIcon size={13} className="mt-0.5 shrink-0" />
+                <span>{nameClash}</span>
               </p>
             )}
             <p className="mt-3 text-xs text-muted-foreground">
-              Microsoft recipients go to the 🔵 campaigns, everyone else to the
-              rest, and the source keeps a share.
-              {missingCount > 0 && foundCount > 0 && (
-                <>
-                  {" "}
-                  A campaign that isn&apos;t there is skipped and its share
-                  stays with the others in its group
-                  {blueFound
-                    ? "."
-                    : " — and with no 🔵 campaign at all, the Microsoft leads stay in the source."}
-                </>
-              )}
+              At the end every plain campaign is tagged <span className="font-mono">google-pool</span> and every 🔵 one{" "}
+              <span className="font-mono">microsoft-pool</span>.
             </p>
-          </div>
-        )}
-
-        {!showSettings && mode === "create" && source && names && (
-          <div className="rounded-xl border border-border p-3 sm:p-4">
-            <h3 className="mb-1 text-sm font-medium">
-              Five campaigns will be created
-            </h3>
-            <p className="mb-3 text-xs text-muted-foreground">
-              Duplicated from{" "}
-              <span className="font-mono">{source.name}</span> with their
-              sub-sequences. Leads aren&apos;t copied — they&apos;re split
-              deliberately in step 3.
-            </p>
-            <div className="space-y-2">
-              {rows.map((r) => (
-                <div
-                  key={r.role}
-                  className="flex flex-col gap-1 rounded-lg border border-border/70 p-2.5 sm:flex-row sm:items-center sm:justify-between"
-                >
-                  <div className="min-w-0">
-                    <div className="truncate font-mono text-xs">{r.name}</div>
-                    <div className="mt-0.5 text-[11px] text-muted-foreground">
-                      {ROLE_LABELS[r.role]}
-                    </div>
-                  </div>
-                  <span
-                    className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                      r.reused
-                        ? "bg-warning/10 text-warning"
-                        : "bg-success/10 text-success"
-                    }`}
-                  >
-                    {r.reused
-                      ? "already exists — will be reused"
-                      : r.replacesArchived
-                        ? "replaces an archived one — will be created"
-                        : "will be created"}
-                  </span>
-                </div>
-              ))}
-            </div>
-            {archivedCount > 0 && (
-              <p className="mt-3 text-xs text-muted-foreground">
-                {archivedCount === 1 ? "One of these names is" : "Some of these names are"}{" "}
-                held only by an archived campaign. Archived campaigns can&apos;t
-                take leads, so {archivedCount === 1 ? "a fresh one is" : "fresh ones are"}{" "}
-                created under the same name and the archived{" "}
-                {archivedCount === 1 ? "one is" : "ones are"} left alone.
-              </p>
+            {mode === "create" && (
+              <label className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
+                <input type="checkbox" className="mt-0.5" checked={activate} onChange={(e) => setActivate(e.target.checked)} />
+                <span>Activate every campaign at the end, sub-sequences included. Untick to leave the copies as drafts and launch them yourself.</span>
+              </label>
             )}
-            {reusedCount > 0 && (
-              <p className="mt-3 text-xs text-muted-foreground">
-                {reusedCount === 1 ? "A campaign" : `${reusedCount} campaigns`}{" "}
-                with {reusedCount === 1 ? "this name" : "these names"} already
-                exist{reusedCount === 1 ? "s" : ""}, so{" "}
-                {reusedCount === 1 ? "it" : "they"} will be used as-is rather
-                than duplicated again. That&apos;s what makes re-running after an
-                interrupted job safe.
-              </p>
-            )}
-
-            <p className="mt-3 text-xs text-muted-foreground" data-settings-summary>
-              {describeDominant(settings.dominant)} {describeLimits(settings)} —{" "}
-              <button
-                type="button"
-                className="underline hover:text-foreground"
-                onClick={() => setShowSettings(true)}
-              >
-                change in Settings
-              </button>
-              .
-            </p>
-
-            <label className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                className="mt-0.5"
-                checked={activate}
-                onChange={(e) => setActivate(e.target.checked)}
-              />
-              <span>
-                Activate all six campaigns at the end, sub-sequences included.
-                Untick to leave the five copies as drafts and launch them
-                yourself.
-              </span>
-            </label>
           </div>
         )}
 
@@ -689,74 +572,73 @@ export function CampaignTypesTool() {
           </div>
         )}
 
-        <div className={`flex flex-wrap items-center gap-3 ${showSettings ? "hidden" : ""}`}>
-          <button
-            type="button"
-            className="pv-btn-primary disabled:opacity-50"
-            disabled={!canStart}
-            onClick={handleStart}
-            data-start
-          >
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="button" className="pv-btn-primary disabled:opacity-50" disabled={!canStart} onClick={handleStart} data-start>
             {starting ? <Spinner /> : mode === "move" ? <MoveIcon size={16} /> : <LayersIcon size={16} />}
-            {activeJob || queuedCount > 0
-              ? "Add to queue"
-              : mode === "move"
-                ? "Move leads"
-                : "Start"}
+            {activeJob || queuedCount > 0 ? "Add to queue" : mode === "move" ? "Move leads" : "Start"}
           </button>
-          {alreadyPending ? (
+          {pendingClash ? (
             <span className="text-xs text-warning">
-              This campaign is already {activeJob?.sourceCampaignId === sourceId
-                ? "being processed"
-                : "in the queue"}
-              .
+              One of these campaigns is already {pendingClash.status === "running" ? "being processed" : "in the queue"}.
             </span>
           ) : activeJob ? (
             <span className="text-xs text-muted-foreground">
-              A job is running
-              {queuedCount > 0
-                ? ` and ${formatNumber(queuedCount)} more ${
-                    queuedCount === 1 ? "is" : "are"
-                  } queued`
-                : ""}
-              . This one waits its turn — jobs run one at a time, in the order
-              you start them, so the campaigns come out in order.
+              A job is running{queuedCount > 0 ? ` and ${formatNumber(queuedCount)} more ${queuedCount === 1 ? "is" : "are"} queued` : ""}. This one waits its
+              turn — jobs run one at a time, in the order you start them, so the campaigns come out in order.
             </span>
           ) : null}
         </div>
       </div>
 
+      {/* Jobs, folded away until wanted */}
       <div className="space-y-3">
-        <h2 className="text-sm font-semibold">Jobs</h2>
-        {jobs.length === 0 ? (
-          <EmptyState icon={<LayersIcon />} title="No jobs yet">
-            Pick the original campaign and start — the run keeps going even if
-            you close this tab.
-          </EmptyState>
-        ) : (
-          jobs.map((job) => (
-            <JobCard
-              key={job.id}
-              job={job}
-              onAbort={async (id) => {
-                try {
-                  await abortCampaignTypes(id);
-                  await refreshJobs();
-                } catch (err) {
-                  setError(errMessage(err));
-                }
-              }}
-              onRemove={async (id) => {
-                try {
-                  await deleteCampaignTypesJob(id);
-                  await refreshJobs();
-                } catch (err) {
-                  setError(errMessage(err));
-                }
-              }}
-            />
-          ))
-        )}
+        <button
+          type="button"
+          className="flex w-full items-center justify-between rounded-xl border border-border px-3 py-2 text-left text-sm font-semibold hover:bg-muted/50"
+          onClick={() => toggleJobs()}
+          aria-expanded={jobsOpen}
+          data-jobs-toggle
+        >
+          <span>
+            Jobs
+            {jobs.length > 0 && <span className="ml-2 font-normal text-muted-foreground">{formatNumber(jobs.length)}</span>}
+            {anyRunning && (
+              <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent">
+                <Spinner size={10} /> {activeJob ? "running" : "queued"}
+              </span>
+            )}
+          </span>
+          <ChevronDownIcon size={16} className={`text-muted-foreground transition-transform ${jobsOpen ? "rotate-180" : ""}`} />
+        </button>
+        {jobsOpen &&
+          (jobs.length === 0 ? (
+            <EmptyState icon={<LayersIcon />} title="No jobs yet">
+              Pick the original campaigns and start — the run keeps going even if you close this tab.
+            </EmptyState>
+          ) : (
+            jobs.map((job) => (
+              <JobCard
+                key={job.id}
+                job={job}
+                onAbort={async (id) => {
+                  try {
+                    await abortCampaignTypes(id);
+                    await refreshJobs();
+                  } catch (err) {
+                    setError(errMessage(err));
+                  }
+                }}
+                onRemove={async (id) => {
+                  try {
+                    await deleteCampaignTypesJob(id);
+                    await refreshJobs();
+                  } catch (err) {
+                    setError(errMessage(err));
+                  }
+                }}
+              />
+            ))
+          ))}
       </div>
 
       {toast && (
@@ -766,12 +648,7 @@ export function CampaignTypesTool() {
               <CheckIcon size={14} />
             </span>
             <span className="text-sm font-medium text-success">{toast}</span>
-            <button
-              type="button"
-              onClick={() => setToast(null)}
-              className="ml-1 text-success/70 transition hover:text-success"
-              aria-label="Dismiss"
-            >
+            <button type="button" onClick={() => setToast(null)} className="ml-1 text-success/70 transition hover:text-success" aria-label="Dismiss">
               ✕
             </button>
           </div>

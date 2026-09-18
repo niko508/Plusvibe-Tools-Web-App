@@ -1,43 +1,41 @@
 // Shared types for Create All Campaign Types jobs (server + client).
 //
-// The tool takes ONE campaign and produces six:
+// A run takes SEVERAL original campaigns from one workspace and, for each,
+// produces up to six:
 //
-//   Tree Removal (August)                source, untouched copy-wise
-//   🔵 Tree Removal (August)             Microsoft leads
-//   Tree Removal - Opt Out (August)      opt-out line on step 1
-//   🔵 Tree Removal - Opt Out (August)   both
-//   Tree Removal - Signature (August)    step 1 signs off with the signature
-//   🔵 Tree Removal - Signature (August) both
+//   🟡 Tree Removal (August)                source, untouched copy-wise
+//   🔵 Tree Removal (August)                Microsoft leads           (Default)
+//   🟡 Tree Removal - Opt Out (August)      opt-out line on step 1    (With Opt Out)
+//   🔵 Tree Removal - Opt Out (August)      both
+//   🟡 Tree Removal - Signature (August)    step 1 signs off with the signature (With Signature)
+//   🔵 Tree Removal - Signature (August)    both
 //
-// Four phases: sort the leads, duplicate the campaigns (adding the opt-out copy
-// and swapping the sign-off), move the leads, then launch everything.
+// Three phases:
+//   1 segmenting  every original's leads are sorted by their Segment field
+//                 into the original that segment names
+//   2 building    each original in turn: sort its leads by mailbox provider,
+//                 duplicate the copies asked for, move the leads into them,
+//                 launch everything
+//   3 tagging     every plain campaign is tagged google-pool, every 🔵 one
+//                 microsoft-pool
+
+import type { SegmentRule } from "@/lib/campaign-types/segments";
 
 export const MAX_STORED_ERRORS = 50;
 
 /**
- * Which side the leads that are neither Microsoft nor Google go to. Defined
- * here rather than in campaign-types/settings.ts, which imports CreatedRole
- * from this file: the dependency has to run one way.
+ * The campaign types a run can build. Defined here rather than in
+ * campaign-types/kinds.ts, which imports CREATED_ROLES from this file: the
+ * dependency has to run one way.
  */
-export type Dominant = "google" | "microsoft";
-
-/** The three settings a run needs. The form and the store are in campaign-types/settings.ts. */
-export interface RunSettings {
-  dominant: Dominant;
-  /** Per day, for the plain (Google) copies. Null leaves the inherited limit. */
-  googleDailyLimit: number | null;
-  /** Per day, for the 🔵 (Microsoft) copies. Null leaves the inherited limit. */
-  microsoftDailyLimit: number | null;
-}
+export type CampaignKind = "default" | "optOut" | "signature";
 
 /**
  * What a run does.
  *
- * "create" is the whole thing: build the five copies, then sort, split, move
- * and launch. "move" is the second half on its own — the five campaigns were
- * built by an earlier run and are found by name, and only the source's
- * not-contacted leads are sorted and split into them. Nothing is created,
- * no copy is edited, and nothing is launched.
+ * "create" is the whole thing. "move" finds the copies by name instead of
+ * making them — they were built by an earlier run — and launches nothing;
+ * the segment sort, the provider split and the pool tags happen either way.
  */
 export type CampaignTypesMode = "create" | "move";
 
@@ -50,20 +48,21 @@ export type CampaignTypesStatus =
   | "interrupted"
   | "error";
 
-/** The four phases the UI shows as steps. */
-export type CampaignTypesPhase =
-  | "sorting"
-  | "duplicating"
-  | "moving"
-  | "activating"
-  | "finished";
+/** The three phases the card shows as steps. */
+export type JobPhase = "segmenting" | "building" | "tagging" | "finished";
 
-export const PHASE_ORDER: Exclude<CampaignTypesPhase, "finished">[] = [
-  "sorting",
-  "duplicating",
-  "moving",
-  "activating",
-];
+export const JOB_PHASE_ORDER: Exclude<JobPhase, "finished">[] = ["segmenting", "building", "tagging"];
+
+export function jobPhaseLabel(phase: Exclude<JobPhase, "finished">, mode: CampaignTypesMode | undefined): string {
+  if (phase === "segmenting") return "Sorting by segment";
+  if (phase === "tagging") return "Tagging the pools";
+  return mode === "move" ? "Moving leads" : "Building campaigns";
+}
+
+/** The four steps each original goes through inside the building phase. */
+export type CampaignTypesPhase = "sorting" | "duplicating" | "moving" | "activating" | "finished";
+
+export const PHASE_ORDER: Exclude<CampaignTypesPhase, "finished">[] = ["sorting", "duplicating", "moving", "activating"];
 
 export const PHASE_LABELS: Record<CampaignTypesPhase, string> = {
   sorting: "Sorting leads",
@@ -79,38 +78,23 @@ export const MOVE_PHASE_LABELS: Record<CampaignTypesPhase, string> = {
   duplicating: "Finding campaigns",
 };
 
-export function phaseLabel(
-  phase: CampaignTypesPhase,
-  mode: CampaignTypesMode | undefined
-): string {
+export function phaseLabel(phase: CampaignTypesPhase, mode: CampaignTypesMode | undefined): string {
   return (mode === "move" ? MOVE_PHASE_LABELS : PHASE_LABELS)[phase];
 }
 
 export type PhaseState = "pending" | "running" | "done" | "skipped" | "error";
 
 /** The six campaigns, by role. */
-export type CampaignRole =
-  | "source"
-  | "blue"
-  | "optOut"
-  | "blueOptOut"
-  | "signature"
-  | "blueSignature";
+export type CampaignRole = "source" | "blue" | "optOut" | "blueOptOut" | "signature" | "blueSignature";
 
-/** The five roles this tool creates. */
+/** The five roles this tool can create. */
 export type CreatedRole = Exclude<CampaignRole, "source">;
 
 /**
  * Creation order. "blue" leads because the two 🔵 copies duplicate from it
  * rather than from the source, so it has to exist first.
  */
-export const CREATED_ROLES: CreatedRole[] = [
-  "blue",
-  "optOut",
-  "blueOptOut",
-  "signature",
-  "blueSignature",
-];
+export const CREATED_ROLES: CreatedRole[] = ["blue", "optOut", "blueOptOut", "signature", "blueSignature"];
 
 /** Roles whose step 1 gets the opt-out spintax appended. */
 export const OPT_OUT_ROLES: CreatedRole[] = ["optOut", "blueOptOut"];
@@ -118,8 +102,10 @@ export const OPT_OUT_ROLES: CreatedRole[] = ["optOut", "blueOptOut"];
 /** Roles whose step 1 signs off with {{sender_signature}}. */
 export const SIGNATURE_ROLES: CreatedRole[] = ["signature", "blueSignature"];
 
-/** The 🔵 copies, duplicated from the blue campaign rather than the source. */
+/** The 🔵 copies, duplicated from the blue campaign when there is one. */
 export const FROM_BLUE_ROLES: CreatedRole[] = ["blueOptOut", "blueSignature"];
+
+export type RoleNames = Record<CreatedRole, string>;
 
 export interface CreatedCampaign {
   role: CreatedRole;
@@ -134,16 +120,6 @@ export interface CreatedCampaign {
   reused?: boolean;
   state: PhaseState;
   error?: string;
-  /**
-   * The daily limit written after the copy was made — the Google setting for
-   * a plain copy, the Microsoft one for a 🔵 copy. Absent when that setting
-   * is blank, so the copy keeps the limit it was duplicated with.
-   */
-  dailyLimit?: {
-    value: number;
-    state: PhaseState;
-    error?: string;
-  };
   /** Opt-out copy, for the two Opt Out roles only. */
   optOut?: {
     state: PhaseState;
@@ -169,18 +145,13 @@ export interface CreatedCampaign {
 export interface SortingProgress {
   leadsFound: number;
   microsoft: number;
-  /**
-   * Google recipients. Absent on records from before dominant targeting, when
-   * `other` meant everything that was not Microsoft.
-   */
+  /** Google recipients. Absent on the oldest records, where `other` was everything not Microsoft. */
   google?: number;
-  /** Neither Microsoft nor Google (or, on older records, not Microsoft). */
+  /** Neither Microsoft nor Google; they go to the 🔵 campaigns. */
   other: number;
-  /** Which side the neither-leads went to. Absent on older records: Google. */
-  dominant?: Dominant;
   domainsTotal: number;
   domainsResolved: number;
-  /** Domains whose MX lookup failed; classified as non-Microsoft. */
+  /** Domains whose MX lookup failed; classified as neither. */
   unresolvedDomains: number;
   /** Leads classified from a field on the lead rather than DNS. */
   fromLeadField: number;
@@ -219,14 +190,67 @@ export interface ActivationTarget {
   error?: string;
 }
 
+/** One original campaign and everything built from it. */
+export interface SourceRun {
+  campaignId: string;
+  campaignName: string;
+  state: PhaseState;
+  phase: CampaignTypesPhase;
+  phaseStates: Record<Exclude<CampaignTypesPhase, "finished">, PhaseState>;
+  sorting: SortingProgress;
+  created: CreatedCampaign[];
+  moving: MovingProgress;
+  activation: ActivationTarget[];
+}
+
+export interface SegmentRuleProgress {
+  segment: string | null;
+  campaignId: string;
+  campaignName: string;
+  planned: number;
+  moved: number;
+  unmoved?: number;
+  state: PhaseState;
+}
+
+export interface SegmentingProgress {
+  rules: SegmentRuleProgress[];
+  leadsFound: number;
+  /** Already in the campaign their segment names. */
+  stayed: number;
+  /** A segment no rule covers; left where they were. */
+  unmapped: number;
+  unmappedSegments: string[];
+  plannedTotal: number;
+  processed: number;
+  moved: number;
+  unmoved?: number;
+  unmovedReasons?: Record<string, number>;
+}
+
+export interface TagTarget {
+  campaignId: string;
+  name: string;
+  /** "google-pool" or "microsoft-pool". */
+  tag: string;
+  state: PhaseState;
+  error?: string;
+}
+
+export interface TaggingProgress {
+  targets: TagTarget[];
+  /** Pool tags this run had to create in the workspace. */
+  tagsCreated: string[];
+}
+
 export interface CampaignTypesJob {
   id: string;
   label: string;
   /** Absent on records written before Move Leads existed, i.e. "create". */
   mode?: CampaignTypesMode;
   status: CampaignTypesStatus;
-  phase: CampaignTypesPhase;
-  phaseStates: Record<Exclude<CampaignTypesPhase, "finished">, PhaseState>;
+  phase: JobPhase;
+  phaseStates: Record<Exclude<JobPhase, "finished">, PhaseState>;
   createdAt: number;
   updatedAt: number;
   /** When the job left the queue and actually began. Unset while queued. */
@@ -239,22 +263,23 @@ export interface CampaignTypesJob {
 
   workspaceId?: string;
   workspaceName: string;
-  sourceCampaignId: string;
-  sourceCampaignName: string;
 
-  /**
-   * The settings this run uses, taken when it was queued so an edit made
-   * while it waits does not change what it does. Absent on older records.
-   */
-  settings?: RunSettings;
+  /** The campaign types this run builds. */
+  kinds: CampaignKind[];
 
-  sorting: SortingProgress;
-  created: CreatedCampaign[];
-  moving: MovingProgress;
-  activation: ActivationTarget[];
+  segmenting: SegmentingProgress;
+  sources: SourceRun[];
+  tagging: TaggingProgress;
 
   errors: string[];
   errorsTruncated?: boolean;
+}
+
+export interface SourceInput {
+  campaignId: string;
+  campaignName: string;
+  /** Derived client-side and shown before starting, so sent explicitly. */
+  names: RoleNames;
 }
 
 export interface CampaignTypesStartPayload {
@@ -262,16 +287,9 @@ export interface CampaignTypesStartPayload {
   mode?: CampaignTypesMode;
   workspaceId: string;
   workspaceName: string;
-  sourceCampaignId: string;
-  sourceCampaignName: string;
-  /** Derived client-side and shown before starting, so sent explicitly. */
-  names: {
-    blue: string;
-    optOut: string;
-    blueOptOut: string;
-    signature: string;
-    blueSignature: string;
-  };
-  /** Launch all six at the end. Off leaves the copies as drafts. */
+  sources: SourceInput[];
+  kinds: CampaignKind[];
+  rules: SegmentRule[];
+  /** Launch everything at the end. Off leaves the copies as drafts. */
   activate?: boolean;
 }

@@ -629,10 +629,12 @@ eq("all five names still differ from each other and the source", (() => {
   eq("…and never the un-circled campaign of the same name", r.matches.some((m) => m.match?.id === "old"), false);
 }
 
-// --- dominant targeting ------------------------------------------------------
-console.log("--- dominant targeting");
-const settingsMod = await importTs("@/lib/campaign-types/settings");
-const { sidesFor, parseLimit, normalizeSettings, limitForRole, DEFAULT_SETTINGS, describeLimits } = settingsMod;
+// --- the two pools ------------------------------------------------------------
+// Google recipients stay on the plain side; Microsoft and everyone whose
+// provider is neither go to the 🔵 campaigns. Every campaign is in one pool.
+console.log("--- pools");
+const poolsMod = await importTs("@/lib/campaign-types/pools");
+const { sidesFor, poolOf, POOL_TAGS, isBlueRole } = poolsMod;
 const classified = [
   { lead: "m1", esp: "MICROSOFT" },
   { lead: "g1", esp: "GOOGLE" },
@@ -641,73 +643,108 @@ const classified = [
   { lead: "o2", esp: "OTHER" },
   { lead: "g2", esp: "GOOGLE" },
 ];
-eq("Google dominant: the other leads stay with the Google ones, in order",
-  sidesFor(classified, "google"), { blue: ["m1", "m2"], plain: ["g1", "o1", "o2", "g2"] });
-eq("Microsoft dominant: the other leads go to the 🔵 side, in order",
-  sidesFor(classified, "microsoft"), { blue: ["m1", "o1", "m2", "o2"], plain: ["g1", "g2"] });
-eq("either way every lead lands exactly once",
-  ["google", "microsoft"].map((d) => { const s = sidesFor(classified, d); return s.blue.length + s.plain.length; }), [6, 6]);
-eq("Google dominant is the two-way split the tool always made",
-  sidesFor(classified, "google").blue, classified.filter((c) => c.esp === "MICROSOFT").map((c) => c.lead));
-eq("no leads, no sides", sidesFor([], "microsoft"), { blue: [], plain: [] });
+eq("Microsoft and other-ESP leads go to the 🔵 side, in order; Google stays plain",
+  sidesFor(classified), { blue: ["m1", "o1", "m2", "o2"], plain: ["g1", "g2"] });
+eq("every lead lands exactly once", (() => { const s = sidesFor(classified); return s.blue.length + s.plain.length; })(), 6);
+eq("no leads, no sides", sidesFor([]), { blue: [], plain: [] });
+eq("the source and the plain copies are Google campaigns", ["source", "optOut", "signature"].map(poolOf), ["google", "google", "google"]);
+eq("the 🔵 copies are Microsoft ones", ["blue", "blueOptOut", "blueSignature"].map(poolOf), ["microsoft", "microsoft", "microsoft"]);
+eq("…which is what isBlueRole says", roles.CREATED_ROLES.map((r) => isBlueRole(r)), [true, false, true, false, true]);
+eq("the pool tags are named as asked", [POOL_TAGS.google.name, POOL_TAGS.microsoft.name], ["google-pool", "microsoft-pool"]);
+eq("…each with a colour the API will take", [POOL_TAGS.google.color, POOL_TAGS.microsoft.color].every((c) => /^#[0-9A-F]{6}$/i.test(c)), true);
 
-// --- the settings ------------------------------------------------------------
-console.log("--- settings");
-eq("the defaults are what the tool did before: Google dominant, limits as duplicated",
-  [DEFAULT_SETTINGS.dominant, DEFAULT_SETTINGS.googleDailyLimit, DEFAULT_SETTINGS.microsoftDailyLimit], ["google", null, null]);
-eq("a limit is a whole number from 0 up", [parseLimit(3000, "x").value, parseLimit("1500", "x").value, parseLimit(0, "x").value], [3000, 1500, 0]);
-eq("blank means not set", [parseLimit("", "x"), parseLimit(null, "x"), parseLimit(undefined, "x")], [{ value: null }, { value: null }, { value: null }]);
-eq("a fraction is refused", parseLimit(12.5, "Google daily limit").error, "Google daily limit: use a whole number.");
-eq("a negative is refused", parseLimit(-1, "Google daily limit").error, "Google daily limit: can't be negative.");
-eq("nonsense is refused", parseLimit("lots", "Microsoft daily limit").error, "Microsoft daily limit: enter a number, or leave it blank.");
-eq("a stored file with junk in it reads as the defaults",
-  normalizeSettings({ dominant: "yahoo", googleDailyLimit: "x", microsoftDailyLimit: -5 }),
-  { dominant: "google", googleDailyLimit: null, microsoftDailyLimit: null, updatedAt: 0 });
-eq("…and a good one reads as itself",
-  normalizeSettings({ dominant: "microsoft", googleDailyLimit: 3000, microsoftDailyLimit: 1500, updatedAt: 7 }),
-  { dominant: "microsoft", googleDailyLimit: 3000, microsoftDailyLimit: 1500, updatedAt: 7 });
-const S = { dominant: "microsoft", googleDailyLimit: 3000, microsoftDailyLimit: 1500 };
-eq("the plain copies get the Google limit", ["optOut", "signature"].map((r) => limitForRole(r, S)), [3000, 3000]);
-eq("the 🔵 copies get the Microsoft limit", ["blue", "blueOptOut", "blueSignature"].map((r) => limitForRole(r, S)), [1500, 1500, 1500]);
-eq("a blank limit sets nothing on that side", limitForRole("blue", { ...S, microsoftDailyLimit: null }), null);
-eq("the limits read as a sentence", [describeLimits(S), describeLimits({ ...S, googleDailyLimit: null, microsoftDailyLimit: null })],
-  ["Google copies 3,000/day · 🔵 copies 1,500/day", "daily limits as duplicated"]);
+// --- campaign types ------------------------------------------------------------
+console.log("--- campaign types");
+const kindsMod = await importTs("@/lib/campaign-types/kinds");
+const { rolesFor, normalizeKinds, kindOfRole, describeKinds, KIND_ORDER, KIND_LABELS } = kindsMod;
+eq("the three types, in order", KIND_ORDER, ["default", "optOut", "signature"]);
+eq("…named as the form shows them", KIND_ORDER.map((k) => KIND_LABELS[k]), ["Default", "With Opt Out", "With Signature"]);
+eq("all three types make all five copies, in creation order", rolesFor(["default", "optOut", "signature"]), roles.CREATED_ROLES);
+eq("Default alone makes the 🔵 copy only", rolesFor(["default"]), ["blue"]);
+eq("With Opt Out makes the pair", rolesFor(["optOut"]), ["optOut", "blueOptOut"]);
+eq("With Signature makes the pair", rolesFor(["signature"]), ["signature", "blueSignature"]);
+eq("no type, no copies", rolesFor([]), []);
+eq("the order of the types given does not change the creation order", rolesFor(["signature", "default"]), ["blue", "signature", "blueSignature"]);
+eq("whatever the form sends is cleaned: junk out, repeats folded, order fixed",
+  normalizeKinds(["signature", "x", "default", "signature", 3, null]), ["default", "signature"]);
+eq("not a list is nothing", [normalizeKinds("default"), normalizeKinds(undefined)], [[], []]);
+eq("every copy belongs to a type", roles.CREATED_ROLES.map(kindOfRole), ["default", "optOut", "optOut", "signature", "signature"]);
+eq("the types read as a list", describeKinds(["signature", "default"]), "Default, With Signature");
 
-// --- the daily limit is set through the schedule ----------------------------
-// The API reads the schedule one way and writes it another; the limit rides
-// on it. The translation is what these check.
-console.log("--- schedule limit");
-const schedMod = await importTs("@/lib/campaign-types/schedule-limit");
-const { toDaysObject, readSchedule, readDailyLimit, scheduleForWrite, todayIn } = schedMod;
-// A campaign as /campaign/list-all returns it.
-const LISTED = {
-  id: "c1", camp_name: "🟡 X (August)", status: "ACTIVE",
-  daily_limit: 600, daily_limit_new_lead: 0, interval_limit_in_min: 1,
-  camp_st_date: "2026-08-01", camp_end_date: "",
-  schedule: { days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], from_time: "10:00", to_time: "17:00", tz: "America/New_York" },
-};
-eq("day names become the write form", toDaysObject(["Monday", "Wednesday", "Sunday"]), { 1: true, 3: true, 7: true });
-eq("…as do numbers and objects", [toDaysObject([1, "5"]), toDaysObject({ "2": true, "3": false, Friday: true })], [{ 1: true, 5: true }, { 2: true, 5: true }]);
-eq("…and nothing is null", [toDaysObject([]), toDaysObject("x"), toDaysObject(undefined)], [null, null, null]);
-const read = readSchedule(LISTED);
-eq("the listed schedule is read with its dates from the campaign", read, {
-  days: { 1: true, 2: true, 3: true, 4: true, 5: true }, timezone: "America/New_York", from: "10:00", to: "17:00", startDate: "2026-08-01", endDate: undefined,
-});
-eq("the limit is read from the campaign", readDailyLimit(LISTED), 600);
-eq("a new-lead cap of 0 is 'no cap' and is not carried", "newLeadLimit" in read, false);
-eq("…a real one is", readSchedule({ ...LISTED, daily_limit_new_lead: 40 }).newLeadLimit, 40);
-eq("the write form carries the new limit and everything the endpoint requires", scheduleForWrite(read, 150, "2026-08-01"), {
-  daily_limit: 150, days: { 1: true, 2: true, 3: true, 4: true, 5: true }, timezone: "America/New_York", timing: { from: "10:00", to: "17:00" }, start_date: "2026-08-01",
-});
-eq("…with an end date and a new-lead cap when there are any",
-  scheduleForWrite(readSchedule({ ...LISTED, camp_end_date: "2026-12-31", daily_limit_new_lead: 40 }), 150, "2026-08-01"),
-  { daily_limit: 150, days: { 1: true, 2: true, 3: true, 4: true, 5: true }, timezone: "America/New_York", timing: { from: "10:00", to: "17:00" }, start_date: "2026-08-01", end_date: "2026-12-31", daily_limit_new_lead: 40 });
-eq("nothing top-level is sent", Object.keys(scheduleForWrite(read, 150, "2026-08-01")).includes("tz") || Object.keys(scheduleForWrite(read, 150, "2026-08-01")).includes("from_time"), false);
-eq("the write form is read back as itself", readSchedule({ schedules: [scheduleForWrite(read, 150, "2026-08-01")] }), { ...read, endDate: undefined });
-eq("a campaign with no schedule reads as null", [readSchedule({ id: "c2", daily_limit: 5 }), readSchedule(null), readSchedule({ schedule: { tz: "UTC" } })], [null, null, null]);
-eq("the limit still reads when there is no schedule", readDailyLimit({ daily_limit: "5" }), 5);
-eq("today is a date in the campaign's zone", /^\d{4}-\d{2}-\d{2}$/.test(todayIn("America/New_York")), true);
-eq("…and a bad zone falls back rather than throws", /^\d{4}-\d{2}-\d{2}$/.test(todayIn("Not/AZone")), true);
+// --- sorting by segment ---------------------------------------------------------
+console.log("--- segments");
+const segMod = await importTs("@/lib/campaign-types/segments");
+const { segmentOf, segmentKey, validateRules, normalizeRules, planSegmentMoves, describeRule, MAX_RULES } = segMod;
+eq("four rows: three segments and the empty one", MAX_RULES, 4);
+eq("the segment is read off the lead, trimmed", segmentOf({ email: "a@x.com", segment: "  cash pay " }), "cash pay");
+eq("…whatever the key's case", segmentOf({ Segment: "insurance" }), "insurance");
+eq("…or where the API puts custom fields", [segmentOf({ custom_variables: { segment: "vip" } }), segmentOf({ payload: { segment: "vip" } })], ["vip", "vip"]);
+eq("no segment is the empty string", [segmentOf({ email: "a@x.com" }), segmentOf({ segment: null }), segmentOf({ segment: "   " })], ["", "", ""]);
+eq("a number is a segment too", segmentOf({ segment: 2 }), "2");
+eq("segments compare without case or edges", [segmentKey(" Cash Pay "), segmentKey("cash pay"), segmentKey(null)], ["cash pay", "cash pay", ""]);
+
+const RULES = [
+  { segment: "cash pay", campaignId: "A", campaignName: "🟡 A" },
+  { segment: "Insurance", campaignId: "B", campaignName: "🟡 B" },
+  { segment: null, campaignId: "C", campaignName: "🟡 C" },
+];
+eq("good rules have no problems", validateRules(RULES, ["A", "B", "C"]), []);
+eq("a rule needs a campaign", validateRules([{ segment: "cash pay", campaignId: "", campaignName: "" }], ["A"]), ["Row 1: pick the campaign its leads go to."]);
+eq("…one of the originals picked", validateRules([{ segment: "cash pay", campaignId: "Z", campaignName: "🟡 Z" }], ["A"]),
+  ['Row 1: "🟡 Z" is not one of the original campaigns picked.']);
+eq("the empty row needs one too", validateRules([{ segment: null, campaignId: "", campaignName: "" }], ["A"]), ["The empty-segment row: pick the campaign its leads go to."]);
+eq("a blank segment with a campaign is a half-filled row", validateRules([{ segment: "", campaignId: "A", campaignName: "🟡 A" }], ["A"]),
+  ["Row 1: give the segment a name, or leave the row out."]);
+eq("the same segment twice is refused, whatever the case",
+  validateRules([RULES[0], { segment: "CASH PAY", campaignId: "B", campaignName: "🟡 B" }], ["A", "B"]), ['Row 2: "CASH PAY" is already on another row.']);
+eq("two empty rows are refused", validateRules([RULES[2], { segment: null, campaignId: "A", campaignName: "🟡 A" }], ["A", "C"]), ["Only one row can be for leads with no segment."]);
+eq("two segments may go to the same campaign", validateRules([RULES[0], { segment: "insurance", campaignId: "A", campaignName: "🟡 A" }], ["A"]), []);
+eq("no rules is fine: the phase is skipped", validateRules([], ["A"]), []);
+
+eq("what the form sends is cleaned: empty rows dropped, the rest trimmed",
+  normalizeRules([{ segment: " cash pay ", campaignId: " A ", campaignName: "🟡 A" }, { segment: "", campaignId: "" }, { segment: null, campaignId: "C", campaignName: "🟡 C" }, "junk"]),
+  [{ segment: "cash pay", campaignId: "A", campaignName: "🟡 A" }, { segment: null, campaignId: "C", campaignName: "🟡 C" }]);
+eq("…a half-filled row is kept for validation to name", normalizeRules([{ segment: "", campaignId: "A" }]), [{ segment: "", campaignId: "A", campaignName: "" }]);
+eq("…at most four rows", normalizeRules(Array.from({ length: 6 }, (_, i) => ({ segment: `s${i}`, campaignId: "A" }))).length, 4);
+eq("not a list is no rules", normalizeRules(undefined), []);
+
+// The plan: leads from every original, each to the campaign its segment names.
+const L = (id, segment) => ({ _id: id, email: `${id}@x.com`, ...(segment === undefined ? {} : { segment }) });
+const segPlan = planSegmentMoves(
+  [
+    { campaignId: "A", leads: [L("a1", "cash pay"), L("a2", "Insurance"), L("a3", ""), L("a4", "wholesale"), L("a5", "CASH PAY")] },
+    { campaignId: "B", leads: [L("b1", "insurance"), L("b2", "cash pay"), L("b3")] },
+    { campaignId: "C", leads: [L("c1", ""), L("c2", "cash pay ")] },
+  ],
+  RULES
+);
+eq("every lead is counted once", segPlan.counts.total, 10);
+eq("leads already in their segment's campaign stay", segPlan.counts.stayed, 4); // a1, a5, b1, c1
+eq("a segment on no row is left alone and named", [segPlan.counts.unmapped, segPlan.counts.unmappedSegments], [1, ["wholesale"]]);
+eq("the rest are planned", segPlan.counts.planned, 5);
+eq("…per rule, in rule order", segPlan.counts.perRule.map((r) => [r.segment, r.planned]), [["cash pay", 2], ["Insurance", 1], [null, 2]]);
+eq("moves are grouped by from → to, in the order met", segPlan.moves.map((m) => [m.fromCampaignId, m.toCampaignId, m.leads.map((l) => l._id)]), [
+  ["A", "B", ["a2"]],
+  ["A", "C", ["a3"]],
+  ["B", "A", ["b2"]],
+  ["B", "C", ["b3"]],
+  ["C", "A", ["c2"]],
+]);
+eq("…each move knowing its rule", segPlan.moves.map((m) => [m.segment, m.toCampaignName]), [["Insurance", "🟡 B"], [null, "🟡 C"], ["cash pay", "🟡 A"], [null, "🟡 C"], ["cash pay", "🟡 A"]]);
+eq("a lead never moves into the campaign it is in", segPlan.moves.every((m) => m.fromCampaignId !== m.toCampaignId), true);
+eq("with no empty row, leads with no segment stay put",
+  planSegmentMoves([{ campaignId: "A", leads: [L("a3", ""), L("b3")] }], RULES.slice(0, 2)).counts, { total: 2, stayed: 0, unmapped: 2, unmappedSegments: [], planned: 0, perRule: [{ segment: "cash pay", campaignId: "A", planned: 0 }, { segment: "Insurance", campaignId: "B", planned: 0 }] });
+eq("no rules, nothing moves", planSegmentMoves([{ campaignId: "A", leads: [L("a1", "cash pay")] }], []).moves, []);
+eq("a rule without a campaign is ignored rather than moving leads nowhere",
+  planSegmentMoves([{ campaignId: "A", leads: [L("a1", "x")] }], [{ segment: "x", campaignId: "", campaignName: "" }]).counts.unmapped, 1);
+eq("a rule reads as a sentence", [describeRule(RULES[0]), describeRule(RULES[2])], ["cash pay → 🟡 A", "no segment → 🟡 C"]);
+
+// --- the label ------------------------------------------------------------------
+console.log("--- label");
+const jobMod = await importTs("@/lib/jobs/campaign-types-types");
+eq("the three phases, in order", jobMod.JOB_PHASE_ORDER, ["segmenting", "building", "tagging"]);
+eq("…named for a create run", jobMod.JOB_PHASE_ORDER.map((p) => jobMod.jobPhaseLabel(p, "create")), ["Sorting by segment", "Building campaigns", "Tagging the pools"]);
+eq("…and a move run", jobMod.jobPhaseLabel("building", "move"), "Moving leads");
 
 console.log(failures === 0 ? "\nall campaign-types checks OK" : `\n${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);

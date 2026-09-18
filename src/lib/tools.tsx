@@ -211,9 +211,9 @@ export const TOOLS: Tool[] = [
   {
     slug: "campaign-types",
     name: "Create All Campaign Types",
-    tagline: "Split a campaign across its Microsoft, Opt Out and Signature copies",
+    tagline: "Sort leads by segment, then split each campaign across its Microsoft, Opt Out and Signature copies",
     description:
-      "Point it at the original campaign and it builds the other five, adds the opt-out line to step 1 of both Opt Out campaigns and swaps step 1's sign-off to {{sender_signature}} on both Signature campaigns, then sorts the not-contacted leads by mailbox provider and splits them six ways — Microsoft into the \u{1F535} campaigns, the rest across the original and its copies.",
+      "Pick the original campaigns and say which segment goes to which. It moves every lead into its segment's campaign, then builds the campaign types you tick for each one — the \u{1F535} copy for Microsoft leads, the Opt Out copy with the opt-out line on step 1, the Signature copy signing off with {{sender_signature}} — splits the leads by mailbox provider into them, launches everything and tags each campaign google-pool or microsoft-pool.",
     status: "active",
     color: "amber",
     Icon: ScissorsIcon,
