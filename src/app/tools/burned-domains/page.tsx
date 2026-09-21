@@ -1,29 +1,27 @@
 import type { Metadata } from "next";
 import { Header } from "@/components/header";
-import { DomainPerformanceTool } from "./tool";
+import { BurnedTool } from "./tool";
 
 export const metadata: Metadata = {
-  title: "Domain Performance Monitoring · Plusvibe Tools",
-  description:
-    "Compare deliverability and reply performance across every sending domain in a Plusvibe workspace.",
+  title: "Find Burned Domains & Inboxes · Plusvibe Tools",
+  description: "Scan every workspace for domains and inboxes that have stopped pulling replies.",
 };
 
-export default function DomainPerformancePage() {
+export default function BurnedDomainsPage() {
   return (
     <div className="min-h-screen">
       <Header back={{ href: "/", label: "All tools" }} />
       <main className="mx-auto max-w-6xl px-4 pb-24 sm:px-6">
         <div className="py-8">
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-            Domain Performance Monitoring
+            Find Burned Domains &amp; Inboxes
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground sm:text-base">
-            Break a workspace&apos;s email stats down by sending domain over any
-            date range — volume, reply and positive-reply rates, and bounce
-            rate, side by side.
+            Set the bar once per provider, then scan every workspace. Microsoft is
+            judged domain by domain, Google inbox by inbox.
           </p>
         </div>
-        <DomainPerformanceTool />
+        <BurnedTool />
       </main>
     </div>
   );

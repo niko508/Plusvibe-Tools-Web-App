@@ -5,7 +5,7 @@ import { replyRateHeat } from "@/lib/format";
 import { Spinner } from "@/components/ui";
 import { AlertIcon } from "@/components/icons";
 import { VERDICT_LABELS, type Verdict } from "@/lib/change-limits/qualify";
-import { PROVIDER_BADGE, providerShort } from "../domain-performance/providers";
+import { PROVIDER_BADGE, providerShort } from "@/lib/provider-display";
 import type { InboxRow, SortKey, SortState } from "./types";
 
 const NUM = "whitespace-nowrap px-2.5 py-3 text-right tabular-nums";

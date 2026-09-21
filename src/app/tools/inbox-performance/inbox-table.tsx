@@ -11,7 +11,7 @@ import {
 import { sumTotals } from "@/lib/inbox-performance/metrics";
 import { Spinner } from "@/components/ui";
 import { AlertIcon } from "@/components/icons";
-import { PROVIDER_BADGE, providerShort } from "../domain-performance/providers";
+import { PROVIDER_BADGE, providerShort } from "@/lib/provider-display";
 
 type Heat = { text: string; bg: string };
 

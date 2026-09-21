@@ -1,5 +1,5 @@
 import { VERDICT_LABELS } from "@/lib/change-limits/qualify";
-import { providerShort } from "../domain-performance/providers";
+import { providerShort } from "@/lib/provider-display";
 import type { InboxRow } from "./types";
 
 // Builds a CSV of the judged inboxes and triggers a browser download. The

@@ -4,7 +4,7 @@ import type { Workspace } from "@/lib/plusvibe-types";
 import { DATE_PRESETS, formatNumber } from "@/lib/format";
 import { ChevronDownIcon, RefreshIcon, MailIcon } from "@/components/icons";
 import { Spinner } from "@/components/ui";
-import { ESP_OPTIONS } from "../domain-performance/providers";
+import { ESP_OPTIONS } from "@/lib/provider-display";
 import { ALL_WORKSPACES } from "./types";
 
 // Everything is chosen first; nothing is fetched until a button is pressed.

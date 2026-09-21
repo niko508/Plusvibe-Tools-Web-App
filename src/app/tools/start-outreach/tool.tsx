@@ -25,7 +25,7 @@ import {
   PlayIcon,
   SheetIcon,
 } from "@/components/icons";
-import { PROVIDER_BADGE, providerShort } from "../domain-performance/providers";
+import { PROVIDER_BADGE, providerShort } from "@/lib/provider-display";
 import {
   DEFAULT_MIN_WARMUP_DAYS,
   DEFAULT_RULES,

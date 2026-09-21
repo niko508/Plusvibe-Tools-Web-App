@@ -43,8 +43,8 @@ import {
   FireIcon,
 } from "@/components/icons";
 import { Controls } from "./controls";
-import { OverviewChart } from "../domain-performance/overview-chart";
-import { providerLabel } from "../domain-performance/providers";
+import { OverviewChart } from "@/components/overview-chart";
+import { providerLabel } from "@/lib/provider-display";
 import { InboxTable } from "./inbox-table";
 import { exportInboxesCsv } from "./csv";
 import { ALL_WORKSPACES, type InboxRow, type SortKey, type SortState } from "./types";

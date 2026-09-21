@@ -1,5 +1,5 @@
 import type { InboxRow } from "./types";
-import { providerShort } from "../domain-performance/providers";
+import { providerShort } from "@/lib/provider-display";
 
 // Builds a CSV of the per-inbox table and triggers a browser download. Rates
 // are the app's own — over unique contacts — not Plusvibe's per-sent ones.

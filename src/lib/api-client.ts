@@ -17,6 +17,8 @@ import type {
   CampaignTypesJob,
   CampaignTypesStartPayload,
 } from "@/lib/jobs/campaign-types-types";
+import type { BurnedJob, BurnedStartPayload } from "@/lib/jobs/burned-types";
+import type { BurnedSettings, Esp } from "@/lib/burned/settings";
 import type { WeekSchedule } from "@/lib/campaign-settings/schedule";
 import type {
   Profile,
@@ -820,6 +822,36 @@ export function deleteCampaignTypesJob(jobId: string, signal?: AbortSignal) {
     body: { jobId },
     signal,
   });
+}
+
+// --- Find Burned Domains & Inboxes ---------------------------------------------
+
+export function fetchBurnedSettings(signal?: AbortSignal) {
+  return request<{ settings: BurnedSettings }>("/api/jobs/burned/settings", { signal });
+}
+
+/** Only the providers given change; the other keeps what it had. */
+export function saveBurnedSettings(
+  patch: Partial<Record<Esp, { minSends: number; replyOooPct: number }>>,
+  signal?: AbortSignal
+) {
+  return request<{ settings: BurnedSettings }>("/api/jobs/burned/settings", { method: "PUT", body: patch, signal });
+}
+
+export function startBurnedScan(payload: BurnedStartPayload, signal?: AbortSignal) {
+  return request<{ jobId: string }>("/api/jobs/burned/start", { method: "POST", body: payload, signal });
+}
+
+export function listBurnedJobs(signal?: AbortSignal) {
+  return request<{ jobs: BurnedJob[] }>("/api/jobs/burned/list", { signal });
+}
+
+export function abortBurnedJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/burned/abort", { method: "POST", body: { jobId }, signal });
+}
+
+export function deleteBurnedJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/burned/delete", { method: "POST", body: { jobId }, signal });
 }
 
 // --- Inbox Rotation -----------------------------------------------------------

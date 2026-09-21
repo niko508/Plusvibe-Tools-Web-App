@@ -1,6 +1,5 @@
 import type { ComponentType } from "react";
 import {
-  GaugeIcon,
   MailIcon,
   SparklesIcon,
   TrashIcon,
@@ -129,14 +128,14 @@ export const TOOLS: Tool[] = [
     Icon: SparklesIcon,
   },
   {
-    slug: "domain-performance",
-    name: "Domain Performance Monitoring",
-    tagline: "Compare deliverability & replies across every sending domain",
+    slug: "burned-domains",
+    name: "Find Burned Domains & Inboxes",
+    tagline: "Scan every workspace for what has stopped pulling replies",
     description:
-      "Break a workspace's email stats down by sending domain over any date range — sent volume, reply and positive-reply rates, bounce rate and more, side by side.",
+      "Pick a provider and set the bar once: a minimum number of sends, and the reply rate including out-of-office below which something counts as burned. Microsoft is judged domain by domain, Google inbox by inbox, across every workspace at once \u2014 with the list ready to copy or download.",
     status: "active",
     color: "sky",
-    Icon: GaugeIcon,
+    Icon: FireIcon,
   },
   {
     slug: "inbox-performance",
