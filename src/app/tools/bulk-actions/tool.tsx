@@ -180,6 +180,8 @@ export function BulkActionsTool() {
             All bulk actions
           </button>
 
+          <ActionHeading id={action} />
+
       {/* Workspace picker — shared by every action */}
       <WorkspacePicker
         workspaces={workspaces}
@@ -235,6 +237,25 @@ export function BulkActionsTool() {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+/** The open action's name, so the page says what it is doing, not just "General Bulk Actions". */
+function ActionHeading({ id }: { id: ActionId }) {
+  const a = ACTIONS.find((x) => x.id === id);
+  if (!a) return null;
+  const c = TOOL_COLORS[a.color];
+  const Icon = a.Icon;
+  return (
+    <div className="flex items-start gap-3" data-action-heading>
+      <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${c.tile}`}>
+        <Icon size={22} />
+      </span>
+      <div className="min-w-0">
+        <h2 className="text-lg font-semibold tracking-tight">{a.name}</h2>
+        <p className="mt-0.5 text-sm text-muted-foreground">{a.description}</p>
+      </div>
     </div>
   );
 }
