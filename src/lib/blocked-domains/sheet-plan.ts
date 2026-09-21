@@ -17,7 +17,7 @@
 // contents are unit-testable and a missing column is reported rather than
 // guessed at.
 
-import { normalizeDomain } from "@/lib/blocked-domains/domain";
+import { domainOfEmail, normalizeDomain } from "@/lib/blocked-domains/domain";
 import { dominantProvider, type ProviderCounts } from "@/lib/plusvibe-providers";
 
 /** The status a blocked domain's row is set to. */
@@ -29,6 +29,15 @@ export const COL_DOMAIN_HOST = "Domain Host";
 export const CANCEL_TAB = "🚯 Tenants to Cancel";
 export const COL_CANCEL_TENANT = "Tenant";
 export const COL_CANCEL_SOURCE = "Tenant / Inbox Source";
+/**
+ * The domain the row was queued for. Both cancel tabs carry one.
+ *
+ * For a tenant it is read off that tenant's row in 📋 Domains, and for a
+ * Google mailbox it is simply the address's own domain. Either way it is what
+ * makes the list readable: a tenant email or a sender address on its own is
+ * unrecognisable once a few dozen are queued.
+ */
+export const COL_CANCEL_DOMAIN = "Domain";
 
 export const GOOGLE_CANCEL_TAB = "🛑 Google Inboxes to Cancel";
 export const COL_GOOGLE_EMAIL = "Email Address";
@@ -184,7 +193,13 @@ export function buildGoogleCancelRow(
   header: string[],
   values: { email: string; source: string }
 ): string[] {
-  return buildQueueRow(header, { key: values.email, source: values.source }, GOOGLE_QUEUE);
+  // The domain is the address's own — a Google mailbox has no tenant row to
+  // read one off, and deriving it here means every caller gets it.
+  return buildQueueRow(
+    header,
+    { key: values.email, source: values.source, domain: domainOfEmail(values.email) ?? "" },
+    GOOGLE_QUEUE
+  );
 }
 
 /**
@@ -194,15 +209,17 @@ export function buildGoogleCancelRow(
  */
 export function buildQueueRow(
   header: string[],
-  values: { key: string; source: string },
+  values: { key: string; source: string; domain?: string },
   queue: QueueTab
 ): string[] {
   const width = Math.max(header.length, 1);
   const row = new Array<string>(width).fill("");
   const iKey = headerIndex(header, queue.keyColumn);
   const iSource = headerIndex(header, queue.sourceColumn);
+  const iDomain = queue.domainColumn ? headerIndex(header, queue.domainColumn) : -1;
   if (iKey >= 0) row[iKey] = values.key;
   if (iSource >= 0) row[iSource] = values.source;
+  if (iDomain >= 0 && values.domain) row[iDomain] = values.domain;
   return row;
 }
 
@@ -227,13 +244,15 @@ export interface GoogleTabPlan {
   problem?: string;
 }
 
-/** Which tab is being filled, and under which two headers. */
+/** Which tab is being filled, and under which headers. */
 export interface QueueTab {
   tab: string;
   /** The column the value goes in — the one a duplicate is recognised by. */
   keyColumn: string;
   /** The dropdown beside it. Left alone when the source is empty. */
   sourceColumn: string;
+  /** Where the domain goes, on the tabs that carry one. */
+  domainColumn?: string;
   /** What the values are, for the problem text: "inboxes", "tenants". */
   noun: string;
 }
@@ -242,6 +261,7 @@ export const GOOGLE_QUEUE: QueueTab = {
   tab: GOOGLE_CANCEL_TAB,
   keyColumn: COL_GOOGLE_EMAIL,
   sourceColumn: COL_CANCEL_SOURCE,
+  domainColumn: COL_CANCEL_DOMAIN,
   noun: "inboxes",
 };
 
@@ -249,6 +269,7 @@ export const TENANT_QUEUE: QueueTab = {
   tab: CANCEL_TAB,
   keyColumn: COL_CANCEL_TENANT,
   sourceColumn: COL_CANCEL_SOURCE,
+  domainColumn: COL_CANCEL_DOMAIN,
   noun: "tenants",
 };
 
@@ -264,14 +285,20 @@ export function planGoogleTabWrites(
   emails: string[],
   source: string
 ): GoogleTabPlan {
-  return planQueueTabWrites(grid, emails.map((email) => ({ key: email, source })), GOOGLE_QUEUE);
+  return planQueueTabWrites(
+    grid,
+    emails.map((email) => ({ key: email, source, domain: domainOfEmail(email) ?? "" })),
+    GOOGLE_QUEUE
+  );
 }
 
-/** One value to queue, with the dropdown value that belongs beside it. */
+/** One value to queue, with what belongs beside it. */
 export interface QueueEntry {
   key: string;
   /** Written into the source column; an empty one leaves that cell alone. */
   source: string;
+  /** The domain this came from, for the tabs that have a column for it. */
+  domain?: string;
 }
 
 /**
@@ -292,6 +319,7 @@ export function planQueueTabWrites(
   const header = grid[0] ?? [queue.keyColumn, queue.sourceColumn];
   const iEmail = headerIndex(header, queue.keyColumn);
   const iSource = headerIndex(header, queue.sourceColumn);
+  const iDomain = queue.domainColumn ? headerIndex(header, queue.domainColumn) : -1;
   const out: GoogleTabPlan = { updates: [], append: [], queued: [], already: [], moved: [] };
   if (iEmail < 0) {
     out.problem = `The "${queue.tab}" tab has no ${queue.keyColumn} column, so no ${queue.noun} were listed there.`;
@@ -306,14 +334,14 @@ export function planQueueTabWrites(
     else if (!rowOf.has(e)) rowOf.set(e, r);
   }
   const firstBlank = blanks[0] ?? Infinity;
-  const place = (email: string, source: string, slot: number) => {
+  const place = (entry: QueueEntry, email: string, slot: number) => {
     out.updates.push({ row: slot, column: iEmail, value: email });
-    if (iSource >= 0 && source) out.updates.push({ row: slot, column: iSource, value: source });
+    if (iSource >= 0 && entry.source) out.updates.push({ row: slot, column: iSource, value: entry.source });
+    if (iDomain >= 0 && entry.domain) out.updates.push({ row: slot, column: iDomain, value: entry.domain });
   };
   const seen = new Set<string>();
   for (const entry of entries) {
     const email = entry.key.trim().toLowerCase();
-    const source = entry.source;
     if (!email || seen.has(email)) continue;
     seen.add(email);
     const existing = rowOf.get(email);
@@ -328,14 +356,15 @@ export function planQueueTabWrites(
         out.already.push(email);
         continue;
       }
-      place(email, source, slot);
+      place(entry, email, slot);
       out.updates.push({ row: existing, column: iEmail, value: "" });
       if (iSource >= 0) out.updates.push({ row: existing, column: iSource, value: "" });
+      if (iDomain >= 0) out.updates.push({ row: existing, column: iDomain, value: "" });
       out.moved.push(email);
       continue;
     }
-    if (slot !== undefined) place(email, source, slot);
-    else out.append.push(buildQueueRow(header, { key: email, source }, queue));
+    if (slot !== undefined) place(entry, email, slot);
+    else out.append.push(buildQueueRow(header, { key: email, source: entry.source, domain: entry.domain }, queue));
     out.queued.push(email);
   }
   return out;
@@ -373,15 +402,13 @@ export function googleInboxesToQueue(
  */
 export function buildCancelRow(
   header: string[],
-  values: { tenant: string; source: string }
+  values: { tenant: string; source: string; domain?: string }
 ): string[] {
-  const width = Math.max(header.length, 1);
-  const row = new Array<string>(width).fill("");
-  const iTenant = headerIndex(header, COL_CANCEL_TENANT);
-  const iSource = headerIndex(header, COL_CANCEL_SOURCE);
-  if (iTenant >= 0) row[iTenant] = values.tenant;
-  if (iSource >= 0) row[iSource] = values.source;
-  return row;
+  return buildQueueRow(
+    header,
+    { key: values.tenant, source: values.source, domain: values.domain },
+    TENANT_QUEUE
+  );
 }
 
 /**

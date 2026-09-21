@@ -199,12 +199,13 @@ export function planDomainsTab(
  *
  * Several burned domains often sit on one tenant, and cancelling it once is
  * the whole point — so the first domain that names a tenant carries it, and
- * the rest record that it was already accounted for.
+ * the rest record that it was already accounted for. That first domain is
+ * also the one written into the tab's Domain column.
  */
 export function tenantsToQueue(
   lookups: DomainLookup[]
-): { entries: { key: string; source: string }[]; missing: string[] } {
-  const entries: { key: string; source: string }[] = [];
+): { entries: { key: string; source: string; domain: string }[]; missing: string[] } {
+  const entries: { key: string; source: string; domain: string }[] = [];
   const missing: string[] = [];
   const seen = new Set<string>();
   for (const l of lookups) {
@@ -217,7 +218,9 @@ export function tenantsToQueue(
     const key = tenant.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    entries.push({ key: tenant, source: l.tenantSource });
+    // The domain is the one whose row named this tenant — the whole point of
+    // the column is to say what sent it to the cancellation list.
+    entries.push({ key: tenant, source: l.tenantSource, domain: l.domain });
   }
   return { entries, missing };
 }

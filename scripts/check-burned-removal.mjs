@@ -126,20 +126,20 @@ eq("a header with stray padding still matches",
 console.log("--- the tenants");
 const tq = tenantsToQueue(plan.lookups);
 eq("a domain with no tenant is reported, not queued blank", tq.missing, ["notenant.io"]);
-eq("every tenant that was found is queued with its own source",
+eq("every tenant that was found is queued with its own source and domain",
   tq.entries,
   [
-    { key: "admin@burnedco.onmicrosoft.com", source: "Cheap Inboxes" },
-    { key: "admin@alreadyco.onmicrosoft.com", source: "Cheap Inboxes" },
-    { key: "admin@twiceco.onmicrosoft.com", source: "Cheap Inboxes" },
+    { key: "admin@burnedco.onmicrosoft.com", source: "Cheap Inboxes", domain: "burned.io" },
+    { key: "admin@alreadyco.onmicrosoft.com", source: "Cheap Inboxes", domain: "already.io" },
+    { key: "admin@twiceco.onmicrosoft.com", source: "Cheap Inboxes", domain: "twice.io" },
   ]);
 // Several burned domains normally sit on one tenant, and cancelling it once
 // is the point.
-eq("one tenant behind two domains is queued once",
+eq("one tenant behind two domains is queued once, under the first domain",
   tenantsToQueue([
     { domain: "a.io", rowNumber: 2, matches: 1, status: "", tenantEmail: "t@x.com", tenantSource: "S" },
     { domain: "b.io", rowNumber: 3, matches: 1, status: "", tenantEmail: "T@X.com", tenantSource: "S" },
-  ]).entries.length, 1);
+  ]).entries, [{ key: "t@x.com", source: "S", domain: "a.io" }]);
 eq("a domain that was never found has no tenant to queue",
   tenantsToQueue([{ domain: "a.io", matches: 0, status: "", tenantEmail: "", tenantSource: "" }]),
   { entries: [], missing: [] });
@@ -176,6 +176,21 @@ eq("each tenant keeps its own source",
     { row: 2, column: 0, value: "a@x.com" }, { row: 2, column: 1, value: "Cheap Inboxes" },
     { row: 3, column: 0, value: "b@x.com" }, { row: 3, column: 1, value: "Hypertise" },
   ]);
+// The Domain column says what sent the tenant to the list.
+eq("the tenant's domain lands in the tab's Domain column",
+  SP.planQueueTabWrites([["Domain", "Tenant", "Tenant / Inbox Source"], ["", "", "–"]],
+    [{ key: "admin@burnedco.onmicrosoft.com", source: "Cheap Inboxes", domain: "burned.io" }],
+    SP.TENANT_QUEUE).updates,
+  [
+    { row: 2, column: 1, value: "admin@burnedco.onmicrosoft.com" },
+    { row: 2, column: 2, value: "Cheap Inboxes" },
+    { row: 2, column: 0, value: "burned.io" },
+  ]);
+// A Google row has no tenant behind it, so its domain is its own.
+eq("a Google address brings its own domain and no source",
+  SP.planQueueTabWrites([["Domain", "Email Address", "Tenant / Inbox Source"], ["", "", "–"]],
+    [{ key: "sarah@leclu.co", source: "", domain: "leclu.co" }], SP.GOOGLE_QUEUE).updates,
+  [{ row: 2, column: 1, value: "sarah@leclu.co" }, { row: 2, column: 0, value: "leclu.co" }]);
 eq("a tenants tab without its key column says so in its own words",
   SP.planQueueTabWrites([["Notes"]], [{ key: "a@x.com", source: "" }], SP.TENANT_QUEUE).problem,
   'The "🚯 Tenants to Cancel" tab has no Tenant column, so no tenants were listed there.');

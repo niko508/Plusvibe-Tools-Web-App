@@ -334,7 +334,9 @@ async function runSheet(rec: BurnedRemovalJob, targets: RemovalTarget[], check: 
     // tenant behind it, and guessing a source would be worse than blank.
     const plan = planQueueTabWrites(
       grid,
-      targets.map((t) => ({ key: t.name, source: "" })),
+      // The domain is the sender address's own; a Google mailbox has no tenant
+      // row to read one off.
+      targets.map((t) => ({ key: t.name, source: "", domain: t.domain })),
       GOOGLE_QUEUE
     );
     if (plan.problem) {

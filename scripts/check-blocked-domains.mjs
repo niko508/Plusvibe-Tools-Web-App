@@ -132,6 +132,38 @@ eq("a reordered header still writes correctly",
     { tenant: "a@b.com", source: "CGC" }),
   ["CGC", "a@b.com"]);
 
+// The tab carries a Domain column, so the list says which domain sent each
+// tenant there — a tenant address on its own is unrecognisable in a long list.
+const CANCEL_WITH_DOMAIN = ["Domain", "Tenant", "Tenant / Inbox Source"];
+eq("the domain lands beside the tenant",
+  sp.buildCancelRow(CANCEL_WITH_DOMAIN, { tenant: "a@t.onmicrosoft.com", source: "CGC", domain: "lavasi.pro" }),
+  ["lavasi.pro", "a@t.onmicrosoft.com", "CGC"]);
+eq("…found by name, whatever order the columns are in",
+  sp.buildCancelRow(["Tenant", "Domain"], { tenant: "a@t.onmicrosoft.com", source: "CGC", domain: "lavasi.pro" }),
+  ["a@t.onmicrosoft.com", "lavasi.pro"]);
+eq("a tab without the column is written exactly as before",
+  sp.buildCancelRow(CANCEL_HEADER, { tenant: "a@t.onmicrosoft.com", source: "CGC", domain: "lavasi.pro" }),
+  ["a@t.onmicrosoft.com", "CGC", "", ""]);
+// Filling a laid-out blank row writes all three cells at once.
+eq("a planned tenant row carries the domain into the blank slot",
+  sp.planQueueTabWrites([CANCEL_WITH_DOMAIN, ["", "", "–"]],
+    [{ key: "a@t.onmicrosoft.com", source: "CGC", domain: "lavasi.pro" }], sp.TENANT_QUEUE).updates,
+  [
+    { row: 2, column: 1, value: "a@t.onmicrosoft.com" },
+    { row: 2, column: 2, value: "CGC" },
+    { row: 2, column: 0, value: "lavasi.pro" },
+  ]);
+// Moving a stranded row up has to clear everything it left behind, the domain
+// included — a domain left under an empty tenant reads as a queued row.
+eq("…and a moved row leaves no domain behind",
+  sp.planQueueTabWrites([CANCEL_WITH_DOMAIN, ["", "", "–"], ["old.pro", "a@t.onmicrosoft.com", "CGC"]],
+    [{ key: "a@t.onmicrosoft.com", source: "CGC", domain: "lavasi.pro" }], sp.TENANT_QUEUE).updates.slice(3),
+  [
+    { row: 3, column: 1, value: "" },
+    { row: 3, column: 2, value: "" },
+    { row: 3, column: 0, value: "" },
+  ]);
+
 // The tab is append-only, so a second blocked domain on the same tenant must
 // not queue it twice.
 const CANCEL_GRID = [CANCEL_HEADER, ["admin@lava.onmicrosoft.com", "CGC", "", ""]];
@@ -197,6 +229,17 @@ eq("…and with no blank row left the rest is appended", [tp.append, tp.queued],
 eq("a tab with only a header appends everything", sp.planGoogleTabWrites([GH], ["a@x.com"], "S").append, [["a@x.com", "S"]]);
 eq("a tab without the email column says so", sp.planGoogleTabWrites([["Notes"]], ["a@x.com"], "S").problem, 'The "🛑 Google Inboxes to Cancel" tab has no Email Address column, so no inboxes were listed there.');
 eq("a missing source leaves the slot's dropdown cell alone", sp.planGoogleTabWrites([GH, ["", "–"]], ["a@x.com"], "").updates, [{ row: 2, column: 0, value: "a@x.com" }]);
+// This tab carries a Domain column too, and a Google mailbox has no tenant row
+// to read one off — so it is simply the sender address's own domain.
+const GHD = ["Domain", "Email Address", "Tenant / Inbox Source"];
+eq("a listed Google inbox brings its own domain",
+  sp.planGoogleTabWrites([GHD, ["", "", "–"]], ["Sarah.E@Leclu.co"], "").updates,
+  [{ row: 2, column: 1, value: "sarah.e@leclu.co" }, { row: 2, column: 0, value: "leclu.co" }]);
+eq("…and so does an appended one", sp.planGoogleTabWrites([GHD], ["a@x.com"], "S").append, [["x.com", "a@x.com", "S"]]);
+eq("…however the columns are ordered",
+  sp.buildGoogleCancelRow(["Email Address", "Domain"], { email: "a@x.com", source: "S" }), ["a@x.com", "x.com"]);
+eq("an address that isn't one leaves the domain blank",
+  sp.buildGoogleCancelRow(GHD, { email: "not-an-address", source: "S" }), ["", "not-an-address", "S"]);
 eq("…nor one with no inboxes", sp.isGoogleDomain({ google: 0, microsoft: 0, other: 0 }), false);
 
 // --- Already Not Active -----------------------------------------------------

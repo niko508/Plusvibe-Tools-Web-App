@@ -5,7 +5,6 @@ import { promises as fs, mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import { onShutdownFlush } from "@/lib/jobs/shutdown";
 import {
-  appendRow,
   appendRows,
   batchUpdateCells,
   columnLetter,
@@ -26,17 +25,16 @@ import { COL_CANCEL_SOURCE } from "@/lib/blocked-domains/sheet-plan";
 import {
   BLOCKED_STATUS,
   CANCEL_TAB,
-  COL_CANCEL_TENANT,
   COL_DOMAIN_HOST,
   GOOGLE_CANCEL_TAB,
-  buildCancelRow,
+  TENANT_QUEUE,
   findDomainRow,
   headerIndex,
   isGoogleDomain,
   googleBurnedInboxes,
   planGoogleTabWrites,
+  planQueueTabWrites,
   matchWorkspaceByClient,
-  tenantAlreadyQueued,
 } from "@/lib/blocked-domains/sheet-plan";
 import { loadSettings } from "@/lib/blocked-domains/settings";
 import {
@@ -1081,19 +1079,38 @@ async function runSheet(rec: BlockedDomainJob) {
       );
     } else {
       const cancelGrid = await readTab(sheetId, CANCEL_TAB);
-      const cancelHeader = cancelGrid[0] ?? [COL_CANCEL_TENANT];
-      const iTenant = headerIndex(cancelHeader, COL_CANCEL_TENANT);
-      if (tenantAlreadyQueued(cancelGrid, iTenant, hit.row.tenantEmail)) {
+      // Planned rather than appended: the tab is laid out in advance with
+      // blank rows and a source dropdown, and Sheets' own append treats those
+      // as part of the table and writes BELOW them, out of sight. The plan
+      // fills the first blank row instead, and carries the domain across.
+      const tenantPlan = planQueueTabWrites(
+        cancelGrid,
+        [
+          {
+            key: hit.row.tenantEmail,
+            source: hit.row.tenantSource,
+            domain: rec.domain,
+          },
+        ],
+        TENANT_QUEUE
+      );
+      if (tenantPlan.problem) {
+        pushError(rec, tenantPlan.problem);
+      } else if (tenantPlan.already.length > 0) {
         outcome.tenantAlreadyQueued = true;
       } else {
-        await appendRow(
-          sheetId,
-          CANCEL_TAB,
-          buildCancelRow(cancelHeader, {
-            tenant: hit.row.tenantEmail,
-            source: hit.row.tenantSource,
-          })
-        );
+        if (tenantPlan.updates.length > 0) {
+          await batchUpdateCells(
+            sheetId,
+            tenantPlan.updates.map((u) => ({
+              range: `${quoteTab(CANCEL_TAB)}!${columnLetter(u.column)}${u.row}`,
+              value: u.value,
+            }))
+          );
+        }
+        if (tenantPlan.append.length > 0) {
+          await appendRows(sheetId, CANCEL_TAB, tenantPlan.append);
+        }
         outcome.tenantQueued = true;
       }
     }
