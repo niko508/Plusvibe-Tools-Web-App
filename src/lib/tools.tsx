@@ -12,6 +12,7 @@ import {
   CopyIcon,
   PlayIcon,
   RefreshIcon,
+  GaugeIcon,
 } from "@/components/icons";
 
 // Registry of tools shown on the landing page. Adding a new tool = add an entry
@@ -246,6 +247,16 @@ export const TOOLS: Tool[] = [
     status: "active",
     color: "cyan",
     Icon: MoveIcon,
+  },
+  {
+    slug: "sending-capacity",
+    name: "Sending Capacity",
+    tagline: "How many emails a day every workspace could carry",
+    description:
+      "Counts every workspace's inboxes by what their domain runs on — Google, Azure 25 or Azure 50 — and turns that into emails a day, per workspace and across the account.",
+    status: "active",
+    color: "cyan",
+    Icon: GaugeIcon,
   },
   {
     slug: "add-signatures",

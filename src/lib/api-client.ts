@@ -12,6 +12,7 @@ import type { CampaignSettingsJob, CampaignSettingsStartPayload } from "@/lib/jo
 import type { DomainTagsJob, DomainTagsStartPayload } from "@/lib/jobs/domain-tags-types";
 import type { StartOutreachJob, StartOutreachStartPayload } from "@/lib/jobs/start-outreach-types";
 import type { ScheduledSwitch } from "@/lib/jobs/outreach-schedule-types";
+import type { CapacityJob } from "@/lib/jobs/capacity-types";
 import type { OutreachSettings } from "@/lib/start-outreach/week-settings";
 import type { CatalogTag } from "@/lib/inbox-tags/plan";
 import type { FollowUpTemplate } from "@/lib/follow-ups/templates";
@@ -843,6 +844,24 @@ export function listBurnedRemovals(signal?: AbortSignal) {
 
 export function abortBurnedRemoval(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/burned-removal/abort", { method: "POST", body: { jobId }, signal });
+}
+
+// --- Sending Capacity ---------------------------------------------------------
+
+export function startCapacityRefresh(signal?: AbortSignal) {
+  return request<{ jobId: string }>("/api/jobs/capacity/start", { method: "POST", body: {}, signal });
+}
+
+export function listCapacityJobs(signal?: AbortSignal) {
+  return request<{ jobs: CapacityJob[] }>("/api/jobs/capacity/list", { signal });
+}
+
+export function abortCapacityJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/capacity/abort", { method: "POST", body: { jobId }, signal });
+}
+
+export function deleteCapacityJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/capacity/delete", { method: "POST", body: { jobId }, signal });
 }
 
 // --- Start Outreach: saved settings and the week 2 switch ---------------------
