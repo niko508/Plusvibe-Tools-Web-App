@@ -152,10 +152,25 @@ export function todayIn(tz: string, now = new Date()): string {
 const dateStr = (v: unknown): string | null => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v.trim()) ? v.trim().slice(0, 10) : null);
 
 /**
+ * The start date to send: the campaign's own, unless it is in the past.
+ *
+ * The API refuses a start date that has already been ("start_date: Date must
+ * not be in the past"), and every campaign that has been running a while has
+ * one. Today is sent instead — the campaign is already sending, so that is
+ * bookkeeping, not a change. A start date still to come is kept, so a
+ * campaign scheduled to begin later still begins then.
+ */
+export function startDateFor(raw: Record<string, unknown> | null | undefined, timezone: string, now = new Date()): string {
+  const today = todayIn(timezone, now);
+  const own = dateStr(raw?.camp_st_date ?? raw?.start_date);
+  return own && own > today ? own : today;
+}
+
+/**
  * The write. Everything the endpoint requires besides the days and the
  * window is taken from the campaign — its daily limit and new-lead cap, its
- * start date (today in the schedule's zone when it has none, since the live
- * API insists on one) and its end date when it has one.
+ * start date (today when that has passed, which the API refuses) and its end
+ * date when it has one still to come.
  */
 export function simpleScheduleBody(s: SimpleSchedule, raw: Record<string, unknown> | null | undefined, now = new Date()): Record<string, unknown> {
   const n = normalizeSimple(s) ?? s;
@@ -168,10 +183,13 @@ export function simpleScheduleBody(s: SimpleSchedule, raw: Record<string, unknow
     days,
     timezone: n.timezone,
     timing: { from: n.from, to: n.to },
-    start_date: dateStr(raw?.camp_st_date ?? raw?.start_date) ?? todayIn(n.timezone, now),
+    start_date: startDateFor(raw, n.timezone, now),
   };
+  // An end date that has passed would sit before the start date being sent,
+  // which is not a window the API can take. The campaign's sending window has
+  // closed either way, so it is left off rather than made up.
   const end = dateStr(raw?.camp_end_date ?? raw?.end_date);
-  if (end) schedule.end_date = end;
+  if (end && end >= (schedule.start_date as string)) schedule.end_date = end;
   return { use_adv_schedule: false, schedules: [schedule] };
 }
 

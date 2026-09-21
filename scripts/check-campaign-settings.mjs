@@ -275,7 +275,7 @@ eq("an advanced schedule the campaign has switched off is not what gets copied",
 // limits and dates.
 console.log("--- sending schedule");
 const ss = await importTs("@/lib/campaign-settings/simple-schedule");
-const { parseSimple, stringifySimple, validateSimple, describeSimple, simpleFromCampaign, simpleFromWeek, simpleScheduleBody, todayIn, knownPlain, TIME_OPTIONS, DEFAULT_SIMPLE } = ss;
+const { parseSimple, stringifySimple, validateSimple, describeSimple, simpleFromCampaign, simpleFromWeek, simpleScheduleBody, startDateFor, todayIn, knownPlain, TIME_OPTIONS, DEFAULT_SIMPLE } = ss;
 const SIMPLE = { days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], timezone: "America/New_York", from: "08:30", to: "15:00" };
 eq("the default is business hours, Mon–Fri", DEFAULT_SIMPLE, { days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], timezone: "America/New_York", from: "09:00", to: "17:00" });
 eq("the pickers step every half hour", [TIME_OPTIONS.length, TIME_OPTIONS[0], TIME_OPTIONS[17], TIME_OPTIONS[47]], [48, "00:00", "08:30", "23:30"]);
@@ -307,14 +307,23 @@ eq("…nor an empty one", simpleFromWeek({ timezone: "UTC", windows: { Monday: [
 
 // The write.
 const NOW = new Date("2026-09-21T12:00:00Z");
-eq("the write switches advanced scheduling off and carries the campaign's limit and start date",
-  simpleScheduleBody(SIMPLE, LISTED, NOW), { use_adv_schedule: false, schedules: [{ daily_limit: 600, days: { 1: true, 2: true, 3: true, 4: true, 5: true }, timezone: "America/New_York", timing: { from: "08:30", to: "15:00" }, start_date: "2026-08-01" }] });
+eq("the write switches advanced scheduling off and carries the campaign's limit",
+  simpleScheduleBody(SIMPLE, LISTED, NOW), { use_adv_schedule: false, schedules: [{ daily_limit: 600, days: { 1: true, 2: true, 3: true, 4: true, 5: true }, timezone: "America/New_York", timing: { from: "08:30", to: "15:00" }, start_date: todayIn("America/New_York", NOW) }] });
+// The API refuses a start date that has already been, and every campaign
+// running a while has one.
+eq("a start date in the past becomes today", simpleScheduleBody(SIMPLE, LISTED, NOW).schedules[0].start_date, todayIn("America/New_York", NOW));
+eq("…so does today's own", startDateFor({ camp_st_date: todayIn("America/New_York", NOW) }, "America/New_York", NOW), todayIn("America/New_York", NOW));
+eq("…but a start date still to come is kept", startDateFor({ camp_st_date: "2030-01-01" }, "America/New_York", NOW), "2030-01-01");
+eq("…and a campaign with none gets today", startDateFor({}, "America/New_York", NOW), todayIn("America/New_York", NOW));
+eq("…read from either spelling", [startDateFor({ start_date: "2030-01-01" }, "UTC", NOW), startDateFor({ camp_st_date: "2030-01-01T00:00:00.000Z" }, "UTC", NOW)], ["2030-01-01", "2030-01-01"]);
 eq("a new-lead cap of 0 is not carried; a real one is", [
   "daily_limit_new_lead" in simpleScheduleBody(SIMPLE, LISTED, NOW).schedules[0],
   simpleScheduleBody(SIMPLE, { ...LISTED, daily_limit_new_lead: 40 }, NOW).schedules[0].daily_limit_new_lead,
 ], [false, 40]);
 eq("an end date is carried when the campaign has one", simpleScheduleBody(SIMPLE, { ...LISTED, camp_end_date: "2026-12-31" }, NOW).schedules[0].end_date, "2026-12-31");
 eq("…and left out when it has none", "end_date" in simpleScheduleBody(SIMPLE, LISTED, NOW).schedules[0], false);
+// It would sit before the start date being sent, which is no window at all.
+eq("…or when it has already passed", "end_date" in simpleScheduleBody(SIMPLE, { ...LISTED, camp_end_date: "2026-01-01" }, NOW).schedules[0], false);
 eq("a campaign with no start date gets today, in the schedule's zone", simpleScheduleBody(SIMPLE, { daily_limit: 5 }, NOW).schedules[0].start_date, todayIn("America/New_York", NOW));
 eq("…which is a date", /^\d{4}-\d{2}-\d{2}$/.test(todayIn("America/New_York")), true);
 eq("…even for a zone that isn't one", /^\d{4}-\d{2}-\d{2}$/.test(todayIn("Not/AZone")), true);
