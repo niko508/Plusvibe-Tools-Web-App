@@ -16,8 +16,16 @@ import {
   describeWeek,
   weekFromCampaign,
 } from "./schedule";
+import { describeSimple, knownPlain, parseSimple, simpleFromCampaign, simpleScheduleBody, stringifySimple, validateSimple } from "./simple-schedule";
 
-export type SettingKind = "toggle" | "choice" | "number" | "ratio" | "schedule";
+/**
+ * "schedule" is Advanced Scheduling (a week of windows); "sendingSchedule"
+ * is the plain one (days, one daily window, a timezone).
+ */
+export type SettingKind = "toggle" | "choice" | "number" | "ratio" | "schedule" | "sendingSchedule";
+
+/** Kinds read from the whole campaign rather than one field of it. */
+export const SCHEDULE_KINDS: SettingKind[] = ["schedule", "sendingSchedule"];
 
 export interface SettingSpec {
   key: string;
@@ -84,6 +92,12 @@ export const SETTINGS: SettingSpec[] = [
     max: 100,
   },
   {
+    key: "schedule",
+    label: "Sending schedule",
+    hint: "The days, the daily start and end time, and the timezone. Switches advanced scheduling off.",
+    kind: "sendingSchedule",
+  },
+  {
     key: "adv_schedule",
     label: "Advanced scheduling",
     hint: "A different sending window — or several — for each day of the week.",
@@ -127,6 +141,10 @@ export function readValue(spec: SettingSpec, raw: unknown): string | number | nu
     const week = weekFromCampaign(raw as Record<string, unknown> | null);
     return week?.exact ? stringifyWeek(week.week) : null;
   }
+  if (spec.kind === "sendingSchedule") {
+    const s = simpleFromCampaign(raw as Record<string, unknown> | null);
+    return s ? stringifySimple(s) : null;
+  }
   if (raw === undefined || raw === null) return null;
   if (spec.kind === "ratio") {
     // On the wire this is `send_priority`: the FOLLOW-UP share, 0 to 1. The
@@ -167,6 +185,11 @@ export function validateChange(c: SettingChange): string[] {
     if (!week) return [`${spec.label}: the weekly schedule could not be read.`];
     return validateWeek(week);
   }
+  if (spec.kind === "sendingSchedule") {
+    const s = parseSimple(c.value);
+    if (!s) return [`${spec.label}: the schedule could not be read.`];
+    return validateSimple(s);
+  }
   if (spec.kind === "ratio") {
     const n = typeof c.value === "number" ? c.value : String(c.value).trim() === "" ? NaN : Number(c.value);
     if (!Number.isFinite(n)) return [`${spec.label}: enter a percentage.`];
@@ -202,6 +225,11 @@ export function prepareChanges(inputs: SettingChange[]): ChangesResult {
     byKey.set(c.key, { key: c.key, value: numeric ? Number(c.value) : String(c.value) });
   }
   const changes = SETTINGS.filter((s) => byKey.has(s.key)).map((s) => byKey.get(s.key) as SettingChange);
+  // The two schedules are one setting on the campaign — the last one written
+  // is the one that runs — so asking for both is asking for a contradiction.
+  if (byKey.has("schedule") && byKey.has("adv_schedule")) {
+    problems.push("Pick either Sending schedule or Advanced scheduling, not both: a campaign runs one or the other.");
+  }
   return { changes, problems };
 }
 
@@ -217,7 +245,13 @@ export function diffCampaign(changes: SettingChange[], raw: Record<string, unkno
   return changes.filter((c) => {
     const spec = specFor(c.key);
     if (!spec) return false;
-    const current = readValue(spec, spec.kind === "schedule" ? raw : raw[c.key]);
+    // The plain schedule the listing reports is kept, unused, while a campaign
+    // is on advanced scheduling — and the listing does not say which it is
+    // on. So a matching plain schedule is only "already set" when the API
+    // says outright that advanced scheduling is off; otherwise the write goes
+    // out, which is harmless and brings the campaign back to the plain one.
+    if (spec.kind === "sendingSchedule" && !knownPlain(raw)) return true;
+    const current = readValue(spec, SCHEDULE_KINDS.includes(spec.kind) ? raw : raw[c.key]);
     return current === null || current !== c.value;
   });
 }
@@ -259,6 +293,12 @@ export function patchBody(
       Object.assign(body, advScheduleBody(week, dailyLimit, newLeadLimit));
       continue;
     }
+    if (spec?.kind === "sendingSchedule") {
+      const s = parseSimple(c.value);
+      if (!s) continue;
+      Object.assign(body, simpleScheduleBody(s, raw));
+      continue;
+    }
     body[c.key] = spec ? wireValue(spec, c.value) : c.value;
   }
   return body;
@@ -273,16 +313,17 @@ export function patchBody(
  * is unconfirmable, which is a different thing and said separately.
  */
 export function unverified(changes: SettingChange[], raw: Record<string, unknown>): SettingChange[] {
-  return diffCampaign(
-    changes.filter((c) => {
-      const spec = specFor(c.key);
-      if (!spec) return false;
-      if (confirmable(spec)) return true;
-      // Unless the API did report it, in which case it can be checked.
-      return readValue(spec, raw) !== null;
-    }),
-    raw
-  );
+  return changes.filter((c) => {
+    const spec = specFor(c.key);
+    if (!spec) return false;
+    // Unless the API did report it, in which case it can be checked.
+    if (!confirmable(spec) && readValue(spec, raw) === null) return false;
+    // After the write, the plain schedule is checked on what reads back —
+    // the "is it on advanced scheduling" doubt that makes diffCampaign write
+    // it does not apply to a campaign this run just switched back.
+    const current = readValue(spec, SCHEDULE_KINDS.includes(spec.kind) ? raw : raw[c.key]);
+    return current === null || current !== c.value;
+  });
 }
 
 /** Changes that were written but cannot be read back to confirm. */
@@ -308,7 +349,9 @@ export function describeChanges(changes: SettingChange[]): string {
               ? describeRatio(Number(c.value))
               : spec.kind === "schedule"
                 ? describeScheduleValue(c.value)
-                : `${spec.unit === "$" ? "$" : ""}${c.value}${spec.unit === "%" ? "%" : ""}`;
+                : spec.kind === "sendingSchedule"
+                  ? describeSimpleValue(c.value)
+                  : `${spec.unit === "$" ? "$" : ""}${c.value}${spec.unit === "%" ? "%" : ""}`;
       return `${spec.label} → ${v}`;
     })
     .join(", ");
@@ -325,6 +368,12 @@ export function describeRatio(newLeads: number): string {
 export function describeScheduleValue(value: string | number): string {
   const week = parseWeek(value);
   return week ? `${describeWeek(week)} (${week.timezone})` : "a weekly schedule";
+}
+
+/** "Mon–Fri 8:30am–3pm (America/New_York)" */
+export function describeSimpleValue(value: string | number): string {
+  const s = parseSimple(value);
+  return s ? `${describeSimple(s)} (${s.timezone})` : "a sending schedule";
 }
 
 /** Statuses the job touches: live campaigns only. */

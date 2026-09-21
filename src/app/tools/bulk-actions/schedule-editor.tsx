@@ -22,6 +22,7 @@ import {
   type WeekSlots,
   type Weekday,
 } from "@/lib/campaign-settings/schedule";
+import { DEFAULT_SIMPLE, TIME_OPTIONS, describeSimple, parseSimple, simpleFromWeek, stringifySimple, type SimpleSchedule } from "@/lib/campaign-settings/simple-schedule";
 import { fetchCampaigns, fetchCampaignSchedule, ApiClientError } from "@/lib/api-client";
 import { Spinner } from "@/components/ui";
 import { AlertIcon, ChevronDownIcon, CopyIcon } from "@/components/icons";
@@ -126,7 +127,17 @@ export function ScheduleEditor({
         </div>
       </div>
 
-      <CopyFromCampaign workspaces={workspaces} onCopied={(w) => onChange(stringifyWeek(w))} />
+      <CopyFromCampaign
+        workspaces={workspaces}
+        onCopied={(w, exact) => {
+          onChange(stringifyWeek(w));
+          return {
+            note: exact
+              ? "Copied its advanced schedule exactly."
+              : "Copied its schedule — that campaign reports one window per day, which is all the API returns, so check the grid before applying.",
+          };
+        }}
+      />
 
       <div className="overflow-x-auto">
         <div className="min-w-[640px] select-none">
@@ -193,13 +204,112 @@ export function ScheduleEditor({
   );
 }
 
-/** Reads one campaign's schedule and loads it into the grid. */
+/**
+ * The plain sending schedule: the days, one daily window, a timezone — what
+ * Plusvibe's screen shows with Advanced Scheduling off.
+ */
+export function SendingScheduleEditor({
+  value,
+  onChange,
+  workspaces,
+}: {
+  /** The schedule as JSON, or "" before anything is picked. */
+  value: string;
+  onChange: (next: string) => void;
+  workspaces: Workspace[];
+}) {
+  const s = useMemo(() => parseSimple(value) ?? DEFAULT_SIMPLE, [value]);
+  const write = (patch: Partial<SimpleSchedule>) => onChange(stringifySimple({ ...s, ...patch }));
+  const toggleDay = (d: Weekday) => write({ days: s.days.includes(d) ? s.days.filter((x) => x !== d) : [...s.days, d] });
+  const zones = TIMEZONES.includes(s.timezone) ? TIMEZONES : [s.timezone, ...TIMEZONES];
+  const times = (extra: string) => (TIME_OPTIONS.includes(extra) ? TIME_OPTIONS : [extra, ...TIME_OPTIONS]);
+
+  return (
+    <div className="w-full space-y-2.5" data-sending-schedule>
+      <div className="flex flex-wrap gap-1.5" role="group" aria-label="Sending days">
+        {WEEKDAYS.map((d) => {
+          const on = s.days.includes(d);
+          return (
+            <button
+              key={d}
+              type="button"
+              className={`pv-chip ${on ? "pv-chip-active" : "hover:text-foreground"}`}
+              aria-pressed={on}
+              data-send-day={d}
+              onClick={() => toggleDay(d)}
+            >
+              {SHORT_DAY[d]}
+            </button>
+          );
+        })}
+      </div>
+      <div className="grid gap-2 sm:grid-cols-3">
+        <label className="block">
+          <span className="mb-1 block text-[11px] text-muted-foreground">Timezone</span>
+          <div className="relative">
+            <select className="pv-input appearance-none pr-8 text-sm" value={s.timezone} onChange={(e) => write({ timezone: e.target.value })} aria-label="Sending schedule timezone">
+              {zones.map((tz) => (
+                <option key={tz} value={tz}>
+                  {tz}
+                </option>
+              ))}
+            </select>
+            <ChevronDownIcon size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          </div>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[11px] text-muted-foreground">Daily start time</span>
+          <div className="relative">
+            <select className="pv-input appearance-none pr-8 text-sm" value={s.from} onChange={(e) => write({ from: e.target.value })} aria-label="Daily start time">
+              {times(s.from).map((t) => (
+                <option key={t} value={t}>
+                  {pretty(t)}
+                </option>
+              ))}
+            </select>
+            <ChevronDownIcon size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          </div>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[11px] text-muted-foreground">Daily end time</span>
+          <div className="relative">
+            <select className="pv-input appearance-none pr-8 text-sm" value={s.to} onChange={(e) => write({ to: e.target.value })} aria-label="Daily end time">
+              {times(s.to).map((t) => (
+                <option key={t} value={t}>
+                  {pretty(t)}
+                </option>
+              ))}
+            </select>
+            <ChevronDownIcon size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          </div>
+        </label>
+      </div>
+      <CopyFromCampaign
+        workspaces={workspaces}
+        onCopied={(w) => {
+          const simple = simpleFromWeek(w);
+          if (!simple) {
+            return { error: "That campaign runs an advanced schedule with different windows on different days, which a plain schedule can't say. Use Advanced scheduling to copy it." };
+          }
+          onChange(stringifySimple(simple));
+          return { note: "Copied its schedule." };
+        }}
+      />
+      <p className="text-[11px] text-muted-foreground" data-sending-summary>
+        {s.days.length === 0 ? <span className="text-warning">Pick at least one day.</span> : <>{describeSimple(s)} · {s.timezone}</>}
+      </p>
+    </div>
+  );
+}
+
+/** Reads one campaign's schedule and loads it into the editor. */
 function CopyFromCampaign({
   workspaces,
   onCopied,
 }: {
   workspaces: Workspace[];
-  onCopied: (week: ReturnType<typeof emptyWeek>) => void;
+  /** Takes the week read; says what to tell the user, or why it could not be used. */
+  onCopied: (week: ReturnType<typeof emptyWeek>, exact: boolean) => { note?: string; error?: string };
 }) {
   const [open, setOpen] = useState(false);
   const [workspaceId, setWorkspaceId] = useState("");
@@ -234,12 +344,9 @@ function CopyFromCampaign({
     setNote(null);
     try {
       const { week, exact } = await fetchCampaignSchedule({ workspace_id: workspaceId, campaign_id: campaignId });
-      onCopied(week);
-      setNote(
-        exact
-          ? "Copied its advanced schedule exactly."
-          : "Copied its schedule — that campaign reports one window per day, which is all the API returns, so check the grid before applying."
-      );
+      const outcome = onCopied(week, exact);
+      if (outcome.error) setError(outcome.error);
+      else setNote(outcome.note ?? "Copied.");
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not read that campaign's schedule.");
     } finally {

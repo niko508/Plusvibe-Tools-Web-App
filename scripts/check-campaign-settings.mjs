@@ -264,5 +264,83 @@ eq("…a schedule that read back different IS unverified",
 eq("other settings are still confirmed the old way", unconfirmable([{ key: "is_esp_match", value: "yes" }], { is_esp_match: 1 }), []);
 eq("the label says what the week is", describeChanges(SCHED_CHANGE), "Advanced scheduling → Mon–Fri 9am–5pm (America/New_York)");
 
+eq("an advanced schedule the campaign has switched off is not what gets copied",
+  weekFromCampaign({ use_adv_schedule: false, adv_schedule: { timezone: "America/Denver", windows: { Monday: [{ from: "08:00", to: "11:00" }] } }, schedule: { days: ["Monday", "Friday"], from_time: "09:00", to_time: "17:00", tz: "UTC" } }),
+  { week: { timezone: "UTC", windows: { Monday: [{ from: "09:00", to: "17:00" }], Tuesday: [], Wednesday: [], Thursday: [], Friday: [{ from: "09:00", to: "17:00" }], Saturday: [], Sunday: [] } }, exact: false });
+
+// --- the plain sending schedule -------------------------------------------------
+// Days, one daily window, a timezone: what Plusvibe's screen shows with
+// Advanced Scheduling off. Read from the listing's `schedule`, written as
+// `schedules` with use_adv_schedule false, carrying the campaign's own
+// limits and dates.
+console.log("--- sending schedule");
+const ss = await importTs("@/lib/campaign-settings/simple-schedule");
+const { parseSimple, stringifySimple, validateSimple, describeSimple, simpleFromCampaign, simpleFromWeek, simpleScheduleBody, todayIn, knownPlain, TIME_OPTIONS, DEFAULT_SIMPLE } = ss;
+const SIMPLE = { days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], timezone: "America/New_York", from: "08:30", to: "15:00" };
+eq("the default is business hours, Mon–Fri", DEFAULT_SIMPLE, { days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], timezone: "America/New_York", from: "09:00", to: "17:00" });
+eq("the pickers step every half hour", [TIME_OPTIONS.length, TIME_OPTIONS[0], TIME_OPTIONS[17], TIME_OPTIONS[47]], [48, "00:00", "08:30", "23:30"]);
+eq("a schedule round-trips as JSON", parseSimple(stringifySimple(SIMPLE)), SIMPLE);
+eq("days come out in week order without repeats, however they went in",
+  parseSimple({ days: ["Friday", "Monday", "monday", "3", "Wed"], timezone: "UTC", from: "9:00", to: "17:00" }), { days: ["Monday", "Wednesday", "Friday"], timezone: "UTC", from: "09:00", to: "17:00" });
+eq("…and a missing timezone takes the default", parseSimple({ days: ["Monday"], from: "09:00", to: "10:00" }).timezone, "America/New_York");
+eq("nonsense is null", [parseSimple("x"), parseSimple(""), parseSimple(null), parseSimple(5)], [null, null, null, null]);
+eq("a good schedule has no problems", validateSimple(SIMPLE), []);
+eq("no days is refused", validateSimple({ ...SIMPLE, days: [] }), ["Sending schedule: pick at least one day."]);
+eq("an end before the start is refused", validateSimple({ ...SIMPLE, from: "15:00", to: "08:30" }), ["Sending schedule: the end time has to be after the start time."]);
+eq("…and equal is too", validateSimple({ ...SIMPLE, to: "08:30" }).length, 1);
+eq("a time that isn't one is refused", validateSimple({ ...SIMPLE, to: "3pm" }), ["Sending schedule: times read as HH:MM."]);
+eq("a bad timezone is refused", validateSimple({ ...SIMPLE, timezone: "nope!" })[0], "Sending schedule: pick a timezone.");
+eq("it reads as a sentence", describeSimple(SIMPLE), "Mon–Fri 8:30am–3pm");
+eq("…with gaps in the days spelled out", describeSimple({ ...SIMPLE, days: ["Monday", "Wednesday", "Friday"] }), "Mon, Wed, Fri 8:30am–3pm");
+
+// What the listing reports.
+const LISTED = { id: "c1", daily_limit: 600, daily_limit_new_lead: 0, camp_st_date: "2026-08-01T00:00:00.000Z", camp_end_date: "", schedule: { days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], from_time: "08:30", to_time: "15:00", tz: "America/New_York" } };
+eq("the listing's schedule reads as one", simpleFromCampaign(LISTED), SIMPLE);
+eq("…so does a write-shaped one, should the API ever return it", simpleFromCampaign({ schedules: [{ days: { 1: true, 5: true }, timezone: "UTC", timing: { from: "09:00", to: "10:00" } }] }), { days: ["Monday", "Friday"], timezone: "UTC", from: "09:00", to: "10:00" });
+eq("a campaign with none reads as null", [simpleFromCampaign({ id: "c" }), simpleFromCampaign(null), simpleFromCampaign({ schedule: { tz: "UTC" } })], [null, null, null]);
+eq("a week with the same window every sending day is a plain schedule",
+  simpleFromWeek({ timezone: "UTC", windows: { Monday: [{ from: "09:00", to: "17:00" }], Tuesday: [], Wednesday: [{ from: "09:00", to: "17:00" }], Thursday: [], Friday: [], Saturday: [], Sunday: [] } }),
+  { days: ["Monday", "Wednesday"], timezone: "UTC", from: "09:00", to: "17:00" });
+eq("…a week with different windows is not", simpleFromWeek({ timezone: "UTC", windows: { Monday: [{ from: "09:00", to: "17:00" }], Tuesday: [{ from: "10:00", to: "17:00" }], Wednesday: [], Thursday: [], Friday: [], Saturday: [], Sunday: [] } }), null);
+eq("…nor one with two windows a day", simpleFromWeek({ timezone: "UTC", windows: { Monday: [{ from: "09:00", to: "12:00" }, { from: "13:00", to: "17:00" }], Tuesday: [], Wednesday: [], Thursday: [], Friday: [], Saturday: [], Sunday: [] } }), null);
+eq("…nor an empty one", simpleFromWeek({ timezone: "UTC", windows: { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [], Saturday: [], Sunday: [] } }), null);
+
+// The write.
+const NOW = new Date("2026-09-21T12:00:00Z");
+eq("the write switches advanced scheduling off and carries the campaign's limit and start date",
+  simpleScheduleBody(SIMPLE, LISTED, NOW), { use_adv_schedule: false, schedules: [{ daily_limit: 600, days: { 1: true, 2: true, 3: true, 4: true, 5: true }, timezone: "America/New_York", timing: { from: "08:30", to: "15:00" }, start_date: "2026-08-01" }] });
+eq("a new-lead cap of 0 is not carried; a real one is", [
+  "daily_limit_new_lead" in simpleScheduleBody(SIMPLE, LISTED, NOW).schedules[0],
+  simpleScheduleBody(SIMPLE, { ...LISTED, daily_limit_new_lead: 40 }, NOW).schedules[0].daily_limit_new_lead,
+], [false, 40]);
+eq("an end date is carried when the campaign has one", simpleScheduleBody(SIMPLE, { ...LISTED, camp_end_date: "2026-12-31" }, NOW).schedules[0].end_date, "2026-12-31");
+eq("…and left out when it has none", "end_date" in simpleScheduleBody(SIMPLE, LISTED, NOW).schedules[0], false);
+eq("a campaign with no start date gets today, in the schedule's zone", simpleScheduleBody(SIMPLE, { daily_limit: 5 }, NOW).schedules[0].start_date, todayIn("America/New_York", NOW));
+eq("…which is a date", /^\d{4}-\d{2}-\d{2}$/.test(todayIn("America/New_York")), true);
+eq("…even for a zone that isn't one", /^\d{4}-\d{2}-\d{2}$/.test(todayIn("Not/AZone")), true);
+eq("a campaign with no limit is not given one", "daily_limit" in simpleScheduleBody(SIMPLE, {}, NOW).schedules[0], false);
+eq("the listing only says 'plain' when it says so", [knownPlain({ use_adv_schedule: false }), knownPlain({ use_adv_schedule: true }), knownPlain({}), knownPlain(null)], [true, false, false, false]);
+
+// As a setting.
+const sched = specFor("schedule");
+eq("it is in the catalogue as a sending schedule, confirmable", [sched?.kind, sched?.label, m.confirmable(sched)], ["sendingSchedule", "Sending schedule", true]);
+const SS_CHANGE = [{ key: "schedule", value: stringifySimple(SIMPLE) }];
+eq("it reads off a listed campaign", readValue(sched, LISTED), stringifySimple(SIMPLE));
+eq("an empty value is refused for each thing it lacks", validateChange({ key: "schedule", value: "{}" }), ["Sending schedule: pick at least one day.", "Sending schedule: times read as HH:MM."]);
+eq("…and one that can't be read at all", validateChange({ key: "schedule", value: "not json" }), ["Sending schedule: the schedule could not be read."]);
+eq("a campaign whose plain schedule matches is still written, since it may be on advanced scheduling", diffCampaign(SS_CHANGE, LISTED).length, 1);
+eq("…unless the API says outright that it is not", diffCampaign(SS_CHANGE, { ...LISTED, use_adv_schedule: false }), []);
+eq("…and one that differs is written either way", diffCampaign(SS_CHANGE, { ...LISTED, use_adv_schedule: false, schedule: { ...LISTED.schedule, to_time: "17:00" } }).length, 1);
+const ssBody = patchBody("w1", "c1", SS_CHANGE, LISTED);
+eq("the PATCH body is the write, with the ids", Object.keys(ssBody).sort(), ["campaign_id", "schedules", "use_adv_schedule", "workspace_id"]);
+eq("…switching advanced scheduling off", ssBody.use_adv_schedule, false);
+eq("after the write it is confirmed on what reads back", unverified(SS_CHANGE, LISTED), []);
+eq("…and flagged when the read-back differs", unverified(SS_CHANGE, { ...LISTED, schedule: { ...LISTED.schedule, to_time: "17:00" } }).map((c) => c.key), ["schedule"]);
+eq("…and never called unconfirmable", unconfirmable(SS_CHANGE, LISTED), []);
+eq("the label says the schedule", describeChanges(SS_CHANGE), "Sending schedule → Mon–Fri 8:30am–3pm (America/New_York)");
+eq("asking for both schedules at once is refused",
+  prepareChanges([...SS_CHANGE, { key: "adv_schedule", value: stringifyWeek(week) }]).problems, ["Pick either Sending schedule or Advanced scheduling, not both: a campaign runs one or the other."]);
+eq("…while either alone is fine", [prepareChanges(SS_CHANGE).problems, prepareChanges([{ key: "adv_schedule", value: stringifyWeek(week) }]).problems], [[], []]);
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

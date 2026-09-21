@@ -363,7 +363,7 @@ function dayFrom(v: unknown): Weekday | null {
   return Number.isInteger(n) && n >= 1 && n <= 7 ? WEEKDAYS[n - 1] : null;
 }
 
-function daysOf(raw: unknown): Weekday[] {
+export function daysOf(raw: unknown): Weekday[] {
   if (Array.isArray(raw)) return raw.map(dayFrom).filter((d): d is Weekday => d !== null);
   if (raw && typeof raw === "object") {
     return Object.entries(raw as Record<string, unknown>)
@@ -384,7 +384,9 @@ function daysOf(raw: unknown): Weekday[] {
 export function weekFromCampaign(raw: Record<string, unknown> | null | undefined): CampaignWeek | null {
   if (!raw) return null;
 
-  const adv = raw.adv_schedule;
+  // An advanced schedule the campaign has switched off is kept by the API but
+  // not run, so it is not what "copy this campaign's schedule" means.
+  const adv = raw.use_adv_schedule === false ? null : raw.adv_schedule;
   if (adv && typeof adv === "object") {
     const a = adv as { timezone?: unknown; windows?: unknown };
     const week = normalizeWeek({ timezone: a.timezone, windows: a.windows });

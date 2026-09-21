@@ -16,7 +16,8 @@ import {
   slotsToWeek,
   stringifyWeek,
 } from "@/lib/campaign-settings/schedule";
-import { ScheduleEditor } from "./schedule-editor";
+import { ScheduleEditor, SendingScheduleEditor } from "./schedule-editor";
+import { DEFAULT_SIMPLE, stringifySimple } from "@/lib/campaign-settings/simple-schedule";
 import {
   startCampaignSettings,
   listCampaignSettingsJobs,
@@ -85,7 +86,9 @@ export function CampaignSettings({
                 ? // Business hours to start from: a blank grid would stop
                   // every campaign it was applied to.
                   stringifyWeek(slotsToWeek(SCHEDULE_PRESETS[0].build(), DEFAULT_TIMEZONE))
-                : spec?.min ?? 0;
+                : spec?.kind === "sendingSchedule"
+                  ? stringifySimple(DEFAULT_SIMPLE)
+                  : spec?.min ?? 0;
       return next;
     });
   }
@@ -239,6 +242,15 @@ export function CampaignSettings({
                       />
                     </div>
                   )}
+                  {on && s.kind === "sendingSchedule" && (
+                    <div className="w-full pl-[26px]">
+                      <SendingScheduleEditor
+                        value={String(value ?? "")}
+                        onChange={(next) => setValue(s.key, next)}
+                        workspaces={workspaces}
+                      />
+                    </div>
+                  )}
                   {on && s.kind === "number" && (
                     <div className="flex items-center gap-1.5 text-sm">
                       {s.unit === "$" && <span className="text-muted-foreground">$</span>}
@@ -269,6 +281,16 @@ export function CampaignSettings({
           draft, completed and archived campaigns are left alone. Only the ticked settings are written, and only on
           campaigns where they differ; each campaign is read back afterwards to confirm.
         </p>
+        {"schedule" in picked && (
+          <p className="flex gap-1.5 text-xs text-muted-foreground">
+            <AlertIcon size={13} className="mt-0.5 shrink-0 text-warning" />
+            <span>
+              The listing doesn&apos;t say whether a campaign is on advanced scheduling, so the sending schedule is
+              written to every active campaign and switches advanced scheduling off; each is read back to confirm.
+              Each campaign keeps its own daily limit, new-lead cap, start date and end date.
+            </span>
+          </p>
+        )}
         {"adv_schedule" in picked && (
           <p className="flex gap-1.5 text-xs text-muted-foreground">
             <AlertIcon size={13} className="mt-0.5 shrink-0 text-warning" />
