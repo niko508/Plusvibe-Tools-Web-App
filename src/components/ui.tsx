@@ -132,6 +132,63 @@ export function TableDisclosure({
   );
 }
 
+/**
+ * Pill tabs for a tool with more than one page.
+ *
+ * A count sits inside the pill when there is a meaningful one, so a tab worth
+ * opening says so without being opened — a tool whose scheduled work is on
+ * another page has to say that something is waiting there.
+ */
+export interface TabSpec<K extends string> {
+  key: K;
+  label: string;
+  /** Left out where there is nothing to count. */
+  count?: number;
+}
+
+export function TabBar<K extends string>({
+  tabs,
+  active,
+  onChange,
+  label,
+}: {
+  tabs: TabSpec<K>[];
+  active: K;
+  onChange: (key: K) => void;
+  /** What the row of tabs is, for a screen reader. */
+  label: string;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2" role="tablist" aria-label={label} data-tabs>
+      {tabs.map((t) => {
+        const on = t.key === active;
+        return (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            className={`pv-chip px-4 py-2 text-sm ${on ? "pv-chip-active" : "hover:text-foreground"}`}
+            onClick={() => onChange(t.key)}
+            data-tab={t.key}
+          >
+            {t.label}
+            {t.count !== undefined && (
+              <span
+                className={`ml-0.5 rounded-full px-2 py-0.5 text-xs tabular-nums ${
+                  on ? "bg-accent/20 text-accent" : "bg-muted text-muted-foreground"
+                }`}
+              >
+                {t.count.toLocaleString()}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function EmptyState({
   icon,
   title,

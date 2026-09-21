@@ -32,7 +32,7 @@ const STATUS_META: Record<SwitchStatus, { label: string; className: string }> = 
   cancelled: { label: "Cancelled", className: "bg-muted text-muted-foreground" },
 };
 
-export function ScheduledPanel() {
+export function ScheduledPanel({ onCount }: { onCount?: (waiting: number) => void }) {
   const [rows, setRows] = useState<ScheduledSwitch[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -71,11 +71,18 @@ export function ScheduledPanel() {
   };
 
   const pending = rows.filter((r) => r.status === "scheduled" || r.status === "running");
+  // The tab badge lives on the other side of the page, so the count it shows
+  // comes from here — the one place that knows it.
+  useEffect(() => {
+    onCount?.(pending.length);
+  }, [pending.length, onCount]);
 
   return (
     <div className="pv-card space-y-3 p-4 sm:p-5" data-scheduled>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">Scheduled</h2>
+        <p className="text-xs text-muted-foreground">
+          Every batch books one of these when it runs. They land whether or not this tab is open.
+        </p>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span>
             {pending.length === 0

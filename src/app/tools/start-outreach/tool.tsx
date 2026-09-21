@@ -14,7 +14,7 @@ import { domainFromEmail, formatNumber, formatPercent, providerBucket } from "@/
 import { copyToClipboard } from "@/lib/clipboard";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { StatCard } from "@/components/stat-card";
-import { EmptyState, Spinner } from "@/components/ui";
+import { EmptyState, Spinner, TabBar } from "@/components/ui";
 import {
   AlertIcon,
   CheckIcon,
@@ -46,6 +46,9 @@ import {
 } from "@/lib/start-outreach/readiness";
 import type { MovingInbox } from "@/lib/start-outreach/plan";
 import { categorizeDomains, CATEGORY_LABELS } from "@/lib/start-outreach/categories";
+
+/** The tool's three pages. */
+type OutreachView = "batch" | "settings" | "scheduled";
 import { OutreachSetup } from "./setup";
 import { OutreachSettingsPanel } from "./settings-panel";
 import { ScheduledPanel } from "./scheduled-panel";
@@ -125,6 +128,10 @@ export function StartOutreachTool() {
 
   const [readyOnly, setReadyOnly] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Three pages rather than one long scroll. All three stay mounted so
+  // switching tabs never loses a fetch, a half-filled form or a poll.
+  const [view, setView] = useState<OutreachView>("batch");
+  const [waiting, setWaiting] = useState(0);
   /** Addresses a finished run moved away, waiting to be dropped from the list. */
   const [moved, setMoved] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -376,6 +383,29 @@ export function StartOutreachTool() {
 
   return (
     <div className="space-y-5">
+      <TabBar
+        label="Start Outreach pages"
+        active={view}
+        onChange={setView}
+        tabs={[
+          { key: "batch", label: "Batch", count: readyGroups.length || undefined },
+          { key: "settings", label: "Settings" },
+          // Only when something is actually waiting: a "0" beside a page that
+          // still lists finished runs reads as "empty", which it is not.
+          { key: "scheduled", label: "Scheduled", count: waiting || undefined },
+        ]}
+      />
+
+      {/* Its own page, but kept mounted: it polls, and the Scheduled tab's
+          badge is the only warning that something is due. */}
+      <div className={view === "scheduled" ? "" : "hidden"}>
+        <ScheduledPanel onCount={setWaiting} />
+      </div>
+      <div className={view === "settings" ? "" : "hidden"}>
+        <OutreachSettingsPanel />
+      </div>
+
+      <div className={`space-y-5 ${view === "batch" ? "" : "hidden"}`} data-batch>
       {/* Step 1 */}
       <div className="pv-card space-y-4 p-4 sm:p-5">
         <h2 className="text-sm font-semibold">Step 1 · Find the domains that are ready</h2>
@@ -493,11 +523,6 @@ export function StartOutreachTool() {
           <span>{error}</span>
         </div>
       )}
-
-      {/* Set once, then left alone for weeks — so both of these are folded
-          away above the batch rather than pushing it off the screen. */}
-      <OutreachSettingsPanel />
-      <ScheduledPanel />
 
       {rows.length === 0 && !busy && (
         <EmptyState icon={<PlayIcon />} title="Nothing fetched yet">
@@ -702,6 +727,7 @@ export function StartOutreachTool() {
           />
         </>
       )}
+      </div>
     </div>
   );
 }

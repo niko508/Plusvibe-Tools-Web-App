@@ -19,7 +19,7 @@ import {
 } from "@/lib/start-outreach/week-settings";
 import { SWITCH_HOUR, SWITCH_TIMEZONE } from "@/lib/start-outreach/schedule";
 import { FIXED_ROWS, OUTREACH_FIELDS, type OutreachSettingsInput } from "@/lib/start-outreach/plan";
-import { Spinner, TableDisclosure } from "@/components/ui";
+import { Spinner } from "@/components/ui";
 import { AlertIcon, SettingsIcon } from "@/components/icons";
 
 // The saved settings: two weeks of numbers for each kind of infrastructure.
@@ -134,15 +134,15 @@ export function CategoryWeeks({
 }
 
 /**
- * The standalone Settings section.
+ * The Settings page.
  *
- * Folded away by default: it is set once and then left alone for weeks, and
- * open it would push the domain list off the screen every time the page loads.
+ * Its own tab rather than a section on the batch page: it is set once and then
+ * left alone for weeks, and three cards of ten boxes each would otherwise push
+ * the domain list off the screen every time the tool opens.
  */
 export function OutreachSettingsPanel({ onSaved }: { onSaved?: (s: OutreachSettings) => void }) {
   const [settings, setSettings] = useState<OutreachSettings>(DEFAULT_OUTREACH_SETTINGS);
   const [loaded, setLoaded] = useState(false);
-  const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -195,13 +195,14 @@ export function OutreachSettingsPanel({ onSaved }: { onSaved?: (s: OutreachSetti
 
   return (
     <div className="pv-card space-y-3 p-4 sm:p-5" data-outreach-settings>
-      <TableDisclosure
-        open={open}
-        onToggle={() => setOpen((v) => !v)}
-        label="Settings · week 1 and week 2 for each kind of inbox"
-      >
-        <div className="space-y-4 p-3 sm:p-4">
-          <p className="text-xs text-muted-foreground">{WEEK_NOTE}</p>
+      <div>
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-sm font-semibold">Settings</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Week 1 and week 2 for each kind of inbox. {WEEK_NOTE}
+            </p>
+          </div>
 
           {!loaded ? (
             <div className="h-24 animate-pulse rounded-xl bg-muted" />
@@ -255,7 +256,7 @@ export function OutreachSettingsPanel({ onSaved }: { onSaved?: (s: OutreachSetti
             )}
           </div>
         </div>
-      </TableDisclosure>
+      </div>
     </div>
   );
 }
