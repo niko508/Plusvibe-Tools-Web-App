@@ -80,12 +80,23 @@ export function targetsFrom(rows: ScanRow[]): RemovalTarget[] {
   return out;
 }
 
+/**
+ * A target's sending domain.
+ *
+ * The scan carries one on every row, but a Google row's name IS an address,
+ * so the address is the fallback — this is what goes in the cancel tabs'
+ * Domain column, and a blank there is a row nobody can identify later.
+ */
+export function domainFor(target: RemovalTarget): string {
+  return target.domain || domainOfEmail(target.name) || "";
+}
+
 /** Every distinct domain among the targets, for the Microsoft sheet step. */
 export function domainsOf(targets: RemovalTarget[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const t of targets) {
-    const d = t.domain || domainOfEmail(t.name) || "";
+    const d = domainFor(t);
     if (!d || seen.has(d)) continue;
     seen.add(d);
     out.push(d);

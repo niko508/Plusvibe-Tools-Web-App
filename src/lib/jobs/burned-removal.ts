@@ -34,6 +34,7 @@ import { deleteInbox, listInboxes, type Inbox } from "@/lib/blocked-domains/api"
 import { ESP_LABELS, NOUNS, levelOf } from "@/lib/burned/settings";
 import {
   describeRun,
+  domainFor,
   domainsOf,
   inboxesFor,
   planDomainsTab,
@@ -336,7 +337,7 @@ async function runSheet(rec: BurnedRemovalJob, targets: RemovalTarget[], check: 
       grid,
       // The domain is the sender address's own; a Google mailbox has no tenant
       // row to read one off.
-      targets.map((t) => ({ key: t.name, source: "", domain: t.domain })),
+      targets.map((t) => ({ key: t.name, source: "", domain: domainFor(t) })),
       GOOGLE_QUEUE
     );
     if (plan.problem) {

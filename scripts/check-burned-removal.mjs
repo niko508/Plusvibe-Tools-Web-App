@@ -19,7 +19,7 @@ const eq = (label, got, want) => {
 const R = await importTs("@/lib/burned/removal");
 const SP = await importTs("@/lib/blocked-domains/sheet-plan");
 const {
-  REMOVED_STATUS, targetsFrom, domainsOf, planDomainsTab, tenantsToQueue,
+  REMOVED_STATUS, targetsFrom, domainFor, domainsOf, planDomainsTab, tenantsToQueue,
   inboxesFor, inboxCount, describeRun,
 } = R;
 
@@ -77,9 +77,16 @@ eq("targets come out grouped by workspace, then by name",
   ["Alpha/a.io", "Alpha/z.io", "Zeta/b.io"]);
 eq("a domain is only listed once for the sheet, however many workspaces it is in",
   domainsOf(targetsFrom([row(), row({ workspaceId: "ws2", workspaceName: "Ikoni" })])), ["burned.io"]);
-// Google targets are inboxes; their domain still drives nothing but display.
+// Google targets are inboxes; the domain is what the cancel tab records.
 eq("a Google target falls back to the address's own domain",
   domainsOf([{ workspaceId: "w", workspaceName: "W", name: "a@g.com", domain: "" }]), ["g.com"]);
+eq("…and the same fallback is what the cancel tab gets",
+  [
+    domainFor({ workspaceId: "w", workspaceName: "W", name: "a@g.com", domain: "g.com" }),
+    domainFor({ workspaceId: "w", workspaceName: "W", name: "a@g.com", domain: "" }),
+    domainFor({ workspaceId: "w", workspaceName: "W", name: "not-an-address", domain: "" }),
+  ],
+  ["g.com", "g.com", ""]);
 
 // --- 📋 Domains -------------------------------------------------------------
 console.log("--- the Domains tab");
