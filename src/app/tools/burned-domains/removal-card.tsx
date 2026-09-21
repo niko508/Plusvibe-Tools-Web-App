@@ -5,7 +5,7 @@ import type { BurnedRemovalJob, PhaseState } from "@/lib/jobs/burned-removal-typ
 import { ESP_LABELS, NOUNS, levelOf } from "@/lib/burned/settings";
 import { inboxCount, type TargetResult, type TargetState } from "@/lib/burned/removal";
 import { formatNumber } from "@/lib/format";
-import { RemoveJobButton, Spinner } from "@/components/ui";
+import { RemoveJobButton, Spinner, TableDisclosure } from "@/components/ui";
 import { AlertIcon, CheckIcon, SheetIcon, TrashIcon } from "@/components/icons";
 
 // What a "Remove Inboxes & Domains" run is doing, as it does it.
@@ -24,6 +24,9 @@ const STATE_META: Record<TargetState, { label: string; className: string }> = {
   error: { label: "failed", className: "bg-danger/10 text-danger" },
 };
 
+/** Above this many rows the list starts folded away. */
+const FOLD_ABOVE = 25;
+
 export function RemovalCard({
   job,
   onAbort,
@@ -34,6 +37,8 @@ export function RemovalCard({
   onRemove: () => void;
 }) {
   const [showAll, setShowAll] = useState(false);
+  // null until someone decides for themselves.
+  const [listOpen, setListOpen] = useState<boolean | null>(null);
   const running = job.status === "running";
   const rows = useMemo(() => job.rows ?? [], [job.rows]);
   const noun = NOUNS[levelOf(job.esp)];
@@ -48,6 +53,9 @@ export function RemovalCard({
 
   const pct =
     job.progress.total > 0 ? Math.round((job.progress.removed / job.progress.total) * 100) : 0;
+  // The rows that need attention are the point of the card, so a run with any
+  // of those opens however long the full list is.
+  const open = listOpen ?? shown.length <= FOLD_ABOVE;
 
   return (
     <div className="rounded-xl border border-border bg-muted/20 p-4" data-removal={job.id}>
@@ -129,7 +137,15 @@ export function RemovalCard({
       )}
 
       {rows.length > 0 && (
-        <div className="mt-3 overflow-x-auto rounded-xl border border-border bg-background">
+        <div className="mt-3">
+        <TableDisclosure
+          open={open}
+          onToggle={() => setListOpen(!open)}
+          label={`${formatNumber(shown.length)} ${shown.length === 1 ? noun.one : noun.many}${
+            shown.length < rows.length ? " needing attention" : ""
+          }`}
+        >
+        <div className="overflow-x-auto bg-background">
           <table className="w-full min-w-[560px] text-sm">
             <thead className="bg-muted/50 text-xs text-muted-foreground">
               <tr>
@@ -161,6 +177,8 @@ export function RemovalCard({
                 : `Show everything · ${formatNumber(rows.length)}`}
             </button>
           )}
+        </div>
+        </TableDisclosure>
         </div>
       )}
 

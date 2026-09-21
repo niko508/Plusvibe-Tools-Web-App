@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { Health } from "@/lib/format";
+import { ChevronDownIcon } from "@/components/icons";
 
 export function Spinner({ size = 16 }: { size?: number }) {
   return (
@@ -87,6 +88,47 @@ export function RemoveJobButton({
       {busy ? <Spinner size={14} /> : null}
       {armed ? "Confirm remove" : label}
     </button>
+  );
+}
+
+/**
+ * A long table folded away behind its own header.
+ *
+ * A scan can turn up hundreds of rows, and the numbers above the table are
+ * what most runs are read for — so the list gets a header that says how many
+ * are in it and opens on a click, rather than pushing everything else off
+ * the screen.
+ */
+export function TableDisclosure({
+  open,
+  onToggle,
+  label,
+  children,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  /** What is inside — "11 burned inboxes". Shown open or closed. */
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-border">
+      <button
+        type="button"
+        className="flex w-full items-center gap-1.5 bg-muted/40 px-3 py-2 text-left text-xs text-muted-foreground hover:text-foreground"
+        onClick={onToggle}
+        aria-expanded={open}
+        data-table-toggle
+      >
+        <ChevronDownIcon
+          size={13}
+          className={`shrink-0 transition-transform ${open ? "" : "-rotate-90"}`}
+        />
+        <span>{label}</span>
+        <span className="ml-auto">{open ? "Hide" : "Show"}</span>
+      </button>
+      {open && <div className="border-t border-border">{children}</div>}
+    </div>
   );
 }
 

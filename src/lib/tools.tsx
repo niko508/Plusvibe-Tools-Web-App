@@ -248,16 +248,6 @@ export const TOOLS: Tool[] = [
     Icon: MoveIcon,
   },
   {
-    slug: "remove-50",
-    name: "Remove 50 Inboxes from Domain",
-    tagline: "Trim over-provisioned warmup domains down to 50 and standardize warmup",
-    description:
-      "For a workspace, trim every domain that has more than 50 inboxes down to 50 — deleting the worst warmup-health inboxes first — then apply your standard warmup settings and enable warmup on the ones kept.",
-    status: "active",
-    color: "orange",
-    Icon: FireIcon,
-  },
-  {
     slug: "add-signatures",
     name: "Add Signatures",
     tagline: "Push unique spintaxed signatures to every inbox in a workspace",

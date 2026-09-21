@@ -38,11 +38,6 @@ import type {
 } from "@/lib/plusvibe-types";
 import type { JobRecord, StartJobPayload } from "@/lib/jobs/types";
 import type {
-  Remove50Job,
-  Remove50StartPayload,
-  WarmupSettings,
-} from "@/lib/jobs/remove-50-types";
-import type {
   MoveLeadsJob,
   MoveLeadsStartPayload,
 } from "@/lib/jobs/move-leads-types";
@@ -60,8 +55,6 @@ import type {
   PauseCampaignsView,
   PausePlan,
 } from "@/lib/jobs/pause-campaigns-types";
-
-export type { WarmupSettings } from "@/lib/jobs/remove-50-types";
 
 // Header our proxy reads the forwarded key from. Mirrors CLIENT_KEY_HEADER on
 // the server (kept as a literal here to avoid importing server-only code).
@@ -564,14 +557,6 @@ export function deleteBulkDeleteJob(jobId: string, signal?: AbortSignal) {
   });
 }
 
-export function deleteRemove50Job(jobId: string, signal?: AbortSignal) {
-  return request<{ ok: boolean }>("/api/jobs/remove-50/delete", {
-    method: "POST",
-    body: { jobId },
-    signal,
-  });
-}
-
 export function deleteMoveLeadsJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/move-leads/delete", {
     method: "POST",
@@ -717,7 +702,27 @@ export function bulkUpdateSignature(
   });
 }
 
-// --- Delete + warmup settings (Remove 50 tool) -----------------------------
+// --- Account delete + warmup settings --------------------------------------
+//
+// Thin wrappers over the generic Plusvibe proxies. The warmup fields are
+// whitelisted server-side.
+
+/** Warmup fields forwarded to PUT /account/bulk-update. */
+export interface WarmupSettings {
+  warmup_max_daily_limit?: number;
+  bulk_warmup_is_slow_rampup?: "yes" | "no";
+  warmup_initial_daily_limit?: number;
+  warmup_pace_increment?: number;
+  warmup_randomize?: "yes" | "no";
+  warmup_randomize_num?: number;
+  warmup_reply_rate?: number;
+  warmup_schedule?: {
+    tz: string;
+    from_time: string;
+    to_time: string;
+    days: string[];
+  };
+}
 
 export function deleteAccount(
   params: { workspace_id: string; email: string },
@@ -729,8 +734,6 @@ export function deleteAccount(
     signal,
   });
 }
-
-// WarmupSettings is defined in @/lib/jobs/remove-50-types and re-exported above.
 
 export function updateWarmupSettings(
   params: { workspace_id: string; ids: string[]; settings: WarmupSettings },
@@ -750,35 +753,6 @@ export function setWarmupStatus(
   return request<{ status?: string }>("/api/plusvibe/warmup-status", {
     method: "POST",
     body: params,
-    signal,
-  });
-}
-
-// --- Remove 50 background jobs ---------------------------------------------
-
-export function startRemove50(payload: Remove50StartPayload, signal?: AbortSignal) {
-  return request<{ jobId: string }>("/api/jobs/remove-50/start", {
-    method: "POST",
-    body: payload,
-    signal,
-  });
-}
-
-export function getRemove50Job(jobId: string, signal?: AbortSignal) {
-  return request<Remove50Job>(
-    `/api/jobs/remove-50/status?jobId=${encodeURIComponent(jobId)}`,
-    { signal }
-  );
-}
-
-export function listRemove50Jobs(signal?: AbortSignal) {
-  return request<{ jobs: Remove50Job[] }>("/api/jobs/remove-50/list", { signal });
-}
-
-export function abortRemove50(jobId: string, signal?: AbortSignal) {
-  return request<{ ok: boolean }>("/api/jobs/remove-50/abort", {
-    method: "POST",
-    body: { jobId },
     signal,
   });
 }

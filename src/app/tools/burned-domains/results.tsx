@@ -10,7 +10,7 @@ import { formatNumber } from "@/lib/format";
 import { DEFAULT_SHEET_URL } from "@/lib/jobs/azure-warmup-types";
 import { useSheetConfig } from "@/lib/use-sheet-config";
 import { StatCard } from "@/components/stat-card";
-import { RemoveJobButton, Spinner } from "@/components/ui";
+import { RemoveJobButton, Spinner, TableDisclosure } from "@/components/ui";
 import { AlertIcon, CheckIcon, CopyIcon, DownloadIcon, FireIcon, TrashIcon } from "@/components/icons";
 import { RemovalCard } from "./removal-card";
 
@@ -23,6 +23,15 @@ const VERDICT_META: Record<Verdict, { label: string; className: string }> = {
 };
 
 type Filter = "burned" | "all";
+
+/**
+ * Above this many rows the list starts folded away.
+ *
+ * Decided from the scan's TOTAL rows, not the filtered ones, so switching
+ * between Burned and Everything never makes the table appear or vanish
+ * underneath you.
+ */
+const FOLD_ABOVE = 25;
 
 export function ResultsCard({
   job,
@@ -49,6 +58,9 @@ export function ResultsCard({
 }) {
   const [filter, setFilter] = useState<Filter>("burned");
   const [copied, setCopied] = useState(false);
+  // null until someone decides for themselves; the default then follows the
+  // size of the list rather than overriding what they picked.
+  const [listOpen, setListOpen] = useState<boolean | null>(null);
   const running = job.status === "running";
 
   const rows = useMemo(() => job.rows ?? [], [job.rows]);
@@ -61,6 +73,7 @@ export function ResultsCard({
   // their own bar. Worth its own number: it is the new rule doing its job.
   const rescued = rows.filter((r) => r.rescued).length;
   const errors = job.errors ?? [];
+  const open = listOpen ?? rows.length <= FOLD_ABOVE;
 
   async function handleCopy() {
     if (await copyToClipboard(copyText(shown))) {
@@ -183,7 +196,16 @@ export function ResultsCard({
       </div>
 
       {shown.length > 0 ? (
-        <div className="overflow-x-auto rounded-xl border border-border">
+        <TableDisclosure
+          open={open}
+          onToggle={() => setListOpen(!open)}
+          label={
+            filter === "burned"
+              ? `${formatNumber(shown.length)} burned ${shown.length === 1 ? noun.one : noun.many}`
+              : `${countNoun(shown.length, job.esp)} judged`
+          }
+        >
+        <div className="overflow-x-auto">
           <table className="w-full min-w-[720px] text-sm">
             <thead className="bg-muted/50 text-xs text-muted-foreground">
               <tr>
@@ -209,6 +231,7 @@ export function ResultsCard({
             </p>
           )}
         </div>
+        </TableDisclosure>
       ) : (
         <p className="rounded-xl border border-border px-3 py-6 text-center text-sm text-muted-foreground">
           {running
