@@ -247,7 +247,7 @@ export async function createJob(apiKey: string, payload: StartOutreachStartPaylo
     signatures: !!payload.signatures,
     activeTag: payload.activeTag,
     domainTags: !!payload.domainTags,
-    sheet: payload.sheet.updateClient,
+    sheet: payload.sheet.updateSheet,
     notMoved: [],
     errors: [],
   };
@@ -592,7 +592,7 @@ async function runJob(id: string) {
 
     // 6. Sheet ----------------------------------------------------------------
     const sheet = step("sheet");
-    if (!payload.sheet.updateClient) {
+    if (!payload.sheet.updateSheet) {
       sheet.state = "skipped";
       sheet.note = "Not asked for.";
     } else {
@@ -604,7 +604,7 @@ async function runJob(id: string) {
         if (!sheetId) throw new Error("No spreadsheet to write to: sync the sheet in the header or set SPREADSHEET_ID.");
         const tab = payload.sheet.tab?.trim() || DEFAULT_SHEET_TAB;
         const grid = await readTab(sheetId, tab);
-        const plan = planSheetWrites(grid, domainsOf(arrived), payload.destWorkspaceName);
+        const plan = planSheetWrites(grid, domainsOf(arrived));
         if (plan.problem) throw new Error(plan.problem);
         sheet.total = plan.rows.length;
         if (plan.writes.length > 0) {
@@ -619,7 +619,7 @@ async function runJob(id: string) {
           sheet.done = plan.rows.length;
         }
         const bits = [
-          `${plural(plan.rows.length, "row")} set to Client "${payload.destWorkspaceName}", Status ${ACTIVE_STATUS}, warmup columns cleared`,
+          `${plural(plan.rows.length, "row")} set to Status ${ACTIVE_STATUS}, warmup columns cleared`,
         ];
         if (plan.alreadySet.length) bits.push(`${plan.alreadySet.length} already read that way`);
         if (plan.notInSheet.length) {

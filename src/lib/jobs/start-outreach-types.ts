@@ -94,7 +94,7 @@ export interface StartOutreachStartPayload {
   activeTag: string | null;
   /** Null skips the TLD / platform tags. */
   domainTags: { tld: TagInput[]; platform: TagInput[] } | null;
-  sheet: { url?: string; tab?: string; updateClient: boolean };
+  sheet: { url?: string; tab?: string; updateSheet: boolean };
 }
 
 export const MAX_STORED_ERRORS = 200;

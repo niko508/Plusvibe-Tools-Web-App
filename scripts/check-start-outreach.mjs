@@ -92,23 +92,23 @@ eq("a domain is matched however it is written", normalizeDomain("  https://www.A
 eq("a trailing dot is dropped", normalizeDomain("acme.com."), "acme.com");
 
 const grid = [
-  ["Domain", "Tenant Email Address", "Status", "Warmup Started", "Warmup Days", "Domain Host", "Client"],
-  ["grimmont.org", "admin@x.onmicrosoft.com", "Warming Up", "2026-08-28", "14", "Dynadot", "Acme"],
-  ["feneo.co", "admin@y.onmicrosoft.com", "Warming Up", "2026-08-24", "18", "Dynadot", "-"],
-  ["drepurke.co", "admin@z.onmicrosoft.com", "Warming Up", "", "", "Dynadot", ""],
-  ["daysonly.co", "", "Warming Up", "", "9", "", ""],
-  ["blank.co", "", "", "", "", "", ""],
-  ["GRIMMONT.ORG", "", "Warming Up", "2020-01-01", "", "", ""],
+  ["Domain", "Tenant Email Address", "Status", "Warmup Started", "Warmup Days", "Domain Host"],
+  ["grimmont.org", "admin@x.onmicrosoft.com", "Warming Up", "2026-08-28", "14", "Dynadot"],
+  ["feneo.co", "admin@y.onmicrosoft.com", "Warming Up", "2026-08-24", "18", "-"],
+  ["drepurke.co", "admin@z.onmicrosoft.com", "Warming Up", "", "", "Dynadot"],
+  ["daysonly.co", "", "Warming Up", "", "9", ""],
+  ["blank.co", "", "", "", "", ""],
+  ["GRIMMONT.ORG", "", "Warming Up", "2020-01-01", "", ""],
 ];
 const sheet = warmupFromGrid(grid);
 eq("the tab reads without complaint", sheet.problem, null);
 eq(
-  "a domain with a start date is read, with its host and client",
+  "a domain with a start date is read, with its host",
   sheet.byDomain.get("grimmont.org"),
-  { started: "2026-08-28", days: "14", host: "Dynadot", client: "Acme" }
+  { started: "2026-08-28", days: "14", host: "Dynadot" }
 );
 eq("…the first row wins over a repeat", sheet.byDomain.get("grimmont.org").started, "2026-08-28");
-eq("a dash in a cell reads as nothing", sheet.byDomain.get("feneo.co").client, undefined);
+eq("a dash in a cell reads as nothing", sheet.byDomain.get("feneo.co").host, undefined);
 eq("a domain with only a host is kept for the platform tag", sheet.byDomain.get("drepurke.co"), { host: "Dynadot" });
 eq("a row with blank cells is still in the sheet, with nothing in it", sheet.byDomain.get("blank.co"), {});
 eq("days alone is still kept", sheet.byDomain.get("daysonly.co"), { started: undefined, days: "9" });
@@ -201,7 +201,7 @@ const {
   planSignatures,
   previewDomainTags,
   countsInWords,
-  previewClientColumn,
+  previewSheetRows,
   planSheetWrites,
   describeRun,
   domainsOf,
@@ -264,32 +264,38 @@ eq("a host with no tag is counted", tp.hostNoTag, 1);
 eq("a domain the sheet has no host for is counted", previewDomainTags(moving, {}, DEFAULT_TLD_TAGS, DEFAULT_PLATFORM_TAGS).notInSheet, 2);
 eq("an unknown TLD is counted, not guessed", previewDomainTags([{ ...moving[0], domain: "x.xyz" }], {}, DEFAULT_TLD_TAGS, []).tldNoTag, 1);
 
-// --- the sheet's Client column ---------------------------------------------
-const cp = previewClientColumn(["x.co", "y.org", "z.net"], { "x.co": { client: "Acme" }, "y.org": { client: "" } }, "Acme");
+// --- what the sheet step does ------------------------------------------------
+// The sheet has no Client column any more: a moved domain is recorded by
+// going Active and losing its warmup dates, and nothing else.
+const cp = previewSheetRows(["x.co", "y.org", "z.net"], { "x.co": {}, "y.org": {} });
 eq("domains in the sheet are told from the rest", [cp.inSheet.map((r) => r.domain), cp.notInSheet], [["x.co", "y.org"], ["z.net"]]);
-eq("…and rows that already say the client are counted", cp.alreadySet, 1);
-
-eq("…and rows still carrying warmup dates", previewClientColumn(["x.co", "y.org"], { "x.co": { started: "2026-08-19", days: "23" }, "y.org": {} }, "Acme").withWarmup, 1);
+eq("…and rows still carrying warmup dates", previewSheetRows(["x.co", "y.org"], { "x.co": { started: "2026-08-19", days: "23" }, "y.org": {} }).withWarmup, 1);
 
 const sheetGrid = [
-  ["Domain", "Status", "Warmup Started", "Warmup Days", "Client"],
-  ["x.co", "Active", "", "", "acme"],
-  ["Y.ORG", "Warming Up", "2026-08-19", "23", "Old"],
-  ["w.co", "Warming Up", "", "", ""],
+  ["Domain", "Status", "Warmup Started", "Warmup Days"],
+  ["x.co", "Active", "", ""],
+  ["Y.ORG", "Warming Up", "2026-08-19", "23"],
+  ["w.co", "Warming Up", "", ""],
 ];
-const sw = planSheetWrites(sheetGrid, ["x.co", "y.org", "z.net"], "Acme");
-eq("a moved domain gets its client, an Active status and its warmup cells cleared", sw.writes, [
-  { domain: "y.org", row: 3, column: 4, value: "Acme" },
+const sw = planSheetWrites(sheetGrid, ["x.co", "y.org", "z.net"]);
+eq("a moved domain gets an Active status and its warmup cells cleared", sw.writes, [
   { domain: "y.org", row: 3, column: 1, value: "Active" },
   { domain: "y.org", row: 3, column: 2, value: "" },
   { domain: "y.org", row: 3, column: 3, value: "" },
 ]);
 eq("…a row that already reads that way is not written", [sw.rows, sw.alreadySet, sw.notInSheet], [["y.org"], ["x.co"], ["z.net"]]);
-eq("…and only the cells that differ are", planSheetWrites(sheetGrid, ["w.co"], "Acme").writes.map((w) => [w.column, w.value]), [[4, "Acme"], [1, "Active"]]);
-eq("a tab without the Client column says so", planSheetWrites([["Domain", "Status"]], ["x.co"], "Acme").problem, 'No "Client" column in the Domains tab.');
-const noStatus = planSheetWrites([["Domain", "Client"], ["x.co", ""]], ["x.co"], "Acme");
-eq("a tab without the status or warmup columns still gets its client, and says what is missing", [noStatus.writes.length, noStatus.missingColumns], [1, ["Status", "Warmup Started", "Warmup Days"]]);
-eq("an empty tab says so", planSheetWrites([], ["x.co"], "Acme").problem, "The Domains tab is empty.");
+eq("…and only the cells that differ are", planSheetWrites(sheetGrid, ["w.co"]).writes.map((w) => [w.column, w.value]), [[1, "Active"]]);
+// A Client column left in the tab is simply not touched.
+eq("a leftover Client column is left alone",
+  planSheetWrites([["Domain", "Status", "Client"], ["x.co", "Warming Up", "Old"]], ["x.co"]).writes,
+  [{ domain: "x.co", row: 2, column: 1, value: "Active" }]);
+const noStatus = planSheetWrites([["Domain"], ["x.co"]], ["x.co"]);
+eq("a tab without the status or warmup columns writes nothing, and says what is missing",
+  [noStatus.writes.length, noStatus.rows, noStatus.alreadySet, noStatus.missingColumns],
+  [0, [], ["x.co"], ["Status", "Warmup Started", "Warmup Days"]]);
+eq("only the Domain column is still required",
+  planSheetWrites([["Status", "Client"]], ["x.co"]).problem, 'No "Domain" column in the Domains tab.');
+eq("an empty tab says so", planSheetWrites([], ["x.co"]).problem, "The Domains tab is empty.");
 
 eq("domains are counted once, however spelled", domainsOf([{ domain: "X.co" }, { domain: "x.co." }, { domain: "y.org" }]), ["x.co", "y.org"]);
 eq("a run reads as a sentence", describeRun({ inboxes: 3, domains: 2, source: "Warming", destination: "Client A" }), "3 inboxes on 2 domains · Warming → Client A");

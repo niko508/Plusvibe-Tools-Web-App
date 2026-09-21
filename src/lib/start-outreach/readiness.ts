@@ -71,15 +71,12 @@ export interface SheetWarmup {
   days?: string | number;
   /** The "Domain Host" cell (registrar), used for the platform tag. */
   host?: string;
-  /** The "Client" cell as it is now, before a move writes the new one. */
-  client?: string;
 }
 
 export const SHEET_COL_DOMAIN = "Domain";
 export const SHEET_COL_WARMUP_STARTED = "Warmup Started";
 export const SHEET_COL_WARMUP_DAYS = "Warmup Days";
 export const SHEET_COL_DOMAIN_HOST = "Domain Host";
-export const SHEET_COL_CLIENT = "Client";
 
 function headerIndex(header: string[], name: string): number {
   const want = name.trim().toLowerCase();
@@ -121,7 +118,6 @@ export function warmupFromGrid(grid: string[][]): {
   const iStarted = headerIndex(header, SHEET_COL_WARMUP_STARTED);
   const iDays = headerIndex(header, SHEET_COL_WARMUP_DAYS);
   const iHost = headerIndex(header, SHEET_COL_DOMAIN_HOST);
-  const iClient = headerIndex(header, SHEET_COL_CLIENT);
   if (iDomain === -1) return { byDomain, problem: `No "${SHEET_COL_DOMAIN}" column.` };
   if (iStarted === -1 && iDays === -1) {
     return {
@@ -136,12 +132,11 @@ export function warmupFromGrid(grid: string[][]): {
     const domain = normalizeDomain(row[iDomain]);
     if (!domain || byDomain.has(domain)) continue; // first row wins
     // A row with blank cells is still a row: the domain is in the sheet, it
-    // just has no date (so Plusvibe's is used) and no host or client yet.
+    // just has no date (so Plusvibe's is used) and no host yet.
     byDomain.set(domain, {
       started: value(cell(row, iStarted)),
       days: value(cell(row, iDays)),
       host: value(cell(row, iHost)),
-      client: value(cell(row, iClient)),
     });
   }
   return { byDomain, problem: null };

@@ -33,7 +33,7 @@ import {
   domainsOf,
   parseOutreachSettings,
   planSignatures,
-  previewClientColumn,
+  previewSheetRows,
   previewDomainTags,
   signatureFieldsUsable,
   type MovingInbox,
@@ -261,8 +261,8 @@ export function OutreachSetup({
     () => previewDomainTags(inboxes, hosts, tagSets.tld, tagSets.platform),
     [inboxes, hosts, tagSets]
   );
-  const clientPreview = useMemo(
-    () => previewClientColumn(domains, sheetDates, destination?.name ?? ""),
+  const sheetPreview = useMemo(
+    () => previewSheetRows(domains, sheetDates),
     [domains, sheetDates, destination]
   );
 
@@ -337,7 +337,7 @@ export function OutreachSetup({
         sheet: {
           url: sheetConfig?.url,
           tab: sheetConfig?.tab || DEFAULT_SHEET_TAB,
-          updateClient: options.sheet,
+          updateSheet: options.sheet,
         },
       });
       sentRef.current.set(jobId, inboxes.map((i) => i.email));
@@ -557,21 +557,19 @@ export function OutreachSetup({
             className="accent-accent"
             checked={options.sheet}
             onChange={opt("sheet")}
-            aria-label="Update client column"
+            aria-label="Update the Domains tab"
           />
           <span>
-            In the Domains tab, set Client to{" "}
-            <span className="font-medium text-foreground">{destination?.name ?? "the destination"}</span>, Status to{" "}
-            <span className="font-medium text-foreground">{ACTIVE_STATUS}</span>, and clear Warmup Started / Warmup Days
+            In the Domains tab, set Status to{" "}
+            <span className="font-medium text-foreground">{ACTIVE_STATUS}</span> and clear Warmup Started / Warmup Days
           </span>
         </label>
         {options.sheet && inboxes.length > 0 && (
-          <p className="text-xs text-muted-foreground" data-client-preview>
-            {formatNumber(clientPreview.inSheet.length)} of {formatNumber(domains.length)} domains are in the sheet
-            {clientPreview.alreadySet > 0 ? ` (${clientPreview.alreadySet} already say ${destination?.name})` : ""}
-            {clientPreview.withWarmup > 0 ? ` · ${clientPreview.withWarmup} with warmup dates to clear` : ""}
-            {clientPreview.notInSheet.length > 0
-              ? ` · not in the sheet: ${clientPreview.notInSheet.slice(0, 5).join(", ")}${clientPreview.notInSheet.length > 5 ? ", …" : ""}`
+          <p className="text-xs text-muted-foreground" data-sheet-preview>
+            {formatNumber(sheetPreview.inSheet.length)} of {formatNumber(domains.length)} domains are in the sheet
+            {sheetPreview.withWarmup > 0 ? ` · ${sheetPreview.withWarmup} with warmup dates to clear` : ""}
+            {sheetPreview.notInSheet.length > 0
+              ? ` · not in the sheet: ${sheetPreview.notInSheet.slice(0, 5).join(", ")}${sheetPreview.notInSheet.length > 5 ? ", …" : ""}`
               : ""}
             {!hasSheet ? " · writes go to the server's Email Infra sheet" : ""}
           </p>
@@ -592,7 +590,7 @@ export function OutreachSetup({
             options.signatures ? "signatures" : null,
             options.activeTag ? `"${ACTIVE_TAG_NAME}" tag` : null,
             options.domainTags ? "TLD + platform tags" : null,
-            options.sheet ? "sheet (Client, Status, warmup cleared)" : null,
+            options.sheet ? "sheet (Status, warmup cleared)" : null,
           ]
             .filter(Boolean)
             .join(" · ")}

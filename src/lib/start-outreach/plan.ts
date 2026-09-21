@@ -13,7 +13,6 @@ import { findPlatformTag, findTldTag, tldOf } from "@/lib/tags/domain-tags";
 import type { TagInput } from "@/lib/tags/bulk-tags";
 import type { Category } from "@/lib/start-outreach/categories";
 import {
-  SHEET_COL_CLIENT,
   SHEET_COL_DOMAIN,
   SHEET_COL_WARMUP_DAYS,
   SHEET_COL_WARMUP_STARTED,
@@ -321,23 +320,26 @@ export function countsInWords(m: Map<string, number>, max = 6): string {
 // The sheet's Client column
 // ---------------------------------------------------------------------------
 
-export interface ClientPreview {
-  /** Domains with a row in the sheet, and what the Client cell says now. */
-  inSheet: { domain: string; current?: string }[];
+export interface SheetPreview {
+  /** Domains with a row in the sheet. */
+  inSheet: { domain: string }[];
   notInSheet: string[];
-  /** Rows whose Client already reads as the destination. */
-  alreadySet: number;
   /** Rows that still carry a warmup date or day count to clear. */
   withWarmup: number;
 }
 
-export function previewClientColumn(
+/**
+ * What the sheet step would find, before it runs.
+ *
+ * Only the Status cell and the two warmup cells: the sheet has no Client
+ * column any more, so a moved domain is recorded by going Active and losing
+ * its warmup dates, which is what it means.
+ */
+export function previewSheetRows(
   domains: string[],
-  sheet: Record<string, { client?: string; started?: string; days?: string | number } | undefined>,
-  destinationName: string
-): ClientPreview {
-  const out: ClientPreview = { inSheet: [], notInSheet: [], alreadySet: 0, withWarmup: 0 };
-  const want = destinationName.trim().toLowerCase();
+  sheet: Record<string, { started?: string; days?: string | number } | undefined>
+): SheetPreview {
+  const out: SheetPreview = { inSheet: [], notInSheet: [], withWarmup: 0 };
   for (const raw of domains) {
     const d = normalizeDomain(raw);
     if (!d) continue;
@@ -346,8 +348,7 @@ export function previewClientColumn(
       out.notInSheet.push(d);
       continue;
     }
-    out.inSheet.push({ domain: d, current: row.client });
-    if ((row.client ?? "").trim().toLowerCase() === want && want) out.alreadySet += 1;
+    out.inSheet.push({ domain: d });
     if (row.started || (row.days !== undefined && row.days !== "")) out.withWarmup += 1;
   }
   return out;
@@ -365,16 +366,14 @@ export interface SheetWrite {
 }
 
 /**
- * The cell writes for the moved domains: Client set to the destination,
- * Status set to Active, and the Warmup Started / Warmup Days cells cleared,
- * since the domain is no longer warming. Cells that already read that way
- * are not written. Returns the domains the grid does not have, and the rows
- * that needed nothing at all.
+ * The cell writes for the moved domains: Status set to Active, and the
+ * Warmup Started / Warmup Days cells cleared, since the domain is no longer
+ * warming. Cells that already read that way are not written. Returns the
+ * domains the grid does not have, and the rows that needed nothing at all.
  */
 export function planSheetWrites(
   grid: string[][],
-  domains: string[],
-  destinationName: string
+  domains: string[]
 ): {
   writes: SheetWrite[];
   /** Rows that were changed (one per domain, however many cells). */
@@ -397,12 +396,10 @@ export function planSheetWrites(
   const header = grid[0].map((h) => String(h ?? "").trim().toLowerCase());
   const col = (name: string) => header.indexOf(name.toLowerCase());
   const iDomain = col(SHEET_COL_DOMAIN);
-  const iClient = col(SHEET_COL_CLIENT);
   const iStatus = col("Status");
   const iStarted = col(SHEET_COL_WARMUP_STARTED);
   const iDays = col(SHEET_COL_WARMUP_DAYS);
   if (iDomain === -1) return { ...empty, problem: `No "${SHEET_COL_DOMAIN}" column in the Domains tab.` };
-  if (iClient === -1) return { ...empty, problem: `No "${SHEET_COL_CLIENT}" column in the Domains tab.` };
   const missingColumns = [
     iStatus === -1 ? "Status" : null,
     iStarted === -1 ? SHEET_COL_WARMUP_STARTED : null,
@@ -415,7 +412,6 @@ export function planSheetWrites(
     if (d && !rowByDomain.has(d)) rowByDomain.set(d, r + 1); // first row wins
   }
   const wanted: [number, string][] = [
-    [iClient, destinationName.trim()],
     [iStatus, ACTIVE_STATUS],
     [iStarted, ""],
     [iDays, ""],

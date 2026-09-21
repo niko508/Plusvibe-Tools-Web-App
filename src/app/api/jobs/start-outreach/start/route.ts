@@ -100,7 +100,7 @@ export async function POST(request: Request) {
       sheet: {
         url: str(body.sheet?.url) || undefined,
         tab: str(body.sheet?.tab) || undefined,
-        updateClient: body.sheet?.updateClient === true,
+        updateSheet: body.sheet?.updateSheet === true,
       },
     };
 
