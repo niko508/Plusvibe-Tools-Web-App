@@ -11,6 +11,7 @@ import { groupInboxes, type InboxLike } from "@/app/tools/add-signatures/filter"
 import type { PersonGroup } from "@/app/tools/add-signatures/types";
 import { findPlatformTag, findTldTag, tldOf } from "@/lib/tags/domain-tags";
 import type { TagInput } from "@/lib/tags/bulk-tags";
+import type { Category } from "@/lib/start-outreach/categories";
 import {
   SHEET_COL_CLIENT,
   SHEET_COL_DOMAIN,
@@ -173,6 +174,12 @@ export interface MovingInbox {
   domain: string;
   /** Plusvibe's provider key, e.g. GOOGLE_WORKSPACE. */
   provider: string;
+  /**
+   * Which settings this inbox gets, decided from its DOMAIN — see
+   * lib/start-outreach/categories. Null when the domain is on neither
+   * provider, which leaves it out of the run rather than guessing.
+   */
+  category?: Category | null;
   firstName?: string;
   lastName?: string;
 }

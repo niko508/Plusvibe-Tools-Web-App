@@ -5,6 +5,7 @@
 //
 //   Pause Campaigns   a resume can be due days after the pause
 //   Blocked Domains   a flagged domain is re-assessed every 7 days
+//   Start Outreach    a batch's week 2 settings land a week after it started
 //
 // Starting them here — rather than lazily on the first request — means a
 // restart with nobody looking still fires on time.
@@ -24,5 +25,10 @@ export async function register() {
     // Inbox Rotation: a group switch falls at midnight, with nobody watching.
     const rotation = await import("@/lib/inbox-rotation/runner");
     rotation.bootScheduler();
+
+    // Start Outreach: a batch moves onto its week 2 settings seven days later,
+    // at six in the morning Helsinki time.
+    const outreach = await import("@/lib/jobs/outreach-schedule");
+    outreach.bootScheduler();
   }
 }

@@ -29,9 +29,6 @@ import {
 import {
   ACTIVE_STATUS,
   ACTIVE_TAG_NAME,
-  EMPTY_OUTREACH_SETTINGS,
-  OUTREACH_FIELDS,
-  FIXED_ROWS,
   countsInWords,
   domainsOf,
   parseOutreachSettings,
@@ -42,6 +39,16 @@ import {
   type MovingInbox,
   type OutreachSettingsInput,
 } from "@/lib/start-outreach/plan";
+import { CATEGORY_LABELS, describeSplit, splitByCategory } from "@/lib/start-outreach/categories";
+import {
+  DEFAULT_OUTREACH_SETTINGS,
+  describeWeek,
+  validateSettings,
+  weekIsEmpty,
+  type OutreachSettings,
+} from "@/lib/start-outreach/week-settings";
+import { fetchOutreachSettings } from "@/lib/api-client";
+import { CategoryWeeks, WEEK_NOTE } from "./settings-panel";
 import type { SheetWarmup } from "@/lib/start-outreach/readiness";
 import type { StartOutreachJob } from "@/lib/jobs/start-outreach-types";
 import { JobsPanel } from "./jobs-panel";
@@ -51,7 +58,6 @@ import { JobsPanel } from "./jobs-panel";
 // pressed; the server job does the work and is polled below.
 
 const DEST_KEY = "pv_outreach_dest";
-const SETTINGS_KEY = "pv_outreach_settings";
 const OPTIONS_KEY = "pv_outreach_options";
 const TAG_SETS_KEY = "pv_domain_tag_sets"; // shared with Bulk Actions
 const POLL_MS = 2500;
@@ -103,7 +109,12 @@ export function OutreachSetup({
 }) {
   const [dest, setDest] = useState("");
   const [options, setOptions] = useState<Options>(DEFAULT_OPTIONS);
-  const [settings, setSettings] = useState<OutreachSettingsInput>(EMPTY_OUTREACH_SETTINGS);
+  // The saved settings, and this batch's copy of them. Editing here changes
+  // only this run: the saved ones are changed in the Settings section, so a
+  // one-off tweak can never quietly become the new default.
+  const [saved, setSaved] = useState<OutreachSettings>(DEFAULT_OUTREACH_SETTINGS);
+  const [weeks, setWeeks] = useState<OutreachSettings>(DEFAULT_OUTREACH_SETTINGS);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [prefsLoaded, setPrefsLoaded] = useState(false);
 
   const [titles, setTitles] = useState<string[]>(Array(TITLE_SLOTS).fill(""));
@@ -129,8 +140,6 @@ export function OutreachSetup({
     try {
       const d = window.localStorage.getItem(DEST_KEY);
       if (d) setDest(d);
-      const s = window.localStorage.getItem(SETTINGS_KEY);
-      if (s) setSettings({ ...EMPTY_OUTREACH_SETTINGS, ...(JSON.parse(s) as Partial<OutreachSettingsInput>) });
       const o = window.localStorage.getItem(OPTIONS_KEY);
       if (o) setOptions({ ...DEFAULT_OPTIONS, ...(JSON.parse(o) as Partial<Options>) });
     } catch {
@@ -140,17 +149,36 @@ export function OutreachSetup({
     setTitles(pickRandomRoles(TITLE_SLOTS));
     setPrefsLoaded(true);
   }, []);
+  // The saved settings are what this batch's boxes start on — placeholders to
+  // adjust for this run, never written back by running it.
+  const loadSaved = useCallback(async () => {
+    try {
+      const { settings: s } = await fetchOutreachSettings();
+      setSaved(s);
+      setWeeks(s);
+    } catch {
+      // the defaults stand, and the form says the numbers are its own
+    } finally {
+      setSettingsLoaded(true);
+    }
+  }, []);
+  useEffect(() => {
+    void loadSaved();
+  }, [loadSaved]);
+  // A new batch starts from the saved numbers again, whatever the last one used.
+  useEffect(() => {
+    if (settingsLoaded) setWeeks(saved);
+  }, [resetKey, saved, settingsLoaded]);
   useEffect(() => {
     if (!prefsLoaded) return;
     try {
       if (dest) window.localStorage.setItem(DEST_KEY, dest);
       else window.localStorage.removeItem(DEST_KEY);
-      window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
       window.localStorage.setItem(OPTIONS_KEY, JSON.stringify(options));
     } catch {
       // storage unavailable
     }
-  }, [dest, settings, options, prefsLoaded]);
+  }, [dest, options, prefsLoaded]);
 
   // The next batch most likely goes somewhere else, so the destination is
   // cleared rather than left pointing at the last client.
@@ -215,7 +243,14 @@ export function OutreachSetup({
   const fields = useMemo(() => ({ titles, companies, phones, addresses }), [titles, companies, phones, addresses]);
   const signaturesUsable = signatureFieldsUsable(fields);
   const sigPlan = useMemo(() => planSignatures(inboxes), [inboxes]);
-  const parsed = useMemo(() => parseOutreachSettings(settings), [settings]);
+  // What this batch is made of. Only the categories actually present get a
+  // form: a run with no Azure 50 domains has no reason to show its numbers.
+  const split = useMemo(() => splitByCategory(inboxes), [inboxes]);
+  const present = useMemo(() => split.groups.map((g) => g.category), [split]);
+  const weekProblems = useMemo(
+    () => validateSettings(weeks).filter((p) => present.some((c) => p.startsWith(CATEGORY_LABELS[c]))),
+    [weeks, present]
+  );
   const domains = useMemo(() => domainsOf(inboxes), [inboxes]);
   const hosts = useMemo(() => {
     const out: Record<string, string | undefined> = {};
@@ -276,7 +311,10 @@ export function OutreachSetup({
   if (!destination) problems.push("Pick the destination workspace.");
   if (sameAsSource) problems.push("The destination has to be a different workspace.");
   if (options.signatures && !signaturesUsable) problems.push("Signatures need a job title and a company name, or untick them.");
-  for (const p of Object.values(parsed.problems)) if (p) problems.push(p);
+  problems.push(...weekProblems);
+  if (inboxes.length > 0 && present.length === 0) {
+    problems.push("None of these domains is on Google or Microsoft, so there are no settings to apply.");
+  }
   const canRun = problems.length === 0 && armed && !starting && !anyRunning;
 
   async function run() {
@@ -290,7 +328,9 @@ export function OutreachSetup({
         destWorkspaceId: destination._id,
         destWorkspaceName: destination.name,
         inboxes,
-        settings,
+        // Only the categories in this batch: an Azure 50 form nobody filled in
+        // must not reach a run that has no Azure 50 domains.
+        weeks: Object.fromEntries(present.map((c) => [c, weeks[c]])),
         signatures: options.signatures ? fields : null,
         activeTag: options.activeTag ? ACTIVE_TAG_NAME : null,
         domainTags: options.domainTags ? tagSets : null,
@@ -404,41 +444,62 @@ export function OutreachSetup({
       </div>
 
       {/* Step 4 · Settings */}
-      <div className="pv-card space-y-4 p-4 sm:p-5">
-        <h2 className="text-sm font-semibold">Step 4 · Settings</h2>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {OUTREACH_FIELDS.map((f) => (
-            <div key={f.key}>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                {f.label}{" "}
-                <span className="font-mono text-[10px] text-muted-foreground/70">{f.apiField}</span>
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min={f.min}
-                  max={f.max}
-                  step={f.integer ? 1 : 0.1}
-                  className={`pv-input w-full text-right tabular-nums ${parsed.problems[f.key] ? "border-danger" : ""}`}
-                  value={settings[f.key]}
-                  placeholder="leave as is"
-                  aria-label={f.label}
-                  onChange={(e) => setSettings((s) => ({ ...s, [f.key]: e.target.value }))}
-                />
-                <span className="w-14 shrink-0 text-xs text-muted-foreground">{f.unit}</span>
-              </div>
-            </div>
-          ))}
+      <div className="pv-card space-y-4 p-4 sm:p-5" data-step-settings>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-semibold">Step 4 · Settings</h2>
+          <span className="text-xs text-muted-foreground">
+            {inboxes.length === 0
+              ? "Tick some domains to see what they are."
+              : `This batch: ${describeSplit(split)}`}
+          </span>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground" data-fixed-settings>
-          {FIXED_ROWS.map((r) => (
-            <span key={r.key} className="pv-chip" title={r.apiField}>
-              {r.label} <span className="ml-1 font-medium">{r.value}</span>
+        <p className="text-xs text-muted-foreground">
+          {WEEK_NOTE} These start on the saved settings; changing them here changes only this batch.
+        </p>
+
+        {!settingsLoaded ? (
+          <div className="h-24 animate-pulse rounded-xl bg-muted" />
+        ) : present.length === 0 ? (
+          <p className="rounded-xl border border-border px-3 py-6 text-center text-sm text-muted-foreground">
+            {inboxes.length === 0
+              ? "Nothing selected yet."
+              : "None of these domains is on Google or Microsoft, so there are no settings to apply."}
+          </p>
+        ) : (
+          present.map((c) => {
+            const n = split.groups.find((g) => g.category === c)?.inboxes.length ?? 0;
+            return (
+              <CategoryWeeks
+                key={c}
+                category={c}
+                value={weeks[c]}
+                idPrefix="batch"
+                onChange={(next) => setWeeks((w) => ({ ...w, [c]: next }))}
+                headerRight={
+                  <span className="text-xs text-muted-foreground">
+                    {formatNumber(n)} inbox{n === 1 ? "" : "es"} in this batch
+                    {weekIsEmpty(weeks[c].week2) && (
+                      <span className="text-warning"> · no week 2 switch</span>
+                    )}
+                  </span>
+                }
+              />
+            );
+          })
+        )}
+
+        {split.uncategorized.length > 0 && (
+          <p className="flex gap-1.5 text-xs text-warning" data-uncategorized>
+            <AlertIcon size={13} className="mt-0.5 shrink-0" />
+            <span>
+              {formatNumber(split.uncategorized.length)} inbox
+              {split.uncategorized.length === 1 ? "" : "es"} on domains that are on neither Google nor Microsoft. They
+              are still moved, but get no settings and no week 2 switch.
             </span>
-          ))}
-          <span>Blank fields are left as they are.</span>
-        </div>
-        {Object.values(parsed.problems).map((p) => (
+          </p>
+        )}
+
+        {weekProblems.map((p) => (
           <p key={p} className="text-xs text-danger">
             {p}
           </p>
@@ -527,7 +588,7 @@ export function OutreachSetup({
         <p className="text-xs text-muted-foreground">
           Then in {destination?.name ?? "the destination"}:{" "}
           {[
-            `settings (${parsed.summary.length})`,
+            `week 1 settings (${present.length} kind${present.length === 1 ? "" : "s"})`,
             options.signatures ? "signatures" : null,
             options.activeTag ? `"${ACTIVE_TAG_NAME}" tag` : null,
             options.domainTags ? "TLD + platform tags" : null,

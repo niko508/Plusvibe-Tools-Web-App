@@ -3,6 +3,7 @@ import { resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { ActiveJobError, createJob } from "@/lib/jobs/start-outreach";
 import { EMPTY_OUTREACH_SETTINGS, type MovingInbox, type OutreachSettingsInput } from "@/lib/start-outreach/plan";
+import { CATEGORIES, isCategory, type Category } from "@/lib/start-outreach/categories";
 import type { TagInput } from "@/lib/tags/bulk-tags";
 import type { StartOutreachStartPayload } from "@/lib/jobs/start-outreach-types";
 
@@ -40,6 +41,7 @@ export async function POST(request: Request) {
         email,
         domain: str(i.domain) || email.slice(email.lastIndexOf("@") + 1).toLowerCase(),
         provider: str(i.provider),
+        category: isCategory(i.category) ? i.category : null,
         firstName: str(i.firstName) || undefined,
         lastName: str(i.lastName) || undefined,
       });
@@ -54,11 +56,22 @@ export async function POST(request: Request) {
       );
     }
 
-    const settings: OutreachSettingsInput = { ...EMPTY_OUTREACH_SETTINGS };
-    const rawSettings = (body.settings ?? {}) as Record<string, unknown>;
-    for (const key of Object.keys(EMPTY_OUTREACH_SETTINGS) as (keyof OutreachSettingsInput)[]) {
-      const v = rawSettings[key];
-      if (typeof v === "string" || typeof v === "number") settings[key] = String(v);
+    // Only the five known fields, as strings, for each week of each category.
+    const week = (raw: unknown): OutreachSettingsInput => {
+      const out: OutreachSettingsInput = { ...EMPTY_OUTREACH_SETTINGS };
+      const given = (raw ?? {}) as Record<string, unknown>;
+      for (const key of Object.keys(EMPTY_OUTREACH_SETTINGS) as (keyof OutreachSettingsInput)[]) {
+        const v = given[key];
+        if (typeof v === "string" || typeof v === "number") out[key] = String(v);
+      }
+      return out;
+    };
+    const weeks: Partial<Record<Category, { week1: OutreachSettingsInput; week2: OutreachSettingsInput }>> = {};
+    const rawWeeks = (body.weeks ?? {}) as Record<string, { week1?: unknown; week2?: unknown } | undefined>;
+    for (const c of CATEGORIES) {
+      const given = rawWeeks[c];
+      if (!given) continue;
+      weeks[c] = { week1: week(given.week1), week2: week(given.week2) };
     }
 
     const signatures = body.signatures
@@ -80,7 +93,7 @@ export async function POST(request: Request) {
       destWorkspaceId: str(body.destWorkspaceId),
       destWorkspaceName: str(body.destWorkspaceName) || str(body.destWorkspaceId),
       inboxes,
-      settings,
+      weeks,
       signatures,
       activeTag: str(body.activeTag) || null,
       domainTags,

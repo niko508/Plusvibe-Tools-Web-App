@@ -11,6 +11,8 @@ import type { ChangeLimitsJob, ChangeLimitsStartPayload } from "@/lib/jobs/chang
 import type { CampaignSettingsJob, CampaignSettingsStartPayload } from "@/lib/jobs/campaign-settings-types";
 import type { DomainTagsJob, DomainTagsStartPayload } from "@/lib/jobs/domain-tags-types";
 import type { StartOutreachJob, StartOutreachStartPayload } from "@/lib/jobs/start-outreach-types";
+import type { ScheduledSwitch } from "@/lib/jobs/outreach-schedule-types";
+import type { OutreachSettings } from "@/lib/start-outreach/week-settings";
 import type { CatalogTag } from "@/lib/inbox-tags/plan";
 import type { FollowUpTemplate } from "@/lib/follow-ups/templates";
 import type {
@@ -841,6 +843,36 @@ export function listBurnedRemovals(signal?: AbortSignal) {
 
 export function abortBurnedRemoval(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/burned-removal/abort", { method: "POST", body: { jobId }, signal });
+}
+
+// --- Start Outreach: saved settings and the week 2 switch ---------------------
+
+export function fetchOutreachSettings(signal?: AbortSignal) {
+  return request<{ settings: OutreachSettings }>("/api/jobs/start-outreach/settings", { signal });
+}
+
+export function saveOutreachSettings(settings: OutreachSettings, signal?: AbortSignal) {
+  return request<{ settings: OutreachSettings }>("/api/jobs/start-outreach/settings", {
+    method: "PUT",
+    body: settings,
+    signal,
+  });
+}
+
+export function listOutreachSwitches(signal?: AbortSignal) {
+  return request<{ switches: ScheduledSwitch[] }>("/api/jobs/start-outreach/scheduled", { signal });
+}
+
+export function cancelOutreachSwitch(id: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/outreach-switch/cancel", { method: "POST", body: { id }, signal });
+}
+
+export function deleteOutreachSwitch(id: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/outreach-switch/delete", { method: "POST", body: { id }, signal });
+}
+
+export function runOutreachSwitchNow(id: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/outreach-switch/run-now", { method: "POST", body: { id }, signal });
 }
 
 export function deleteBurnedRemoval(jobId: string, signal?: AbortSignal) {

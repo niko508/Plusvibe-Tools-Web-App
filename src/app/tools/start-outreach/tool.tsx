@@ -45,7 +45,10 @@ import {
   type Verdict,
 } from "@/lib/start-outreach/readiness";
 import type { MovingInbox } from "@/lib/start-outreach/plan";
+import { categorizeDomains, CATEGORY_LABELS } from "@/lib/start-outreach/categories";
 import { OutreachSetup } from "./setup";
+import { OutreachSettingsPanel } from "./settings-panel";
+import { ScheduledPanel } from "./scheduled-panel";
 
 // Start Outreach with New Inboxes — step 1: find the domains whose inboxes
 // have warmed long enough, and pick the ones to move.
@@ -295,6 +298,10 @@ export function StartOutreachTool() {
   // A selection only ever means ready inboxes, so a rule change that makes a
   // domain unready quietly drops it from the total rather than counting it.
   const totals = useMemo(() => selectionTotals(groups, selected), [groups, selected]);
+  // Which settings each domain's inboxes get. Decided from the domain's WHOLE
+  // mailbox count, not the ready ones: a 50-seat domain with 40 warmed is
+  // still a 50, and a 25's numbers would throttle it for a week.
+  const categories = useMemo(() => categorizeDomains(groups), [groups]);
   // What a run would move: the ready inboxes on the ticked domains.
   const moving: MovingInbox[] = useMemo(
     () =>
@@ -305,10 +312,11 @@ export function StartOutreachTool() {
           email: r.email,
           domain: r.domain,
           provider: r.provider,
+          category: categories.get(r.domain) ?? null,
           firstName: r.firstName,
           lastName: r.lastName,
         })),
-    [judged, selected]
+    [judged, selected, categories]
   );
   const sourceWorkspace = useMemo(() => {
     const w = workspaces.find((x) => x._id === ws);
@@ -485,6 +493,11 @@ export function StartOutreachTool() {
           <span>{error}</span>
         </div>
       )}
+
+      {/* Set once, then left alone for weeks — so both of these are folded
+          away above the batch rather than pushing it off the screen. */}
+      <OutreachSettingsPanel />
+      <ScheduledPanel />
 
       {rows.length === 0 && !busy && (
         <EmptyState icon={<PlayIcon />} title="Nothing fetched yet">

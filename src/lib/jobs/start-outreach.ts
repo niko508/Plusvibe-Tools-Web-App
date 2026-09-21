@@ -24,6 +24,9 @@ import { chunk, type InboxLite } from "@/lib/inbox-tags/plan";
 import { ACCOUNTS_MAX_PAGES, ACCOUNTS_PAGE, assignTag, readInboxPage, resolveTag } from "@/lib/inbox-tags/api";
 import { findPlatformTag, findTldTag, parseDomainHosts, planInboxes } from "@/lib/tags/domain-tags";
 import { normalizeEmail } from "@/lib/start-outreach/readiness";
+import { CATEGORY_LABELS, splitByCategory, type Category } from "@/lib/start-outreach/categories";
+import { weekIsEmpty } from "@/lib/start-outreach/week-settings";
+import { schedule } from "@/lib/jobs/outreach-schedule";
 import {
   ACTIVE_STATUS,
   ACTIVE_TAG_COLOR,
@@ -41,6 +44,7 @@ import type {
   StartOutreachStartPayload,
   StepKey,
   StepRecord,
+  JobCategory,
 } from "@/lib/jobs/start-outreach-types";
 import { CHUNK, MAX_STORED_ERRORS } from "@/lib/jobs/start-outreach-types";
 
@@ -190,14 +194,35 @@ export async function createJob(apiKey: string, payload: StartOutreachStartPaylo
     throw new Error("The destination has to be a different workspace from the one the inboxes are warming in.");
   }
   if (payload.inboxes.length === 0) throw new Error("No inboxes to move.");
-  const parsed = parseOutreachSettings(payload.settings);
-  const firstProblem = Object.values(parsed.problems)[0];
-  if (firstProblem) throw new Error(firstProblem);
+  // Every week in the batch is parsed before anything moves: a number Plusvibe
+  // would refuse must not be found out halfway through a move, and week 2's
+  // must not be found out a week later at six in the morning.
+  const split = splitByCategory(payload.inboxes);
+  for (const g of split.groups) {
+    const weeks = payload.weeks[g.category];
+    if (!weeks) throw new Error(`No settings were given for ${CATEGORY_LABELS[g.category]}.`);
+    for (const [label, input] of [["Week 1", weeks.week1], ["Week 2", weeks.week2]] as const) {
+      const problem = Object.values(parseOutreachSettings(input).problems).find(Boolean);
+      if (problem) throw new Error(`${CATEGORY_LABELS[g.category]} — ${label}: ${problem}`);
+    }
+  }
+  if (split.groups.length === 0) {
+    throw new Error("None of these domains could be sorted into Google, Azure 25 or Azure 50, so there are no settings to apply.");
+  }
   if (payload.signatures && !signatureFieldsUsable(payload.signatures)) {
     throw new Error("Signatures need at least one job title and one company name.");
   }
 
   const domains = domainsOf(payload.inboxes);
+  const jobCategories: JobCategory[] = split.groups.map((g) => {
+    const weeks = payload.weeks[g.category]!;
+    return {
+      category: g.category,
+      inboxes: g.inboxes.length,
+      week1: parseOutreachSettings(weeks.week1).summary,
+      week2Scheduled: !weekIsEmpty(weeks.week2),
+    };
+  });
   const id = randomUUID();
   const now = Date.now();
   const steps: StepRecord[] = STEP_ORDER.map((key) => ({ key, state: "pending", done: 0, total: 0 }));
@@ -217,7 +242,8 @@ export async function createJob(apiKey: string, payload: StartOutreachStartPaylo
     inboxes: payload.inboxes.length,
     domains: domains.length,
     steps,
-    settings: parsed.summary,
+    settings: jobCategories.flatMap((c) => c.week1),
+    categories: jobCategories,
     signatures: !!payload.signatures,
     activeTag: payload.activeTag,
     domainTags: !!payload.domainTags,
@@ -352,23 +378,63 @@ async function runJob(id: string) {
     const ids = arrived.map((a) => a.id);
 
     // 3. Settings -------------------------------------------------------------
+    // Week 1, one category at a time: the three kinds of infrastructure send at
+    // different volumes, so a single bulk-update for the whole batch would put
+    // an Azure 50's numbers on a Google seat.
     const settings = step("settings");
     settings.state = "running";
     settings.total = arrived.length;
     await touch();
-    const body = parseOutreachSettings(payload.settings).body;
-    for (const part of chunk(ids, CHUNK)) {
-      check();
-      try {
-        await acquireSlot();
-        await plusvibePut({ apiKey, path: "/account/bulk-update", body: { workspace_id: dest, ids: part, ...body } });
-        settings.done += part.length;
-      } catch (err) {
-        fail(settings, `${plural(part.length, "inbox")} were not updated: ${msg(err)}`);
+    const idByEmail = new Map(arrived.map((a) => [normalizeEmail(a.email), a.id] as const));
+    /** Addresses that actually arrived, per category — what week 2 will take. */
+    const switchedEmails = new Map<Category, string[]>();
+    for (const g of splitByCategory(payload.inboxes).groups) {
+      const weeks = payload.weeks[g.category];
+      if (!weeks) continue;
+      const here = g.inboxes
+        .map((i) => ({ email: normalizeEmail(i.email), id: idByEmail.get(normalizeEmail(i.email)) }))
+        .filter((x): x is { email: string; id: string } => !!x.id);
+      if (here.length === 0) continue;
+      switchedEmails.set(g.category, here.map((x) => x.email));
+      const body = parseOutreachSettings(weeks.week1).body;
+      for (const part of chunk(here.map((x) => x.id), CHUNK)) {
+        check();
+        try {
+          await acquireSlot();
+          await plusvibePut({ apiKey, path: "/account/bulk-update", body: { workspace_id: dest, ids: part, ...body } });
+          settings.done += part.length;
+        } catch (err) {
+          fail(settings, `${CATEGORY_LABELS[g.category]}: ${plural(part.length, "inbox")} were not updated: ${msg(err)}`);
+        }
+        await touch();
       }
-      await touch();
     }
-    finish(settings, `${settings.done} of ${settings.total} updated`);
+    finish(settings, `${settings.done} of ${settings.total} updated on week 1 settings`);
+    await touch();
+
+    // Book the week 2 switch on what actually arrived — an inbox that never
+    // made it must not be scheduled for a change it will never receive.
+    try {
+      const booked = await schedule({
+        jobId: rec.id,
+        workspaceId: dest,
+        workspaceName: payload.destWorkspaceName,
+        categories: [...switchedEmails.entries()].map(([category, emails]) => ({
+          category,
+          emails,
+          settings: payload.weeks[category]!.week2,
+        })),
+      });
+      if (booked) {
+        rec.scheduledSwitchId = booked.id;
+        rec.scheduledFor = booked.dueAt;
+      }
+    } catch (err) {
+      // The batch is already on its week 1 numbers, which is the half that
+      // matters today; a switch that could not be booked is said so plainly
+      // rather than failing the run.
+      pushError(rec, `The week 2 switch could not be scheduled: ${msg(err)}. The inboxes are on week 1.`);
+    }
     await touch();
 
     // 4. Signatures -----------------------------------------------------------

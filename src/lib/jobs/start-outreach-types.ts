@@ -8,6 +8,7 @@ import type {
   OutreachSettingsInput,
   SettingsRow,
 } from "@/lib/start-outreach/plan";
+import type { Category } from "@/lib/start-outreach/categories";
 
 export type StartOutreachStatus = "running" | "done" | "aborted" | "interrupted" | "error";
 
@@ -47,7 +48,12 @@ export interface StartOutreachJob {
   inboxes: number;
   domains: number;
   steps: StepRecord[];
+  /** Week 1 as it was applied, per category present in the batch. */
   settings: SettingsRow[];
+  categories: JobCategory[];
+  /** The week 2 switch this run booked, when it booked one. */
+  scheduledSwitchId?: string;
+  scheduledFor?: number;
   signatures: boolean;
   activeTag: string | null;
   domainTags: boolean;
@@ -58,13 +64,30 @@ export interface StartOutreachJob {
   errorsTruncated?: boolean;
 }
 
+/** What a run did to one category of the batch. */
+export interface JobCategory {
+  category: Category;
+  inboxes: number;
+  /** The week 1 rows applied to it, for the card. */
+  week1: SettingsRow[];
+  /** Whether week 2 has anything to change. */
+  week2Scheduled: boolean;
+}
+
 export interface StartOutreachStartPayload {
   sourceWorkspaceId: string;
   sourceWorkspaceName: string;
   destWorkspaceId: string;
   destWorkspaceName: string;
   inboxes: MovingInbox[];
-  settings: OutreachSettingsInput;
+  /**
+   * Week 1 and week 2 for each category in this batch.
+   *
+   * Week 1 is applied by the run; week 2 is stored on a scheduled switch and
+   * applied seven days later. A category that isn't here gets nothing, which
+   * is how an uncategorised domain is left alone rather than guessed at.
+   */
+  weeks: Partial<Record<Category, { week1: OutreachSettingsInput; week2: OutreachSettingsInput }>>;
   /** Null skips the signature step. */
   signatures: SignatureFields | null;
   /** Null skips the tag; otherwise the tag's name. */
