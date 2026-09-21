@@ -27,6 +27,12 @@ export type Verdict =
 export type QuietReason = "few-sends" | "no-figures";
 
 export interface ScanRow {
+  /**
+   * Kept because its TRUE reply rate cleared the bar, even though the OOO
+   * figure was under its own. Worth saying: the row would otherwise read as
+   * one the bar missed.
+   */
+  rescued?: true;
   workspaceId: string;
   workspaceName: string;
   /** The inbox address, or the domain — whichever this run judges. */
@@ -55,17 +61,25 @@ export interface InboxLike {
 /**
  * Burned, fine, or not worth judging.
  *
+ * Two bars have to be under for a row to be burned. The OOO figure is the
+ * usual signal, but real replies overrule it: something people are actually
+ * answering is not burned, however few auto-replies come back with it. That
+ * rescue only ever changes an outcome while the Reply % bar sits below the
+ * OOO one, since the OOO rate counts the same replies plus more.
+ *
  * A row with no figures at all is never called burned: this tool reports, and
  * naming a domain burned on no evidence would have someone replace one that
  * was never sending in the first place.
  */
 export function judge(
-  row: { sent: number; replyRateOoo: number; hasFigures: boolean },
+  row: { sent: number; replyRate: number; replyRateOoo: number; hasFigures: boolean },
   t: Thresholds
-): { verdict: Verdict; reason?: QuietReason } {
+): { verdict: Verdict; reason?: QuietReason; rescued?: true } {
   if (!row.hasFigures) return { verdict: "quiet", reason: "no-figures" };
   if (row.sent < t.minSends) return { verdict: "quiet", reason: "few-sends" };
-  return row.replyRateOoo < t.replyOooPct ? { verdict: "burned" } : { verdict: "ok" };
+  if (row.replyRateOoo >= t.replyOooPct) return { verdict: "ok" };
+  if (row.replyRate >= t.replyPct) return { verdict: "ok", rescued: true };
+  return { verdict: "burned" };
 }
 
 const round = (n: number) => Math.round(n * 100) / 100;
@@ -92,7 +106,7 @@ export function rowsForInboxes(
       replyRate: round(rates.replyRate),
       replyRateOoo: round(rates.replyRateOoo),
     };
-    return { ...base, ...judge({ sent: base.sent, replyRateOoo: base.replyRateOoo, hasFigures: !!stats }, t) };
+    return { ...base, ...judge({ sent: base.sent, replyRate: base.replyRate, replyRateOoo: base.replyRateOoo, hasFigures: !!stats }, t) };
   });
 }
 
@@ -134,7 +148,7 @@ export function rowsForDomains(
       replyRate: round(agg.replyRate),
       replyRateOoo: round(agg.replyRateOoo),
     };
-    rows.push({ ...base, ...judge({ sent: base.sent, replyRateOoo: base.replyRateOoo, hasFigures: agg.basis !== "none" }, t) });
+    rows.push({ ...base, ...judge({ sent: base.sent, replyRate: base.replyRate, replyRateOoo: base.replyRateOoo, hasFigures: agg.basis !== "none" }, t) });
   }
   return rows;
 }
@@ -154,6 +168,8 @@ export interface ScanCounts {
   scanned: number;
   burned: number;
   ok: number;
+  /** Of the ok ones, those the true reply rate saved from the OOO bar. */
+  rescued: number;
   /** Too few sends to judge. */
   fewSends: number;
   /** No figures from Plusvibe at all. */
@@ -161,11 +177,13 @@ export interface ScanCounts {
 }
 
 export function countRows(rows: ScanRow[]): ScanCounts {
-  const c: ScanCounts = { scanned: rows.length, burned: 0, ok: 0, fewSends: 0, noFigures: 0 };
+  const c: ScanCounts = { scanned: rows.length, burned: 0, ok: 0, rescued: 0, fewSends: 0, noFigures: 0 };
   for (const r of rows) {
     if (r.verdict === "burned") c.burned += 1;
-    else if (r.verdict === "ok") c.ok += 1;
-    else if (r.reason === "few-sends") c.fewSends += 1;
+    else if (r.verdict === "ok") {
+      c.ok += 1;
+      if (r.rescued) c.rescued += 1;
+    } else if (r.reason === "few-sends") c.fewSends += 1;
     else c.noFigures += 1;
   }
   return c;
@@ -189,6 +207,13 @@ export function sortRows(rows: ScanRow[]): ScanRow[] {
 /** The burned names, one per line — what the copy button puts on the clipboard. */
 export function copyText(rows: ScanRow[]): string {
   return rows.map((r) => r.name).join("\n");
+}
+
+/** The verdict in words, for the CSV and the table's tooltip. */
+export function verdictText(r: ScanRow): string {
+  if (r.verdict === "quiet") return r.reason === "few-sends" ? "too few sends" : "no figures";
+  if (r.rescued) return "ok — still getting real replies";
+  return r.verdict;
 }
 
 function cell(v: string | number): string {
@@ -225,7 +250,7 @@ export function toCsv(rows: ScanRow[]): string {
         r.oooReplies,
         r.replyRate,
         r.replyRateOoo,
-        r.verdict === "quiet" ? (r.reason === "few-sends" ? "too few sends" : "no figures") : r.verdict,
+        verdictText(r),
       ]
         .map(cell)
         .join(",")

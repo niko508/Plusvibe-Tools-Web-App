@@ -10,6 +10,16 @@
 //                   landing in inboxes people read": a mailbox whose only
 //                   answers are auto-replies is still delivering, and one
 //                   that has stopped pulling even those is burned
+//   Reply %         real replies, out-of-office NOT counted. At or above this
+//                   the row is kept whatever the OOO figure says: something
+//                   people are actually answering is not burned, however few
+//                   auto-replies come back with it
+//
+// Note the two rates are not independent: the OOO figure adds auto-replies to
+// the same numerator, so the true rate can never be the higher of the two.
+// That means the Reply % rescue only ever changes an outcome while it is set
+// BELOW the Reply % (OOO) bar — rescueImpossible() says so, and the form
+// passes it on rather than leaving someone to wonder why nothing changed.
 //
 // Each provider's pair is saved and comes back as what the form starts on,
 // until it is edited again.
@@ -65,6 +75,11 @@ export interface Thresholds {
   minSends: number;
   /** Reply rate including out-of-office, in percent. Below this is burned. */
   replyOooPct: number;
+  /**
+   * True reply rate, out-of-office excluded. At or above this the row is kept
+   * however low the OOO figure is.
+   */
+  replyPct: number;
 }
 
 /**
@@ -73,8 +88,8 @@ export interface Thresholds {
  * point at which a percentage starts meaning something.
  */
 export const DEFAULT_THRESHOLDS: Record<Esp, Thresholds> = {
-  google: { minSends: 100, replyOooPct: 1 },
-  microsoft: { minSends: 100, replyOooPct: 1.5 },
+  google: { minSends: 100, replyOooPct: 1, replyPct: 0.5 },
+  microsoft: { minSends: 100, replyOooPct: 1.5, replyPct: 0.5 },
 };
 
 export interface BurnedSettings {
@@ -86,6 +101,14 @@ export const DEFAULT_SETTINGS: BurnedSettings = {
   thresholds: { google: { ...DEFAULT_THRESHOLDS.google }, microsoft: { ...DEFAULT_THRESHOLDS.microsoft } },
   updatedAt: 0,
 };
+
+/**
+ * True when the Reply % rescue can never fire, because it sits at or above
+ * the OOO bar and the true rate can never be the higher of the two.
+ */
+export function rescueImpossible(t: { replyPct: number; replyOooPct: number }): boolean {
+  return t.replyPct >= t.replyOooPct;
+}
 
 export const MAX_MIN_SENDS = 1_000_000;
 
@@ -102,36 +125,52 @@ export function parseMinSends(raw: unknown): { value: number | null; error?: str
   return { value: n };
 }
 
-/** A percentage from 0 to 100, fractions allowed. */
-export function parseReplyPct(raw: unknown): { value: number | null; error?: string } {
+/** A percentage from 0 to 100, fractions allowed. The label names it in the problem. */
+export function parsePercent(raw: unknown, label: string): { value: number | null; error?: string } {
   if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
-    return { value: null, error: "Reply % (OOO): enter a percentage." };
+    return { value: null, error: `${label}: enter a percentage.` };
   }
   const n = typeof raw === "number" ? raw : Number(String(raw).trim());
-  if (!Number.isFinite(n)) return { value: null, error: "Reply % (OOO): enter a percentage." };
-  if (n < 0) return { value: null, error: "Reply % (OOO): can't be negative." };
-  if (n > 100) return { value: null, error: "Reply % (OOO): must be 100 or less." };
+  if (!Number.isFinite(n)) return { value: null, error: `${label}: enter a percentage.` };
+  if (n < 0) return { value: null, error: `${label}: can't be negative.` };
+  if (n > 100) return { value: null, error: `${label}: must be 100 or less.` };
   return { value: Math.round(n * 100) / 100 };
 }
 
-/** Problems with one provider's pair, in reading order. Empty when they can be saved. */
-export function validateThresholds(raw: { minSends?: unknown; replyOooPct?: unknown }): string[] {
+export function parseReplyOooPct(raw: unknown) {
+  return parsePercent(raw, "Reply % (OOO)");
+}
+
+export function parseReplyPct(raw: unknown) {
+  return parsePercent(raw, "Reply %");
+}
+
+/** Problems with one provider's bars, in reading order. Empty when they can be saved. */
+export function validateThresholds(raw: { minSends?: unknown; replyOooPct?: unknown; replyPct?: unknown }): string[] {
   const problems: string[] = [];
   const sends = parseMinSends(raw.minSends);
   if (sends.error) problems.push(sends.error);
-  const pct = parseReplyPct(raw.replyOooPct);
-  if (pct.error) problems.push(pct.error);
+  const ooo = parseReplyOooPct(raw.replyOooPct);
+  if (ooo.error) problems.push(ooo.error);
+  const real = parseReplyPct(raw.replyPct);
+  if (real.error) problems.push(real.error);
   return problems;
 }
 
-/** Whatever was given, as thresholds; anything unreadable falls back to the default. */
+/**
+ * Whatever was given, as thresholds; anything unreadable falls back to the
+ * default. A record written before the Reply % rescue existed has no
+ * `replyPct`, and reads as that provider's default.
+ */
 export function normalizeThresholds(raw: unknown, esp: Esp): Thresholds {
-  const r = (raw ?? {}) as { minSends?: unknown; replyOooPct?: unknown };
+  const r = (raw ?? {}) as { minSends?: unknown; replyOooPct?: unknown; replyPct?: unknown };
   const sends = parseMinSends(r.minSends);
-  const pct = parseReplyPct(r.replyOooPct);
+  const ooo = parseReplyOooPct(r.replyOooPct);
+  const real = parseReplyPct(r.replyPct);
   return {
     minSends: sends.value ?? DEFAULT_THRESHOLDS[esp].minSends,
-    replyOooPct: pct.value ?? DEFAULT_THRESHOLDS[esp].replyOooPct,
+    replyOooPct: ooo.value ?? DEFAULT_THRESHOLDS[esp].replyOooPct,
+    replyPct: real.value ?? DEFAULT_THRESHOLDS[esp].replyPct,
   };
 }
 
@@ -148,8 +187,8 @@ export function normalizeSettings(raw: Partial<BurnedSettings> | null | undefine
   };
 }
 
-/** "Google inboxes · under 1% reply (OOO) on 100+ sends" */
+/** "Google inboxes · under 1% reply (OOO) and under 0.5% reply on 100+ sends" */
 export function describeThresholds(esp: Esp, t: Thresholds): string {
   const what = levelOf(esp) === "inbox" ? "inboxes" : "domains";
-  return `${ESP_LABELS[esp]} ${what} · under ${t.replyOooPct}% reply (OOO) on ${t.minSends.toLocaleString()}+ sends`;
+  return `${ESP_LABELS[esp]} ${what} · under ${t.replyOooPct}% reply (OOO) and under ${t.replyPct}% reply on ${t.minSends.toLocaleString()}+ sends`;
 }

@@ -7,7 +7,7 @@ import { onShutdownFlush } from "@/lib/jobs/shutdown";
 import { fetchInboxStats, listInboxes, listWorkspaces, type Inbox } from "@/lib/blocked-domains/api";
 import { indexStats } from "@/lib/blocked-domains/performance";
 import { bucketOf } from "@/lib/plusvibe-providers";
-import { ESP_LABELS, levelOf, type Esp, type Thresholds } from "@/lib/burned/settings";
+import { ESP_LABELS, levelOf, normalizeThresholds, type Esp, type Thresholds } from "@/lib/burned/settings";
 import { countRows, rowsFor, sortRows, type ScanRow } from "@/lib/burned/scan";
 import { thresholdsFor } from "@/lib/burned/store";
 import type { BurnedJob, BurnedStartPayload, WorkspaceScan } from "@/lib/jobs/burned-types";
@@ -106,6 +106,9 @@ async function loadOnce() {
         parsed.workspaces = Array.isArray(parsed.workspaces) ? parsed.workspaces : [];
         parsed.rows = Array.isArray(parsed.rows) ? parsed.rows : [];
         parsed.errors = Array.isArray(parsed.errors) ? parsed.errors : [];
+        // A record written before the Reply % rescue has no bar for it; the
+        // card would otherwise read "under undefined%".
+        parsed.thresholds = normalizeThresholds(parsed.thresholds, parsed.esp === "google" ? "google" : "microsoft");
         records.set(parsed.id, parsed);
         meta.set(parsed.id, { fingerprint, aborted: false });
       } catch {
@@ -135,7 +138,7 @@ function activeIdFor(fp: string): string | null {
   return null;
 }
 
-const emptyCounts = () => ({ scanned: 0, burned: 0, ok: 0, fewSends: 0, noFigures: 0 });
+const emptyCounts = () => ({ scanned: 0, burned: 0, ok: 0, rescued: 0, fewSends: 0, noFigures: 0 });
 
 export async function createJob(apiKey: string, payload: BurnedStartPayload): Promise<string> {
   await loadOnce();

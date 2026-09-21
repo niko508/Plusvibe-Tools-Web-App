@@ -8,7 +8,9 @@ import {
   ESP_LABELS,
   levelOf,
   parseMinSends,
+  parseReplyOooPct,
   parseReplyPct,
+  rescueImpossible,
   type BurnedSettings,
   type Esp,
 } from "@/lib/burned/settings";
@@ -48,6 +50,7 @@ export function BurnedTool() {
   const [settings, setSettings] = useState<BurnedSettings>(DEFAULT_SETTINGS);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [minSends, setMinSends] = useState("");
+  const [replyOoo, setReplyOoo] = useState("");
   const [replyPct, setReplyPct] = useState("");
   const [saving, setSaving] = useState(false);
   const [savedNote, setSavedNote] = useState<string | null>(null);
@@ -65,7 +68,8 @@ export function BurnedTool() {
   // --- Thresholds: read once, shown per provider ---------------------------
   const showThresholds = useCallback((s: BurnedSettings, which: Esp) => {
     setMinSends(String(s.thresholds[which].minSends));
-    setReplyPct(String(s.thresholds[which].replyOooPct));
+    setReplyOoo(String(s.thresholds[which].replyOooPct));
+    setReplyPct(String(s.thresholds[which].replyPct));
   }, []);
 
   const loadSettings = useCallback(async () => {
@@ -118,10 +122,18 @@ export function BurnedTool() {
 
   // --- Derived -------------------------------------------------------------
   const sends = parseMinSends(minSends);
-  const pct = parseReplyPct(replyPct);
-  const thresholdProblem = sends.error ?? pct.error ?? null;
+  const ooo = parseReplyOooPct(replyOoo);
+  const real = parseReplyPct(replyPct);
+  const thresholdProblem = sends.error ?? ooo.error ?? real.error ?? null;
   const saved = settings.thresholds[esp];
-  const dirty = !thresholdProblem && (sends.value !== saved.minSends || pct.value !== saved.replyOooPct);
+  const dirty =
+    !thresholdProblem &&
+    (sends.value !== saved.minSends || ooo.value !== saved.replyOooPct || real.value !== saved.replyPct);
+  // The OOO rate counts the same replies plus the auto-replies, so it can
+  // never be the lower of the two — a Reply % bar at or above it can never
+  // rescue anything, and saying nothing would leave that a mystery.
+  const rescueDead =
+    !thresholdProblem && rescueImpossible({ replyPct: real.value as number, replyOooPct: ooo.value as number });
   const rangeIssue = rangeProblem(start, end);
   const canScan = settingsLoaded && !thresholdProblem && !rangeIssue && !busy && !active;
   const level = levelOf(esp);
@@ -132,8 +144,8 @@ export function BurnedTool() {
     setError(null);
     try {
       const { settings: s } = await saveBurnedSettings({
-        [esp]: { minSends: sends.value as number, replyOooPct: pct.value as number },
-      } as Partial<Record<Esp, { minSends: number; replyOooPct: number }>>);
+        [esp]: { minSends: sends.value as number, replyOooPct: ooo.value as number, replyPct: real.value as number },
+      } as Partial<Record<Esp, { minSends: number; replyOooPct: number; replyPct: number }>>);
       setSettings(s);
       showThresholds(s, esp);
       setSavedNote(`Saved for ${ESP_LABELS[esp]} — every scan uses these until you change them.`);
@@ -154,8 +166,8 @@ export function BurnedTool() {
       // saved first rather than quietly ignored.
       if (dirty) {
         const { settings: s } = await saveBurnedSettings({
-          [esp]: { minSends: sends.value as number, replyOooPct: pct.value as number },
-        } as Partial<Record<Esp, { minSends: number; replyOooPct: number }>>);
+          [esp]: { minSends: sends.value as number, replyOooPct: ooo.value as number, replyPct: real.value as number },
+        } as Partial<Record<Esp, { minSends: number; replyOooPct: number; replyPct: number }>>);
         setSettings(s);
       }
       await startBurnedScan({ esp, start, end });
@@ -211,7 +223,7 @@ export function BurnedTool() {
         </div>
 
         {/* Thresholds */}
-        <div className="grid gap-4 sm:grid-cols-2" data-thresholds>
+        <div className="grid gap-4 sm:grid-cols-3" data-thresholds>
           <div>
             <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="burned-min-sends">
               Minimum sends
@@ -232,8 +244,27 @@ export function BurnedTool() {
             </p>
           </div>
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="burned-reply-pct">
+            <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="burned-reply-ooo">
               Reply % (OOO)
+            </label>
+            <input
+              id="burned-reply-ooo"
+              type="number"
+              className="pv-input"
+              min={0}
+              step={0.1}
+              value={replyOoo}
+              onChange={(e) => setReplyOoo(e.target.value)}
+              aria-label="Reply % (OOO)"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Replies including out-of-office, over unique leads contacted. Under this is burned.
+              {ooo.error && <span className="block text-warning">{ooo.error}</span>}
+            </p>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="burned-reply-pct">
+              Reply %
             </label>
             <input
               id="burned-reply-pct"
@@ -243,14 +274,25 @@ export function BurnedTool() {
               step={0.1}
               value={replyPct}
               onChange={(e) => setReplyPct(e.target.value)}
-              aria-label="Reply % (OOO)"
+              aria-label="Reply %"
             />
             <p className="mt-1 text-[11px] text-muted-foreground">
-              Replies including out-of-office, over unique leads contacted. Under this is burned.
-              {pct.error && <span className="block text-warning">{pct.error}</span>}
+              Real replies, out-of-office not counted. At or above this the {level} is kept whatever the OOO figure says.
+              {real.error && <span className="block text-warning">{real.error}</span>}
             </p>
           </div>
         </div>
+
+        {rescueDead && (
+          <p className="flex gap-1.5 text-xs text-muted-foreground" data-rescue-note>
+            <AlertIcon size={13} className="mt-0.5 shrink-0 text-warning" />
+            <span>
+              Reply % sits at or above Reply % (OOO), so it can never rescue anything: the OOO figure counts the same
+              replies plus the auto-replies, so it is never the lower of the two. Set it below {ooo.value}% for it to
+              have an effect.
+            </span>
+          </p>
+        )}
 
         <div className="flex flex-wrap items-center gap-3">
           <button type="button" className="pv-btn-ghost text-xs disabled:opacity-50" disabled={!dirty || saving} onClick={handleSave} data-save-thresholds>
@@ -265,7 +307,8 @@ export function BurnedTool() {
             <span className="text-xs text-muted-foreground">Not saved yet — scanning saves them too.</span>
           ) : (
             <span className="text-xs text-muted-foreground">
-              Saved per provider: {ESP_LABELS[esp]} is {saved.replyOooPct}% on {formatNumber(saved.minSends)}+ sends.
+              Saved per provider: {ESP_LABELS[esp]} is under {saved.replyOooPct}% reply (OOO), unless reply % is{" "}
+              {saved.replyPct}% or better, on {formatNumber(saved.minSends)}+ sends.
             </span>
           )}
         </div>

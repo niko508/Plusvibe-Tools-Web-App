@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import type { BurnedJob } from "@/lib/jobs/burned-types";
 import { ESP_LABELS, NOUNS, countNoun, levelOf } from "@/lib/burned/settings";
-import { copyText, csvName, toCsv, type ScanRow, type Verdict } from "@/lib/burned/scan";
+import { copyText, csvName, toCsv, verdictText, type ScanRow, type Verdict } from "@/lib/burned/scan";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatNumber } from "@/lib/format";
 import { StatCard } from "@/components/stat-card";
@@ -39,6 +39,9 @@ export function ResultsCard({
   const level = levelOf(job.esp);
   const noun = NOUNS[level];
   const quiet = rows.filter((r) => r.verdict === "quiet");
+  // Rows the OOO bar would have burned, kept because real replies cleared
+  // their own bar. Worth its own number: it is the new rule doing its job.
+  const rescued = rows.filter((r) => r.rescued).length;
   const errors = job.errors ?? [];
 
   async function handleCopy() {
@@ -70,7 +73,8 @@ export function ResultsCard({
           <span className="truncate text-sm font-medium">{job.label}</span>
         </div>
         <span className="shrink-0 text-xs text-muted-foreground">
-          under {job.thresholds.replyOooPct}% on {formatNumber(job.thresholds.minSends)}+ sends
+          under {job.thresholds.replyOooPct}% reply (OOO) and under {job.thresholds.replyPct}% reply, on{" "}
+          {formatNumber(job.thresholds.minSends)}+ sends
         </span>
       </div>
 
@@ -100,7 +104,12 @@ export function ResultsCard({
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label={`${noun.many[0].toUpperCase()}${noun.many.slice(1)} judged`} value={formatNumber(job.progress.scanned)} sub={`${ESP_LABELS[job.esp]} only`} />
-        <StatCard label="Burned" value={formatNumber(burned.length)} sub={`under ${job.thresholds.replyOooPct}% reply (OOO)`} health={burned.length > 0 ? "bad" : "good"} />
+        <StatCard
+          label="Burned"
+          value={formatNumber(burned.length)}
+          sub={`under both bars${rescued > 0 ? ` · ${formatNumber(rescued)} kept on real replies` : ""}`}
+          health={burned.length > 0 ? "bad" : "good"}
+        />
         <StatCard
           label="Too quiet to judge"
           value={formatNumber(quiet.length)}
@@ -228,18 +237,13 @@ function Row({ row, showInboxes }: { row: ScanRow; showInboxes: boolean }) {
       <td className="px-3 py-2 text-right tabular-nums">{row.replyRate}%</td>
       <td className="px-3 py-2 text-right font-medium tabular-nums">{row.replyRateOoo}%</td>
       <td className="px-3 py-2 text-right">
-        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${meta.className}`} title={reasonText(row)}>
+        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${meta.className}`} title={verdictText(row)}>
           {row.verdict === "burned" && <FireIcon size={11} className="mr-0.5 inline" />}
-          {meta.label}
+          {row.rescued ? "ok · replying" : meta.label}
         </span>
       </td>
     </tr>
   );
-}
-
-function reasonText(row: ScanRow): string {
-  if (row.verdict !== "quiet") return "";
-  return row.reason === "few-sends" ? "Too few sends in the window to judge" : "Plusvibe returned no figures for it";
 }
 
 function statusLabel(s: BurnedJob["status"]): string {
