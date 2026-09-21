@@ -1,14 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { BurnedJob } from "@/lib/jobs/burned-types";
+import type { BurnedRemovalJob } from "@/lib/jobs/burned-removal-types";
 import { ESP_LABELS, NOUNS, countNoun, levelOf } from "@/lib/burned/settings";
 import { copyText, csvName, toCsv, verdictText, type ScanRow, type Verdict } from "@/lib/burned/scan";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatNumber } from "@/lib/format";
+import { DEFAULT_SHEET_URL } from "@/lib/jobs/azure-warmup-types";
+import { useSheetConfig } from "@/lib/use-sheet-config";
 import { StatCard } from "@/components/stat-card";
 import { RemoveJobButton, Spinner } from "@/components/ui";
-import { AlertIcon, CheckIcon, CopyIcon, DownloadIcon, FireIcon } from "@/components/icons";
+import { AlertIcon, CheckIcon, CopyIcon, DownloadIcon, FireIcon, TrashIcon } from "@/components/icons";
+import { RemovalCard } from "./removal-card";
 
 // One scan's results: what it found, and the list ready to take away.
 
@@ -22,12 +26,26 @@ type Filter = "burned" | "all";
 
 export function ResultsCard({
   job,
+  removals,
+  removalBusy,
+  removalBlocked,
   onAbort,
   onRemove,
+  onStartRemoval,
+  onAbortRemoval,
+  onDeleteRemoval,
 }: {
   job: BurnedJob;
+  /** Removal runs started from this scan, newest first. */
+  removals: BurnedRemovalJob[];
+  removalBusy: boolean;
+  /** A removal is running somewhere — only one at a time is allowed. */
+  removalBlocked: boolean;
   onAbort: () => void;
   onRemove: () => void;
+  onStartRemoval: (sheetUrl: string) => void;
+  onAbortRemoval: (id: string) => void;
+  onDeleteRemoval: (id: string) => void;
 }) {
   const [filter, setFilter] = useState<Filter>("burned");
   const [copied, setCopied] = useState(false);
@@ -201,14 +219,144 @@ export function ResultsCard({
         </p>
       )}
 
+      {!running && burned.length > 0 && (
+        <RemovalPanel
+          job={job}
+          burned={burned.length}
+          busy={removalBusy}
+          blocked={removalBlocked}
+          onStart={onStartRemoval}
+        />
+      )}
+
+      {removals.map((r) => (
+        <RemovalCard
+          key={r.id}
+          job={r}
+          onAbort={() => onAbortRemoval(r.id)}
+          onRemove={() => onDeleteRemoval(r.id)}
+        />
+      ))}
+
       <div className="flex flex-wrap items-center gap-2">
         {running ? (
           <button type="button" className="pv-btn-ghost" onClick={onAbort}>
             Stop scan
           </button>
         ) : (
-          <RemoveJobButton onRemove={onRemove} />
+          <RemoveJobButton onRemove={onRemove} label="Remove this scan" />
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The last step: record the burned rows in the sheet, then delete them.
+ *
+ * Opening it first, rather than acting on the click, is deliberate — this
+ * deletes mailboxes in Plusvibe and cannot be undone, so the exact steps and
+ * the count are in front of someone before they confirm.
+ */
+function RemovalPanel({
+  job,
+  burned,
+  busy,
+  blocked,
+  onStart,
+}: {
+  job: BurnedJob;
+  burned: number;
+  busy: boolean;
+  blocked: boolean;
+  onStart: (sheetUrl: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [sheetUrl, setSheetUrl] = useState(DEFAULT_SHEET_URL);
+  const { config } = useSheetConfig();
+  const google = job.esp === "google";
+
+  useEffect(() => {
+    if (config?.url) setSheetUrl(config.url);
+  }, [config]);
+
+  if (!open) {
+    return (
+      <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
+        <button
+          type="button"
+          className="pv-btn-primary disabled:opacity-50"
+          disabled={blocked || busy}
+          onClick={() => setOpen(true)}
+          data-open-removal
+        >
+          <TrashIcon size={16} />
+          Remove Inboxes &amp; Domains
+        </button>
+        <span className="text-xs text-muted-foreground">
+          {blocked
+            ? "A removal is already running — let it finish or stop it first."
+            : `Records the ${formatNumber(burned)} burned ${
+                burned === 1 ? NOUNS[levelOf(job.esp)].one : NOUNS[levelOf(job.esp)].many
+              } in the Email Infrastructure sheet, then deletes their inboxes in Plusvibe.`}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl border border-danger/30 bg-danger/5 p-4" data-removal-panel>
+      <div className="text-sm font-medium">
+        Remove {formatNumber(burned)} burned {burned === 1 ? NOUNS[levelOf(job.esp)].one : NOUNS[levelOf(job.esp)].many}?
+      </div>
+      <ol className="list-decimal space-y-1 pl-5 text-xs text-muted-foreground">
+        {google ? (
+          <>
+            <li>Each address is added to 🛑 Google Inboxes to Cancel, under Email Address. Tenant / Inbox Source is left blank.</li>
+            <li>Then each inbox is deleted in Plusvibe.</li>
+            <li>📋 Domains is left alone — the domain&apos;s other mailboxes may still be fine.</li>
+          </>
+        ) : (
+          <>
+            <li>Each domain is found in 📋 Domains and its Status set to Not Active.</li>
+            <li>Its Tenant Email Address and Tenant / Inbox Source are read from that row and added to 🚯 Tenants to Cancel.</li>
+            <li>Then every Microsoft inbox on the domain is deleted in Plusvibe.</li>
+          </>
+        )}
+      </ol>
+      <p className="text-xs text-muted-foreground">
+        Columns are found by name, so reordering the sheet is fine. Anything the sheet could not record is left alone in
+        Plusvibe and reported, so fixing the sheet and running this again picks it up. Deleting inboxes cannot be undone.
+      </p>
+      <div>
+        <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor={`sheet-${job.id}`}>
+          Email Infrastructure sheet
+        </label>
+        <input
+          id={`sheet-${job.id}`}
+          type="url"
+          className="pv-input text-sm"
+          value={sheetUrl}
+          onChange={(e) => setSheetUrl(e.target.value)}
+          placeholder={DEFAULT_SHEET_URL}
+          aria-label="Email Infrastructure sheet"
+        />
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className="pv-btn-primary disabled:opacity-50"
+          disabled={busy || !sheetUrl.trim()}
+          onClick={() => onStart(sheetUrl.trim())}
+          data-confirm-removal
+        >
+          {busy ? <Spinner size={14} /> : <TrashIcon size={14} />}
+          Yes, remove {formatNumber(burned)}
+        </button>
+        <button type="button" className="pv-btn-ghost text-xs" onClick={() => setOpen(false)} disabled={busy}>
+          Cancel
+        </button>
+        <span className="text-xs text-muted-foreground">It keeps going if you close this tab.</span>
       </div>
     </div>
   );

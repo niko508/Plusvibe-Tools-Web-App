@@ -184,11 +184,24 @@ export function buildGoogleCancelRow(
   header: string[],
   values: { email: string; source: string }
 ): string[] {
+  return buildQueueRow(header, { key: values.email, source: values.source }, GOOGLE_QUEUE);
+}
+
+/**
+ * A row for a cancel tab, sized to the tab's own header so the two values land
+ * under their real columns even if more are added later, and so a column order
+ * change doesn't silently write the value into the wrong place.
+ */
+export function buildQueueRow(
+  header: string[],
+  values: { key: string; source: string },
+  queue: QueueTab
+): string[] {
   const width = Math.max(header.length, 1);
   const row = new Array<string>(width).fill("");
-  const iEmail = headerIndex(header, COL_GOOGLE_EMAIL);
-  const iSource = headerIndex(header, COL_CANCEL_SOURCE);
-  if (iEmail >= 0) row[iEmail] = values.email;
+  const iKey = headerIndex(header, queue.keyColumn);
+  const iSource = headerIndex(header, queue.sourceColumn);
+  if (iKey >= 0) row[iKey] = values.key;
   if (iSource >= 0) row[iSource] = values.source;
   return row;
 }
@@ -214,27 +227,74 @@ export interface GoogleTabPlan {
   problem?: string;
 }
 
+/** Which tab is being filled, and under which two headers. */
+export interface QueueTab {
+  tab: string;
+  /** The column the value goes in — the one a duplicate is recognised by. */
+  keyColumn: string;
+  /** The dropdown beside it. Left alone when the source is empty. */
+  sourceColumn: string;
+  /** What the values are, for the problem text: "inboxes", "tenants". */
+  noun: string;
+}
+
+export const GOOGLE_QUEUE: QueueTab = {
+  tab: GOOGLE_CANCEL_TAB,
+  keyColumn: COL_GOOGLE_EMAIL,
+  sourceColumn: COL_CANCEL_SOURCE,
+  noun: "inboxes",
+};
+
+export const TENANT_QUEUE: QueueTab = {
+  tab: CANCEL_TAB,
+  keyColumn: COL_CANCEL_TENANT,
+  sourceColumn: COL_CANCEL_SOURCE,
+  noun: "tenants",
+};
+
 /**
  * Where each burned inbox goes on 🛑 Google Inboxes to Cancel.
  *
- * The tab is laid out in advance: many rows with a blank Email Address and a
- * source dropdown, waiting to be filled from the top. Sheets' own "append"
- * treats those rows as part of the table and writes below them, out of
- * sight — so this fills the first blank Email Address rows instead, appends
- * only when none is left, and pulls any row already stranded below a blank
- * one back up into it.
+ * Kept as its own name because it is what the Blocked Domains automation
+ * calls; both cancel tabs are laid out the same way and share the planner
+ * below.
  */
 export function planGoogleTabWrites(
   grid: string[][],
   emails: string[],
   source: string
 ): GoogleTabPlan {
-  const header = grid[0] ?? [COL_GOOGLE_EMAIL, COL_CANCEL_SOURCE];
-  const iEmail = headerIndex(header, COL_GOOGLE_EMAIL);
-  const iSource = headerIndex(header, COL_CANCEL_SOURCE);
+  return planQueueTabWrites(grid, emails.map((email) => ({ key: email, source })), GOOGLE_QUEUE);
+}
+
+/** One value to queue, with the dropdown value that belongs beside it. */
+export interface QueueEntry {
+  key: string;
+  /** Written into the source column; an empty one leaves that cell alone. */
+  source: string;
+}
+
+/**
+ * Where each value goes on a cancel tab.
+ *
+ * Both 🛑 Google Inboxes to Cancel and 🚯 Tenants to Cancel are laid out in
+ * advance: many rows with a blank key cell and a source dropdown, waiting to
+ * be filled from the top. Sheets' own "append" treats those rows as part of
+ * the table and writes BELOW them, out of sight — so this fills the first
+ * blank rows instead, appends only when none is left, and pulls any row
+ * already stranded below a blank one back up into it.
+ */
+export function planQueueTabWrites(
+  grid: string[][],
+  entries: QueueEntry[],
+  queue: QueueTab
+): GoogleTabPlan {
+  const header = grid[0] ?? [queue.keyColumn, queue.sourceColumn];
+  const iEmail = headerIndex(header, queue.keyColumn);
+  const iSource = headerIndex(header, queue.sourceColumn);
   const out: GoogleTabPlan = { updates: [], append: [], queued: [], already: [], moved: [] };
   if (iEmail < 0) {
-    out.problem = `The "${GOOGLE_CANCEL_TAB}" tab has no ${COL_GOOGLE_EMAIL} column, so no inboxes were listed there.`;
+    out.problem = `The "${queue.tab}" tab has no ${queue.keyColumn} column, so no ${queue.noun} were listed there.`;
     return out;
   }
   const cell = (r: number, c: number) => String(grid[r - 1]?.[c] ?? "").trim();
@@ -246,13 +306,14 @@ export function planGoogleTabWrites(
     else if (!rowOf.has(e)) rowOf.set(e, r);
   }
   const firstBlank = blanks[0] ?? Infinity;
-  const place = (email: string, slot: number) => {
+  const place = (email: string, source: string, slot: number) => {
     out.updates.push({ row: slot, column: iEmail, value: email });
     if (iSource >= 0 && source) out.updates.push({ row: slot, column: iSource, value: source });
   };
   const seen = new Set<string>();
-  for (const raw of emails) {
-    const email = raw.trim().toLowerCase();
+  for (const entry of entries) {
+    const email = entry.key.trim().toLowerCase();
+    const source = entry.source;
     if (!email || seen.has(email)) continue;
     seen.add(email);
     const existing = rowOf.get(email);
@@ -267,14 +328,14 @@ export function planGoogleTabWrites(
         out.already.push(email);
         continue;
       }
-      place(email, slot);
+      place(email, source, slot);
       out.updates.push({ row: existing, column: iEmail, value: "" });
       if (iSource >= 0) out.updates.push({ row: existing, column: iSource, value: "" });
       out.moved.push(email);
       continue;
     }
-    if (slot !== undefined) place(email, slot);
-    else out.append.push(buildGoogleCancelRow(header, { email, source }));
+    if (slot !== undefined) place(email, source, slot);
+    else out.append.push(buildQueueRow(header, { key: email, source }, queue));
     out.queued.push(email);
   }
   return out;

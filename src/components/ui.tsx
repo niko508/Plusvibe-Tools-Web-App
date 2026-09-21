@@ -49,9 +49,12 @@ export function Skeleton({ className = "" }: { className?: string }) {
 export function RemoveJobButton({
   onRemove,
   disabled,
+  label = "Remove",
 }: {
   onRemove: () => void | Promise<void>;
   disabled?: boolean;
+  /** Worth setting where another button on the card also says "Remove". */
+  label?: string;
 }) {
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -82,7 +85,7 @@ export function RemoveJobButton({
       }}
     >
       {busy ? <Spinner size={14} /> : null}
-      {armed ? "Confirm remove" : "Remove"}
+      {armed ? "Confirm remove" : label}
     </button>
   );
 }

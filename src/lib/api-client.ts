@@ -18,6 +18,7 @@ import type {
   CampaignTypesStartPayload,
 } from "@/lib/jobs/campaign-types-types";
 import type { BurnedJob, BurnedStartPayload } from "@/lib/jobs/burned-types";
+import type { BurnedRemovalJob, RemovalStartPayload } from "@/lib/jobs/burned-removal-types";
 import type { BurnedSettings, Esp } from "@/lib/burned/settings";
 import type { WeekSchedule } from "@/lib/campaign-settings/schedule";
 import type {
@@ -852,6 +853,24 @@ export function abortBurnedJob(jobId: string, signal?: AbortSignal) {
 
 export function deleteBurnedJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/burned/delete", { method: "POST", body: { jobId }, signal });
+}
+
+// --- Remove Inboxes & Domains -------------------------------------------------
+
+export function startBurnedRemoval(payload: RemovalStartPayload, signal?: AbortSignal) {
+  return request<{ jobId: string }>("/api/jobs/burned-removal/start", { method: "POST", body: payload, signal });
+}
+
+export function listBurnedRemovals(signal?: AbortSignal) {
+  return request<{ jobs: BurnedRemovalJob[] }>("/api/jobs/burned-removal/list", { signal });
+}
+
+export function abortBurnedRemoval(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/burned-removal/abort", { method: "POST", body: { jobId }, signal });
+}
+
+export function deleteBurnedRemoval(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/burned-removal/delete", { method: "POST", body: { jobId }, signal });
 }
 
 // --- Inbox Rotation -----------------------------------------------------------

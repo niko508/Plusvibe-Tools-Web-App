@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BurnedJob } from "@/lib/jobs/burned-types";
+import type { BurnedRemovalJob } from "@/lib/jobs/burned-removal-types";
 import {
   DEFAULT_SETTINGS,
   ESPS,
@@ -16,10 +17,14 @@ import {
 } from "@/lib/burned/settings";
 import {
   abortBurnedJob,
+  abortBurnedRemoval,
   deleteBurnedJob,
+  deleteBurnedRemoval,
   fetchBurnedSettings,
   listBurnedJobs,
   saveBurnedSettings,
+  listBurnedRemovals,
+  startBurnedRemoval,
   startBurnedScan,
   ApiClientError,
 } from "@/lib/api-client";
@@ -61,6 +66,8 @@ export function BurnedTool() {
   const [preset, setPreset] = useState<string | null>(DEFAULT_PRESET);
 
   const [jobs, setJobs] = useState<BurnedJob[]>([]);
+  const [removals, setRemovals] = useState<BurnedRemovalJob[]>([]);
+  const [removalBusy, setRemovalBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const lock = useRef(false);
@@ -88,7 +95,9 @@ export function BurnedTool() {
 
   const refresh = useCallback(async () => {
     try {
-      setJobs((await listBurnedJobs()).jobs);
+      const [scans, runs] = await Promise.all([listBurnedJobs(), listBurnedRemovals()]);
+      setJobs(scans.jobs);
+      setRemovals(runs.jobs);
     } catch {
       // polling failure is not worth a banner
     }
@@ -102,11 +111,12 @@ export function BurnedTool() {
   }, [ready, hasKey, loadSettings, refresh]);
 
   const active = jobs.find((j) => j.status === "running") ?? null;
+  const activeRemoval = removals.find((r) => r.status === "running") ?? null;
   useEffect(() => {
-    if (!active) return;
+    if (!active && !activeRemoval) return;
     const t = setInterval(() => void refresh(), POLL_MS);
     return () => clearInterval(t);
-  }, [active, refresh]);
+  }, [active, activeRemoval, refresh]);
 
   useEffect(() => {
     if (!savedNote) return;
@@ -177,6 +187,20 @@ export function BurnedTool() {
     } finally {
       lock.current = false;
       setBusy(false);
+    }
+  }
+
+  async function handleRemoval(scanJobId: string, sheetUrl: string) {
+    if (removalBusy) return;
+    setRemovalBusy(true);
+    setError(null);
+    try {
+      await startBurnedRemoval({ scanJobId, sheetUrl });
+      await refresh();
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setRemovalBusy(false);
     }
   }
 
@@ -395,8 +419,14 @@ export function BurnedTool() {
           <ResultsCard
             key={job.id}
             job={job}
+            removals={removals.filter((r) => r.scanJobId === job.id)}
+            removalBusy={removalBusy}
+            removalBlocked={!!activeRemoval}
             onAbort={() => act(() => abortBurnedJob(job.id))}
             onRemove={() => act(() => deleteBurnedJob(job.id))}
+            onStartRemoval={(sheetUrl) => void handleRemoval(job.id, sheetUrl)}
+            onAbortRemoval={(id) => act(() => abortBurnedRemoval(id))}
+            onDeleteRemoval={(id) => act(() => deleteBurnedRemoval(id))}
           />
         ))
       )}
