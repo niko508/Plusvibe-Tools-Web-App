@@ -77,6 +77,24 @@ eq("size only breaks a tie between equal ages",
 eq("a domain with no date goes last",
   fillDomains([dom("nodate.io", 3, M, null), dom("dated.io", 3, M, 1)], "microsoft", 3).domains, ["dated.io"]);
 
+// The real shape of a warming workspace: dozens of 50-seat domains, some
+// warmed longer than others, and a round number asked for. Every domain taken
+// has to come from the older group while any of it is left.
+const REAL = [
+  ...Array.from({ length: 15 }, (_, i) => dom(`older-${i}.org`, 50, M, 17)),
+  ...Array.from({ length: 16 }, (_, i) => dom(`younger-${i}.co`, 50, M, 15)),
+];
+const four_hundred = fillDomains(REAL, "microsoft", 400);
+eq("400 of 50-seat domains takes eight of them", [four_hundred.inboxes, four_hundred.domains.length], [400, 8]);
+eq("…every one of them warmed the longest",
+  [...new Set(four_hundred.domains.map((d) => REAL.find((x) => x.domain === d).days))], [17]);
+// Past the older group, it carries on into the next age down rather than stopping.
+const big = fillDomains(REAL, "microsoft", 900);
+eq("…and a batch bigger than that group spills into the next age down",
+  [big.inboxes, new Set(big.domains.map((d) => REAL.find((x) => x.domain === d).days)).size], [900, 2]);
+eq("…taking every older one first",
+  big.domains.filter((d) => d.startsWith("older-")).length, 15);
+
 // --- which domains it takes ----------------------------------------------------------
 console.log("--- which domains");
 const MIXED = [dom("small.com", 2), dom("big.com", 6), dom("mid.com", 3), dom("tiny.com", 1)];
