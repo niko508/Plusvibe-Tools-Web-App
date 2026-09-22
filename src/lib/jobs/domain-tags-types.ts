@@ -1,10 +1,13 @@
 // Shared types for Auto-tag by Domain jobs (server + client).
 //
 // Every inbox in every selected workspace gets its TLD tag (from its email's
-// domain), its domain platform tag (from the "Domain Host" column of the
-// 📋 Domains sheet), and — when asked — its pool tag (from the provider that
-// sends it), unless it already carries a tag from that set. Tags missing from
-// a workspace are created first. Runs in the background.
+// domain) and its domain platform tag (from the "Domain Host" column of the
+// 📋 Domains sheet), unless it already carries a tag from that set. Tags
+// missing from a workspace are created first. Runs in the background.
+//
+// When asked, it also puts each inbox in the pool of the provider that sends
+// it — and takes the other pool's tag off the ones carrying it, so the pools
+// are true rather than merely populated.
 //
 // The three sets are independent, so a run can do any combination: the pool
 // pass alone is what the "Tag by provider" button starts.
@@ -37,7 +40,7 @@ export interface WorkspaceOutcome {
   unknownTlds?: string;
   /** "godaddy ×2" — sheet hosts that have no tag in the set. */
   unknownHosts?: string;
-  verified?: { checked: number; lostTags: number; missingTag: number };
+  verified?: { checked: number; lostTags: number; missingTag: number; stillTagged?: number };
   error?: string;
 }
 
@@ -71,8 +74,13 @@ export interface DomainTagsJob {
     hostNoTag: number;
     failed: number;
     tagsCreated: number;
+    /** Pool tags put on. */
     poolAssigned: number;
-    poolHad: number;
+    /** Wrong pool tags taken off. */
+    poolRemoved: number;
+    /** Already in the right pool, nothing to do. */
+    poolOk: number;
+    /** On neither provider, left alone. */
     poolNone: number;
   };
 

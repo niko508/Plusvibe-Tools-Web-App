@@ -260,8 +260,9 @@ export function AutoDomainTags({
             the mailboxes that send it read the same.
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            An inbox already carrying either tag is skipped — including one moved to the other pool by hand, which was
-            put there on purpose. Anything on neither provider is left alone: there is no third pool to put it in.
+            An inbox carrying the wrong pool&apos;s tag has it taken off, so each pool holds only that provider&apos;s
+            mailboxes. Only that one tag is removed, and only from the inboxes carrying it — everything else they carry
+            stays. Anything on neither provider is left exactly as it is: there is no third pool to put it in.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -433,7 +434,9 @@ function wsFraction(w: WorkspaceOutcome): number {
       return 0.3;
     case "tagging": {
       const planned =
-        w.counts.tldAssign + w.counts.platformAssign + (w.pools ? w.pools.google + w.pools.microsoft : 0);
+        w.counts.tldAssign +
+        w.counts.platformAssign +
+        (w.pools ? w.pools.google + w.pools.microsoft + w.pools.removed : 0);
       return 0.5 + (planned > 0 ? ((w.assigned + w.failed) / planned) * 0.4 : 0.4);
     }
     case "verifying":
@@ -497,7 +500,7 @@ function JobCard({
           <Metric label="TLD tags added" value={p.tldAssigned} tone={p.tldAssigned > 0 ? "success" : undefined} />
         )}
         {job.pools ? (
-          <Metric label="Already in a pool" value={p.poolHad} />
+          <Metric label="Wrong tag removed" value={p.poolRemoved} tone={p.poolRemoved > 0 ? "success" : undefined} />
         ) : (
           <Metric label="Platform tags added" value={p.platformAssigned} tone={p.platformAssigned > 0 ? "success" : undefined} />
         )}
@@ -506,8 +509,7 @@ function JobCard({
       <p className="mt-2 text-xs text-muted-foreground">
         {job.pools ? (
           <>
-            {formatNumber(p.poolHad)} already carried a pool tag and were skipped ·{" "}
-            {formatNumber(p.poolNone)} on neither provider
+            {formatNumber(p.poolOk)} already in the right pool · {formatNumber(p.poolNone)} on neither provider
           </>
         ) : (
           <>
@@ -567,10 +569,11 @@ function JobCard({
               {w.state !== "pending" && !w.error && (
                 <div className="mt-1 flex flex-wrap gap-1.5">
                   {w.pools && (
-                    <span className={`rounded-full px-2 py-0.5 ${w.pools.google + w.pools.microsoft > 0 ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"}`}>
+                    <span className={`rounded-full px-2 py-0.5 ${w.pools.google + w.pools.microsoft + w.pools.removed > 0 ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"}`}>
                       Pools: {formatNumber(w.pools.google)} {POOL_TAGS.google.name} ·{" "}
                       {formatNumber(w.pools.microsoft)} {POOL_TAGS.microsoft.name} ·{" "}
-                      {formatNumber(w.pools.has)} already · {formatNumber(w.pools.noPool)} on neither
+                      {formatNumber(w.pools.removed)} wrong tag removed · {formatNumber(w.pools.ok)} already right ·{" "}
+                      {formatNumber(w.pools.noPool)} on neither
                     </span>
                   )}
                   {!w.pools && (
@@ -592,11 +595,11 @@ function JobCard({
               {w.unknownTlds && <p className="mt-1 text-muted-foreground">TLDs with no tag: {w.unknownTlds}</p>}
               {w.unknownHosts && <p className="mt-1 text-muted-foreground">Hosts with no tag: {w.unknownHosts}</p>}
               {w.verified && (
-                <p className={`mt-1 ${w.verified.lostTags > 0 || w.verified.missingTag > 0 ? "text-warning" : "text-muted-foreground"}`}>
+                <p className={`mt-1 ${w.verified.lostTags > 0 || w.verified.missingTag > 0 || (w.verified.stillTagged ?? 0) > 0 ? "text-warning" : "text-muted-foreground"}`}>
                   Checked {formatNumber(w.verified.checked)} inbox{w.verified.checked === 1 ? "" : "es"} afterwards:{" "}
-                  {w.verified.lostTags === 0 && w.verified.missingTag === 0
+                  {w.verified.lostTags === 0 && w.verified.missingTag === 0 && (w.verified.stillTagged ?? 0) === 0
                     ? "existing tags intact, new tags present."
-                    : `${w.verified.lostTags} lost a tag, ${w.verified.missingTag} missing a new one.`}
+                    : `${w.verified.lostTags} lost a tag, ${w.verified.missingTag} missing a new one${(w.verified.stillTagged ?? 0) > 0 ? `, ${w.verified.stillTagged} still on the wrong pool` : ""}.`}
                 </p>
               )}
             </div>

@@ -70,11 +70,32 @@ export async function resolveTag(
 
 /** Adds one tag to these inboxes. Additive: whatever they carry stays. */
 export async function assignTag(apiKey: string, workspaceId: string, ids: string[], tagId: string): Promise<void> {
+  await bulkTag(apiKey, workspaceId, ids, tagId, "ASSIGN");
+}
+
+/**
+ * Takes one tag off these inboxes. Nothing else they carry is touched.
+ *
+ * The counterpart of the campaign call, same shape. Only ever used to take off
+ * a tag the job knows is wrong for that inbox, and only off the inboxes found
+ * carrying it.
+ */
+export async function unassignTag(apiKey: string, workspaceId: string, ids: string[], tagId: string): Promise<void> {
+  await bulkTag(apiKey, workspaceId, ids, tagId, "UNASSIGN");
+}
+
+async function bulkTag(
+  apiKey: string,
+  workspaceId: string,
+  ids: string[],
+  tagId: string,
+  action: "ASSIGN" | "UNASSIGN"
+): Promise<void> {
   if (ids.length === 0) return;
   await acquireSlot();
   await plusvibePut({
     apiKey,
     path: "/account/bulk-assign-tags",
-    body: { workspace_id: workspaceId, ids, tag_id: tagId, action: "ASSIGN" },
+    body: { workspace_id: workspaceId, ids, tag_id: tagId, action },
   });
 }

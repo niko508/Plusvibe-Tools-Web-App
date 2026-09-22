@@ -81,14 +81,24 @@ const expected = new Map([["a1", ["tG"]], ["a3", ["tM"]]]);
 eq("all good: nothing lost, new tags present", verifyTags(before, [
   { id: "a1", email: "a1@x.com", tags: ["tG"] },
   { id: "a3", email: "a3@x.com", tags: ["tOld", "tM"] },
-], expected), { checked: 2, lostTags: [], missingTag: [] });
+], expected), { checked: 2, lostTags: [], missingTag: [], stillTagged: [] });
 eq("a replaced tag list is caught", verifyTags(before, [
   { id: "a3", email: "a3@x.com", tags: ["tM"] }, // tOld gone
-], expected), { checked: 1, lostTags: ["a3@x.com"], missingTag: [] });
+], expected), { checked: 1, lostTags: ["a3@x.com"], missingTag: [], stillTagged: [] });
 eq("a tag that didn't arrive is caught", verifyTags(before, [
   { id: "a1", email: "a1@x.com", tags: [] },
-], expected), { checked: 1, lostTags: [], missingTag: ["a1@x.com"] });
+], expected), { checked: 1, lostTags: [], missingTag: ["a1@x.com"], stillTagged: [] });
 eq("inboxes not in the sample are ignored", verifyTags(before, [{ id: "zz", email: "zz@x.com", tags: [] }], expected).checked, 0);
+
+// A job that takes a tag off tells the check so, or it would report its own
+// work as a tag the inbox lost.
+const takenOff = new Map([["a3", ["tOld"]]]);
+eq("a tag the job deliberately removed is not a loss", verifyTags(before, [
+  { id: "a3", email: "a3@x.com", tags: ["tM"] },
+], expected, takenOff), { checked: 1, lostTags: [], missingTag: [], stillTagged: [] });
+eq("…but one that is still there afterwards is caught", verifyTags(before, [
+  { id: "a3", email: "a3@x.com", tags: ["tOld", "tM"] },
+], expected, takenOff), { checked: 1, lostTags: [], missingTag: [], stillTagged: ["a3@x.com"] });
 
 // --- the catalogue --------------------------------------------------------------------------
 const cat = buildCatalog([

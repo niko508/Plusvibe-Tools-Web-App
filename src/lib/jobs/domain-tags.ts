@@ -10,7 +10,7 @@ import { isSheetWritingConfigured, readTab } from "@/lib/google-sheets";
 import { extractSheetId, fetchSheetGrid } from "@/lib/sheet";
 import { prepareBatch, type TagSpec } from "@/lib/tags/bulk-tags";
 import { chunk, verifyTags, ASSIGN_CHUNK, type InboxLite } from "@/lib/inbox-tags/plan";
-import { ACCOUNTS_MAX_PAGES, ACCOUNTS_PAGE, assignTag, readInboxPage, resolveTag } from "@/lib/inbox-tags/api";
+import { ACCOUNTS_MAX_PAGES, ACCOUNTS_PAGE, assignTag, readInboxPage, resolveTag, unassignTag } from "@/lib/inbox-tags/api";
 import { parseDomainHosts, planInboxes, topCounts } from "@/lib/tags/domain-tags";
 import { POOL_TAG_SET, planPools } from "@/lib/tags/pool-tags";
 import type { DomainTagsJob, DomainTagsStartPayload, WorkspaceOutcome } from "@/lib/jobs/domain-tags-types";
@@ -103,6 +103,17 @@ async function loadOnce() {
         parsed.tldTags = Array.isArray(parsed.tldTags) ? parsed.tldTags : [];
         parsed.platformTags = Array.isArray(parsed.platformTags) ? parsed.platformTags : [];
         parsed.pools = parsed.pools === true;
+        // A card written before the pools enforced themselves counted only
+        // "already had a pool tag". Read it as "already right" rather than
+        // leaving the card with blanks where its numbers were.
+        const prog = parsed.progress as typeof parsed.progress & { poolHad?: number };
+        if (prog && typeof prog.poolOk !== "number") prog.poolOk = prog.poolHad ?? 0;
+        if (prog && typeof prog.poolRemoved !== "number") prog.poolRemoved = 0;
+        for (const w of parsed.workspaces) {
+          const pc = w.pools as (typeof w.pools & { has?: number }) | undefined;
+          if (pc && typeof pc.ok !== "number") pc.ok = pc.has ?? 0;
+          if (pc && typeof pc.removed !== "number") pc.removed = 0;
+        }
         parsed.errors = Array.isArray(parsed.errors) ? parsed.errors : [];
         records.set(parsed.id, parsed);
         meta.set(parsed.id, { fingerprint, aborted: false });
@@ -200,7 +211,7 @@ export async function createJob(apiKey: string, payload: DomainTagsStartPayload)
       workspacesDone: 0, inboxesRead: 0,
       tldAssigned: 0, tldHad: 0, tldNoTag: 0,
       platformAssigned: 0, platformHad: 0, notInSheet: 0, hostNoTag: 0,
-      poolAssigned: 0, poolHad: 0, poolNone: 0,
+      poolAssigned: 0, poolRemoved: 0, poolOk: 0, poolNone: 0,
       failed: 0, tagsCreated: 0,
     },
     errors: [],
@@ -380,7 +391,7 @@ async function runWorkspace(
   const poolPlan = rec.pools ? planPools(inboxes, poolTags) : null;
   if (poolPlan) {
     ws.pools = poolPlan.counts;
-    rec.progress.poolHad += poolPlan.counts.has;
+    rec.progress.poolOk += poolPlan.counts.ok;
     rec.progress.poolNone += poolPlan.counts.noPool;
     for (const [tagId, ids] of poolPlan.assignments) {
       plan.assignments.set(tagId, [...(plan.assignments.get(tagId) ?? []), ...ids]);
@@ -400,6 +411,30 @@ async function runWorkspace(
   const tldIds = new Set(tldTags.map((t) => t.id));
   const poolIds = new Set(poolTags.map((t) => t.id));
   const nameOf = new Map([...tldTags, ...platformTags, ...poolTags].map((t) => [t.id, t.name]));
+
+  // The wrong pool's tag comes off FIRST. If the run then breaks, an inbox is
+  // left in no pool — which simply gets picked up next time — rather than in
+  // both, which would quietly make each pool a lie.
+  const removed = new Map<string, string[]>();
+  for (const [tagId, ids] of poolPlan?.removals ?? []) {
+    for (const part of chunk(ids, ASSIGN_CHUNK)) {
+      check();
+      try {
+        await unassignTag(apiKey, ws.workspaceId, part, tagId);
+        p.poolRemoved += part.length;
+        for (const i of part) removed.set(i, [...(removed.get(i) ?? []), tagId]);
+      } catch (err) {
+        ws.failed += part.length;
+        p.failed += part.length;
+        pushError(
+          rec,
+          `${ws.workspaceName}: taking "${nameOf.get(tagId) ?? tagId}" off ${part.length} inbox${part.length === 1 ? "" : "es"} that are on the other provider failed: ${msg(err)}. Remove it in Plusvibe, or run this again.`
+        );
+      }
+      await touch();
+    }
+  }
+
   const expected = new Map<string, string[]>();
   for (const [tagId, ids] of plan.assignments) {
     for (const part of chunk(ids, ASSIGN_CHUNK)) {
@@ -421,13 +456,21 @@ async function runWorkspace(
   }
 
   // 4. Verify on a sample.
-  if (expected.size > 0) {
+  if (expected.size > 0 || removed.size > 0) {
     ws.state = "verifying";
     await touch();
     try {
       const after = await readInboxPage(apiKey, ws.workspaceId, 0, Math.min(VERIFY_SAMPLE, ACCOUNTS_PAGE));
-      const v = verifyTags(inboxes, after, expected);
-      ws.verified = { checked: v.checked, lostTags: v.lostTags.length, missingTag: v.missingTag.length };
+      const v = verifyTags(inboxes, after, expected, removed);
+      ws.verified = {
+        checked: v.checked,
+        lostTags: v.lostTags.length,
+        missingTag: v.missingTag.length,
+        stillTagged: v.stillTagged.length,
+      };
+      if (v.stillTagged.length > 0) {
+        pushError(rec, `${ws.workspaceName}: ${v.stillTagged.length} inbox${v.stillTagged.length === 1 ? "" : "es"} read back still carrying the other pool's tag (${v.stillTagged.slice(0, 3).join(", ")}${v.stillTagged.length > 3 ? ", …" : ""}).`);
+      }
       if (v.lostTags.length > 0) {
         pushError(rec, `${ws.workspaceName}: ${v.lostTags.length} inbox${v.lostTags.length === 1 ? "" : "es"} read back with a tag missing that it had before (${v.lostTags.slice(0, 3).join(", ")}${v.lostTags.length > 3 ? ", …" : ""}).`);
       }
