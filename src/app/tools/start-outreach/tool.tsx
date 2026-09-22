@@ -711,8 +711,8 @@ export function StartOutreachTool() {
                 Select {formatNumber(fill.inboxes)} inbox{fill.inboxes === 1 ? "" : "es"}
               </button>
               <p className="basis-full text-xs text-muted-foreground" data-fill-note>
-                {describeFill(fill, fillProvider)} Whole domains only — every ready inbox on a domain moves together,
-                so the count rounds down. This replaces the current selection.
+                {describeFill(fill, fillProvider)} Longest-warmed domains first. Whole domains only — every ready inbox
+                on a domain moves together, so the count rounds down. This replaces the current selection.
               </p>
             </div>
           </div>

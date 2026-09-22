@@ -10,12 +10,17 @@
 // fills UP TO it and never past it: 7 asked of domains carrying 3 each is 6,
 // not 9. The page says so, so nobody has to work out why they got 6.
 //
-// Biggest domains first, skipping any that would overshoot. That is first-fit
-// decreasing: it lands exactly on the target whenever the domains are the same
-// size (which they usually are), and gets within one small domain otherwise.
-// A perfect fit would be a subset-sum search, which for a handful of inboxes
-// is not worth the time or the unpredictability — two runs of the same numbers
-// should pick the same domains.
+// OLDEST FIRST. The domains that have been warming longest go out first —
+// they have been sitting idle the longest, and a domain left behind while
+// younger ones go out is warming for nothing. Age decides before anything
+// else; size only breaks a tie between domains warmed the same length.
+//
+// Within that order it skips any domain that would overshoot and carries on,
+// so it still lands exactly on the target whenever the domains are the same
+// size (which they usually are) rather than stopping at the first one that
+// does not fit. A perfect fit would be a subset-sum search, which for a
+// handful of inboxes is not worth the time or the unpredictability — two runs
+// of the same numbers should pick the same domains.
 //
 // Pure module — no API, no clock — so all of it is unit-tested.
 
@@ -39,6 +44,8 @@ export interface FillableDomain {
   ready: number;
   /** Inboxes per provider key, as Plusvibe reports them. */
   providers: [string, number][];
+  /** Days warmed — the longest among its inboxes. Null when nothing dates it. */
+  days: number | null;
 }
 
 export interface FillResult {
@@ -65,7 +72,8 @@ export function providerOfDomain(providers: [string, number][]): ProviderBucket 
 }
 
 /**
- * The domains to tick to move about `want` inboxes on `provider`.
+ * The domains to tick to move about `want` inboxes on `provider`, oldest
+ * first.
  *
  * Never returns more than `want` inboxes. Domains with nothing ready are left
  * out — ticking one would add a name to the list and no inboxes to the batch.
@@ -78,9 +86,16 @@ export function fillDomains(
   const wanted = Math.max(0, Math.floor(want));
   const candidates = domains
     .filter((d) => d.ready > 0 && providerOfDomain(d.providers) === provider)
-    // Biggest first, then by name so the same numbers always pick the same
-    // domains — a selection that shuffled between runs would be untrustworthy.
-    .sort((a, b) => b.ready - a.ready || a.domain.localeCompare(b.domain));
+    // Longest warmed first; then biggest, then by name, so the same numbers
+    // always pick the same domains — a selection that shuffled between runs
+    // would be untrustworthy. A domain with no date at all goes last: it
+    // cannot be shown to be older than one that has been counted.
+    .sort(
+      (a, b) =>
+        (b.days ?? -1) - (a.days ?? -1) ||
+        b.ready - a.ready ||
+        a.domain.localeCompare(b.domain)
+    );
   const available = candidates.reduce((n, d) => n + d.ready, 0);
 
   const picked: string[] = [];

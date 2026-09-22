@@ -20,8 +20,12 @@ const { fillDomains, describeFill, providerOfDomain, FILL_PROVIDERS, FILL_PROVID
   await importTs("@/lib/start-outreach/autofill");
 
 const G = "GOOGLE_WORKSPACE", M = "MICROSOFT365", R = "REGULAR_ACCOUNT";
-/** A domain with `ready` mailboxes ready to move, all on one provider. */
-const dom = (domain, ready, provider = M) => ({ domain, ready, providers: [[provider, ready]] });
+/**
+ * A domain with `ready` mailboxes ready to move, all on one provider, warmed
+ * `days` days. The same age everywhere by default, so the checks that are
+ * about size are not quietly decided by age.
+ */
+const dom = (domain, ready, provider = M, days = 20) => ({ domain, ready, providers: [[provider, ready]], days });
 
 // --- which provider a domain counts as ------------------------------------------
 console.log("--- the provider");
@@ -53,6 +57,25 @@ eq("…and so is every domain there is",
 const tooMany = fillDomains(THREES, "microsoft", 50);
 eq("more than there is takes everything", [tooMany.inboxes, tooMany.available], [12, 12]);
 eq("…and says it is short", tooMany.shortfall, "short");
+
+// --- age comes first ------------------------------------------------------------------
+console.log("--- oldest first");
+// The whole point: a domain warming longer goes out before a younger one, and
+// size does not get a say until the ages are level.
+const AGED = [dom("young.io", 50, M, 14), dom("old.io", 50, M, 17), dom("middle.io", 50, M, 15)];
+eq("the longest-warmed domain goes first", fillDomains(AGED, "microsoft", 50).domains, ["old.io"]);
+eq("…then the next oldest", fillDomains(AGED, "microsoft", 100).domains, ["old.io", "middle.io"]);
+eq("…and the youngest last", fillDomains(AGED, "microsoft", 150).domains, ["old.io", "middle.io", "young.io"]);
+// A bigger but younger domain does not jump the queue.
+eq("a bigger younger domain does not jump ahead",
+  fillDomains([dom("big-young.io", 40, M, 10), dom("small-old.io", 10, M, 30)], "microsoft", 10).domains,
+  ["small-old.io"]);
+// Only when two are the same age does size decide.
+eq("size only breaks a tie between equal ages",
+  fillDomains([dom("small.io", 2, M, 20), dom("big.io", 6, M, 20)], "microsoft", 6).domains, ["big.io"]);
+// A domain nothing dates cannot be shown to be old, so it goes last.
+eq("a domain with no date goes last",
+  fillDomains([dom("nodate.io", 3, M, null), dom("dated.io", 3, M, 1)], "microsoft", 3).domains, ["dated.io"]);
 
 // --- which domains it takes ----------------------------------------------------------
 console.log("--- which domains");
