@@ -35,6 +35,23 @@ import { AlertIcon, CopyIcon, CheckIcon, DownloadIcon, GaugeIcon, RefreshIcon } 
 
 const POLL_MS = 2000;
 
+/**
+ * One column heading. It stays put while the list scrolls past underneath it,
+ * sitting just below the page header (h-16), because a row of bare numbers
+ * means nothing once the heading that names each one has scrolled away.
+ *
+ * Sticky only holds against a scrolling ancestor, and the `overflow-x-auto`
+ * the table sits in quietly makes that div one in BOTH axes — the headings
+ * would stick to a box that never scrolls. So the sticking, the solid
+ * background and dropping that overflow all start together at lg, where the
+ * table fits without scrolling sideways and the page itself is the scroller.
+ * Narrower than that the table scrolls sideways and the headings travel with
+ * it, which is what you want while dragging it left and right.
+ */
+const HEAD_CELL =
+  "bg-muted/50 px-3 py-2 font-medium lg:sticky lg:top-16 lg:z-20 lg:bg-muted" +
+  " lg:shadow-[inset_0_-1px_0_hsl(var(--border))]";
+
 export function CapacityTool() {
   const { hasKey, ready } = useApiKey();
   const [jobs, setJobs] = useState<CapacityJob[]>([]);
@@ -269,19 +286,20 @@ export function CapacityTool() {
                 {running ? "Counting…" : "No workspaces were counted."}
               </p>
             ) : (
-              <div className="overflow-x-auto rounded-xl border border-border">
+              // The overflow comes off at lg so the headings can stick — see HEAD_CELL.
+              <div className="overflow-x-auto rounded-xl border border-border lg:overflow-x-visible">
                 <table className="w-full min-w-[840px] text-sm">
-                  <thead className="bg-muted/50 text-xs text-muted-foreground">
+                  <thead className="text-xs text-muted-foreground">
                     <tr>
-                      <th className="px-3 py-2 text-left font-medium">Plusvibe Workspace</th>
+                      <th className={`${HEAD_CELL} rounded-tl-xl text-left`}>Plusvibe Workspace</th>
                       {CAPACITY_ORDER.map((c) => (
-                        <th key={c} className="px-3 py-2 text-right font-medium">
+                        <th key={c} className={`${HEAD_CELL} text-right`}>
                           {COLUMN_LABELS[c]}
                         </th>
                       ))}
-                      <th className="px-3 py-2 text-right font-medium">Google Sending Capacity</th>
-                      <th className="px-3 py-2 text-right font-medium">Microsoft Sending Capacity</th>
-                      <th className="px-3 py-2 text-right font-medium">Total Sending Capacity</th>
+                      <th className={`${HEAD_CELL} text-right`}>Google Sending Capacity</th>
+                      <th className={`${HEAD_CELL} text-right`}>Microsoft Sending Capacity</th>
+                      <th className={`${HEAD_CELL} rounded-tr-xl text-right`}>Total Sending Capacity</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
