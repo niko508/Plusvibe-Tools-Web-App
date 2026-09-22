@@ -139,8 +139,10 @@ export function StartOutreachTool() {
   // switching tabs never loses a fetch, a half-filled form or a poll.
   const [view, setView] = useState<OutreachView>("batch");
   const [waiting, setWaiting] = useState(0);
-  /** Addresses a finished run moved away, waiting to be dropped from the list. */
-  const [moved, setMoved] = useState<Set<string>>(new Set());
+  /** Addresses a run has taken. They stay on the list, but out of play. */
+  const [claimed, setClaimed] = useState<Set<string>>(new Set());
+  /** Addresses a run could not move — still warming, and worth saying so. */
+  const [stranded, setStranded] = useState<string[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -213,7 +215,8 @@ export function StartOutreachTool() {
     setSheetDates({});
     setSheetNote(null);
     setSelected(new Set());
-    setMoved(new Set());
+    setClaimed(new Set());
+    setStranded([]);
     setExpanded(null);
     setFetchedFor(target.name);
     setFetched(0);
@@ -337,23 +340,47 @@ export function StartOutreachTool() {
     return w && fetchedFor ? { id: w._id, name: w.name } : null;
   }, [workspaces, ws, fetchedFor]);
 
-  const onRunFinished = useCallback((emails: string[]) => {
+  const [batch, setBatch] = useState(0);
+  /**
+   * A run has been accepted, so the inboxes it carries are spoken for from
+   * this moment — not from whenever it gets round to moving them.
+   *
+   * Nothing is waited for here. The batch is off the ticks, the destination is
+   * cleared for the next one, and the addresses are marked so a fill by size
+   * cannot hand back the very domains that are already on their way.
+   */
+  const onRunQueued = useCallback((emails: string[]) => {
     if (emails.length === 0) return;
-    setMoved((prev) => {
+    setClaimed((prev) => {
       const next = new Set(prev);
       for (const e of emails) next.add(e.trim().toLowerCase());
       return next;
     });
-  }, []);
-  // Only addresses still in the list count, so the button says what it does.
-  const movedInList = useMemo(() => rows.filter((r) => moved.has(r.email)).length, [rows, moved]);
-  const [batch, setBatch] = useState(0);
-  function dropMoved() {
-    setRows((prev) => prev.filter((r) => !moved.has(r.email)));
     setSelected(new Set());
-    setMoved(new Set());
     setExpanded(null);
     setBatch((n) => n + 1); // clears the destination for the next batch
+  }, []);
+  /**
+   * The run has checked what arrived. Anything it could NOT move is still
+   * sitting in the warming workspace, so it is said plainly rather than left
+   * to be noticed later — the page cannot put rows back that have been
+   * cleared away.
+   */
+  const onRunSettled = useCallback((moved: string[], notMoved: string[]) => {
+    setStranded((prev) => (notMoved.length > 0 ? [...prev, ...notMoved] : prev));
+  }, []);
+  /** Inboxes on this list that a run has already taken. */
+  const claimedRows = useMemo(() => rows.filter((r) => claimed.has(r.email)), [rows, claimed]);
+  /** Domains with an inbox already sent — never offered to a second batch. */
+  const claimedDomains = useMemo(
+    () => new Set(claimedRows.map((r) => r.domain)),
+    [claimedRows]
+  );
+  function dropSent() {
+    setRows((prev) => prev.filter((r) => !claimed.has(r.email)));
+    setClaimed(new Set());
+    setSelected(new Set());
+    setExpanded(null);
   }
   const inboxesByDomain = useMemo(() => {
     const m = new Map<string, Judged[]>();
@@ -373,9 +400,6 @@ export function StartOutreachTool() {
       return next;
     });
   }
-  const allReadySelected =
-    readyGroups.length > 0 && readyGroups.every((g) => selected.has(g.domain));
-
   // --- Picking a batch by size --------------------------------------------
   // "400 Microsoft inboxes" rather than forty ticks. The fill replaces the
   // selection rather than adding to it, so the number on the button is always
@@ -383,9 +407,17 @@ export function StartOutreachTool() {
   const [fillProvider, setFillProvider] = useState<FillProvider>("microsoft");
   const [fillWantRaw, setFillWantRaw] = useState("");
   const fillWant = Number.parseInt(fillWantRaw, 10);
+  // A domain already sent to a run is not on offer: picking it again would
+  // build a batch out of inboxes that have left, or are about to.
+  const fillable = useMemo(
+    () => readyGroups.filter((g) => !claimedDomains.has(g.domain)),
+    [readyGroups, claimedDomains]
+  );
+  const allReadySelected =
+    fillable.length > 0 && fillable.every((g) => selected.has(g.domain));
   const fill = useMemo(
-    () => fillDomains(readyGroups, fillProvider, Number.isFinite(fillWant) ? fillWant : 0),
-    [readyGroups, fillProvider, fillWant]
+    () => fillDomains(fillable, fillProvider, Number.isFinite(fillWant) ? fillWant : 0),
+    [fillable, fillProvider, fillWant]
   );
 
   async function handleCopy() {
@@ -596,6 +628,17 @@ export function StartOutreachTool() {
             </p>
           )}
 
+          {stranded.length > 0 && (
+            <p className="flex gap-1.5 text-xs text-warning" data-stranded>
+              <AlertIcon size={13} className="mt-0.5 shrink-0" />
+              <span>
+                {formatNumber(stranded.length)} inbox{stranded.length === 1 ? "" : "es"} could not be moved and{" "}
+                {stranded.length === 1 ? "is" : "are"} still in {fetchedFor}: {stranded.slice(0, 5).join(", ")}
+                {stranded.length > 5 ? ", …" : ""}. Fetch again to pick {stranded.length === 1 ? "it" : "them"} up.
+              </span>
+            </p>
+          )}
+
           {/* Selection */}
           <div
             className={`pv-card p-4 sm:p-5 ${totals.inboxes > 0 ? "border-accent/40" : ""}`}
@@ -610,32 +653,36 @@ export function StartOutreachTool() {
                 </h2>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                {movedInList > 0 && (
+                {/* Straight after a run is sent, not once it has moved
+                    anything: the batch is already the run's, so there is
+                    nothing to wait for before starting the next. */}
+                {claimedRows.length > 0 && (
                   <button
                     type="button"
                     className="pv-btn-primary"
-                    onClick={dropMoved}
-                    title="Takes the inboxes the last run moved off this list, clears the ticks and the destination, without fetching again"
+                    onClick={dropSent}
+                    title="Takes the inboxes already sent to a run off this list, so what is left is what can still be moved"
                     data-drop-moved
                   >
                     <CheckIcon size={16} />
-                    Next batch: drop {formatNumber(movedInList)} moved inbox{movedInList === 1 ? "" : "es"}
+                    Next batch: drop {formatNumber(claimedRows.length)} sent inbox
+                    {claimedRows.length === 1 ? "" : "es"}
                   </button>
                 )}
                 <button
                   type="button"
                   className="pv-chip"
-                  disabled={readyGroups.length === 0}
+                  disabled={fillable.length === 0}
                   onClick={() =>
                     setSelected(
-                      allReadySelected ? new Set() : new Set(readyGroups.map((g) => g.domain))
+                      allReadySelected ? new Set() : new Set(fillable.map((g) => g.domain))
                     )
                   }
                   data-select-all
                 >
                   {allReadySelected
                     ? "Clear selection"
-                    : `Select all ready (${formatNumber(readyGroups.length)})`}
+                    : `Select all ready (${formatNumber(fillable.length)})`}
                 </button>
                 <button
                   type="button"
@@ -746,12 +793,12 @@ export function StartOutreachTool() {
                           className="accent-accent"
                           aria-label="Select every ready domain"
                           checked={allReadySelected}
-                          disabled={readyGroups.length === 0}
+                          disabled={fillable.length === 0}
                           onChange={() =>
                             setSelected(
                               allReadySelected
                                 ? new Set()
-                                : new Set(readyGroups.map((g) => g.domain))
+                                : new Set(fillable.map((g) => g.domain))
                             )
                           }
                         />
@@ -794,7 +841,8 @@ export function StartOutreachTool() {
             sheetDates={sheetDates}
             sheetConfig={sheetConfig}
             hasSheet={hasSheet}
-            onRunFinished={onRunFinished}
+            onRunQueued={onRunQueued}
+            onRunSettled={onRunSettled}
             resetKey={batch}
           />
         </>

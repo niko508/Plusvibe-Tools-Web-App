@@ -92,7 +92,8 @@ export function OutreachSetup({
   sheetDates,
   sheetConfig,
   hasSheet,
-  onRunFinished,
+  onRunQueued,
+  onRunSettled,
   resetKey,
 }: {
   source: { id: string; name: string } | null;
@@ -102,8 +103,10 @@ export function OutreachSetup({
   sheetDates: Record<string, SheetWarmup>;
   sheetConfig: SheetConfig | null;
   hasSheet: boolean;
-  /** Called once a run started here has finished, with the addresses that arrived. */
-  onRunFinished: (movedEmails: string[]) => void;
+  /** A run has been accepted: these addresses are spoken for from now on. */
+  onRunQueued: (emails: string[]) => void;
+  /** That run has moved them, or stopped trying: what arrived, and what did not. */
+  onRunSettled: (moved: string[], notMoved: string[]) => void;
   /** Bumped when the page starts a new batch: the destination is cleared. */
   resetKey: number;
 }) {
@@ -286,10 +289,10 @@ export function OutreachSetup({
   }, [refreshJobs]);
   const live = jobs.filter((j) => j.status === "running" || j.status === "queued");
   const anyLive = live.length > 0;
-  // The inboxes a run took are out of the warming workspace as soon as it has
-  // checked they arrived — everything after that happens in the destination.
-  // So the list can drop them then, and the next batch can be built while the
-  // signatures and tags of this one are still going.
+  // A run reports back once it has checked the inboxes arrived: everything
+  // after that happens in the destination, so what moved is settled. The page
+  // took them off the list when the run was accepted; this says which of them
+  // are gone for good and which are still in the warming workspace.
   useEffect(() => {
     for (const job of jobs) {
       const sent = sentRef.current.get(job.id);
@@ -300,15 +303,21 @@ export function OutreachSetup({
       const stopped = job.status !== "running" && job.status !== "queued";
       if (!moveSettled && !stopped) continue;
       sentRef.current.delete(job.id);
-      // Stopped before the check ran: which inboxes actually moved is unknown,
-      // and "not moved" is empty because nothing looked. Dropping the lot would
-      // take inboxes off the list that are still sitting in the warming
-      // workspace, so nothing is dropped and the list stays as it is.
-      if (!moveSettled) continue;
+      // Stopped before the check ran: which inboxes moved is unknown, and
+      // "not moved" is empty because nothing looked. Treating them as moved
+      // would lose inboxes that are still sitting in the warming workspace,
+      // so they all come back and the next fetch settles it.
+      if (!moveSettled) {
+        onRunSettled([], sent);
+        continue;
+      }
       const notMoved = new Set(job.notMoved.map((e) => e.trim().toLowerCase()));
-      onRunFinished(sent.filter((e) => !notMoved.has(e.trim().toLowerCase())));
+      onRunSettled(
+        sent.filter((e) => !notMoved.has(e.trim().toLowerCase())),
+        sent.filter((e) => notMoved.has(e.trim().toLowerCase()))
+      );
     }
-  }, [jobs, onRunFinished]);
+  }, [jobs, onRunSettled]);
   useEffect(() => {
     if (!anyLive) return;
     const t = setInterval(() => void refreshJobs(), POLL_MS);
@@ -357,10 +366,15 @@ export function OutreachSetup({
           updateSheet: options.sheet,
         },
       });
-      sentRef.current.set(jobId, inboxes.map((i) => i.email));
+      const sent = inboxes.map((i) => i.email);
+      sentRef.current.set(jobId, sent);
       setSessionIds((prev) => new Set(prev).add(jobId));
       setHighlightJobId(jobId);
       setArmed(false);
+      // The batch is the run's now, whether it starts this second or waits
+      // behind three others. The page lets go of it here so the next one can
+      // be put together without waiting for anything.
+      onRunQueued(sent);
       await refreshJobs();
     } catch (err) {
       setError(err instanceof ApiClientError || err instanceof Error ? err.message : "Something went wrong.");
