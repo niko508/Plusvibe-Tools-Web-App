@@ -105,7 +105,11 @@ async function persist(id: string) {
   }
 }
 
-const live = (r: StartOutreachJob) => r.status === "running";
+/**
+ * Still going or about to: both die with the server, because what a run needs
+ * to do its work — the key and the batch — is only ever held in memory.
+ */
+const live = (r: StartOutreachJob) => r.status === "running" || r.status === "queued";
 
 function flushRunningSync() {
   if (![...records.values()].some(live)) return;
@@ -161,13 +165,7 @@ async function loadOnce() {
 
 // --- Creation --------------------------------------------------------------
 
-export class ActiveJobError extends Error {
-  constructor(readonly activeJobId: string) {
-    super("A Start Outreach run is already going — let it finish or stop it first.");
-    this.name = "ActiveJobError";
-  }
-}
-
+/** Anything of this key's going or waiting — so a new run knows to queue. */
 function activeIdFor(fp: string): string | null {
   for (const [id, m] of meta) {
     if (m.fingerprint !== fp) continue;
@@ -177,13 +175,53 @@ function activeIdFor(fp: string): string | null {
   return null;
 }
 
+/**
+ * Only one actually GOING. Separate from activeIdFor on purpose: asking "is
+ * the slot free?" with a check that counts queued runs would see the very run
+ * it is about to start and leave the queue stuck for good.
+ */
+function runningIdFor(fp: string): string | null {
+  for (const [id, m] of meta) {
+    if (m.fingerprint !== fp) continue;
+    if (records.get(id)?.status === "running") return id;
+  }
+  return null;
+}
+
+/**
+ * Starts the oldest run waiting behind the one that just ended.
+ *
+ * Runs go one at a time: two at once would have two sets of bulk calls and two
+ * sets of sheet writes in flight against one account. Queueing means the next
+ * batch can be built and sent the moment the inboxes of this one are out of the
+ * warming workspace, without waiting for its signatures and tags to finish.
+ */
+function startNext(fp: string) {
+  if (runningIdFor(fp)) return; // one already going, or just started
+  let next: { id: string; createdAt: number } | null = null;
+  for (const [id, m] of meta) {
+    if (m.fingerprint !== fp || m.aborted || !m.apiKey || !m.payload) continue;
+    const r = records.get(id);
+    if (!r || r.status !== "queued") continue;
+    if (!next || r.createdAt < next.createdAt) next = { id, createdAt: r.createdAt };
+  }
+  if (!next) return;
+  const rec = records.get(next.id)!;
+  rec.status = "running";
+  rec.updatedAt = Date.now();
+  void persist(next.id);
+  void runJob(next.id);
+}
+
 const STEP_ORDER: StepKey[] = ["move", "verify", "settings", "signatures", "tags", "sheet"];
 
 export async function createJob(apiKey: string, payload: StartOutreachStartPayload): Promise<string> {
   await loadOnce();
   const fp = fingerprintKey(apiKey);
-  const running = activeIdFor(fp);
-  if (running) throw new ActiveJobError(running);
+  // A run already going does not block this one: it waits its turn and starts
+  // itself. Everything below still has to pass before it is accepted, so a
+  // batch that could never work is refused now rather than in ten minutes.
+  const waitBehind = activeIdFor(fp) !== null;
 
   // Re-checked here rather than trusted from the browser: this is the last
   // point before real inboxes move.
@@ -234,7 +272,7 @@ export async function createJob(apiKey: string, payload: StartOutreachStartPaylo
       source: payload.sourceWorkspaceName,
       destination: payload.destWorkspaceName,
     }),
-    status: "running",
+    status: waitBehind ? "queued" : "running",
     createdAt: now,
     updatedAt: now,
     source: { id: payload.sourceWorkspaceId, name: payload.sourceWorkspaceName },
@@ -255,7 +293,7 @@ export async function createJob(apiKey: string, payload: StartOutreachStartPaylo
   records.set(id, record);
   meta.set(id, { fingerprint: fp, apiKey, aborted: false, payload });
   await persist(id);
-  void runJob(id);
+  if (!waitBehind) void runJob(id);
   return id;
 }
 
@@ -653,6 +691,9 @@ async function runJob(id: string) {
     m.apiKey = undefined;
     m.payload = undefined;
     await persist(id);
+    // Whatever happened here — done, stopped, failed — the next batch waiting
+    // behind it goes now. A run that broke must not strand the queue.
+    startNext(m.fingerprint);
   }
 }
 
@@ -764,6 +805,17 @@ export async function abortJob(apiKey: string, id: string): Promise<boolean> {
   const o = owned(apiKey, id);
   if (!o) return false;
   o.m.aborted = true;
+  // One that never started has no loop to notice the flag, so it is stopped
+  // here — otherwise it would sit "queued" for good and hold up the ones
+  // behind it.
+  if (o.rec.status === "queued") {
+    o.rec.status = "aborted";
+    o.rec.finishedAt = Date.now();
+    o.rec.updatedAt = o.rec.finishedAt;
+    o.m.apiKey = undefined;
+    o.m.payload = undefined;
+    await persist(id);
+  }
   return true;
 }
 

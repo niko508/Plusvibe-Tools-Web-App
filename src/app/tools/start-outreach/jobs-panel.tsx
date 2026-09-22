@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { formatNumber } from "@/lib/format";
-import { EmptyState, Spinner, RemoveJobButton } from "@/components/ui";
-import { PlayIcon } from "@/components/icons";
+import { EmptyState, Spinner } from "@/components/ui";
+import { ChevronDownIcon, PlayIcon } from "@/components/icons";
 import {
   STEP_LABELS,
   type StartOutreachJob,
@@ -13,6 +13,7 @@ import {
 } from "@/lib/jobs/start-outreach-types";
 
 const STATUS_META: Record<StartOutreachStatus, { label: string; className: string }> = {
+  queued: { label: "Queued", className: "bg-muted text-muted-foreground" },
   running: { label: "Running", className: "bg-accent/10 text-accent" },
   done: { label: "Done", className: "bg-success/10 text-success" },
   aborted: { label: "Stopped", className: "bg-muted text-muted-foreground" },
@@ -32,14 +33,28 @@ const STEP_META: Record<StepState, { label: string; className: string }> = {
 export function JobsPanel({
   jobs,
   highlightJobId,
+  sessionIds,
   onAbort,
   onRemove,
 }: {
   jobs: StartOutreachJob[];
   highlightJobId: string | null;
+  /** Runs started from this page since it was opened. */
+  sessionIds: Set<string>;
   onAbort: (id: string) => void | Promise<void>;
   onRemove: (id: string) => void | Promise<void>;
 }) {
+  // Runs are queued several at a time, so finished ones pile up fast and push
+  // the live ones off the screen. The earlier ones fold away — but a run is
+  // only "earlier" if it is not this sitting's: watching one you just started
+  // disappear the moment it finishes would hide the answer you were waiting
+  // for. What is still going never folds either.
+  const [showPast, setShowPast] = useState(false);
+  const mine = (j: StartOutreachJob) =>
+    j.status === "running" || j.status === "queued" || sessionIds.has(j.id);
+  const live = jobs.filter(mine);
+  const past = jobs.filter((j) => !mine(j));
+
   if (jobs.length === 0) {
     return (
       <EmptyState icon={<PlayIcon />} title="No runs yet">
@@ -47,17 +62,34 @@ export function JobsPanel({
       </EmptyState>
     );
   }
+  const card = (job: StartOutreachJob) => (
+    <JobCard
+      key={job.id}
+      job={job}
+      highlight={job.id === highlightJobId}
+      onAbort={onAbort}
+      onRemove={onRemove}
+    />
+  );
   return (
     <div className="space-y-3">
-      {jobs.map((job) => (
-        <JobCard
-          key={job.id}
-          job={job}
-          highlight={job.id === highlightJobId}
-          onAbort={onAbort}
-          onRemove={onRemove}
-        />
-      ))}
+      {live.map(card)}
+      {past.length > 0 && (
+        <>
+          <button
+            type="button"
+            className="pv-btn-ghost text-xs"
+            onClick={() => setShowPast((v) => !v)}
+            data-past-toggle
+            aria-expanded={showPast}
+          >
+            <ChevronDownIcon size={14} className={showPast ? "" : "-rotate-90"} />
+            {showPast ? "Hide" : "Show"} {formatNumber(past.length)} earlier run
+            {past.length === 1 ? "" : "s"}
+          </button>
+          {showPast && <div className="space-y-3" data-past-runs>{past.map(card)}</div>}
+        </>
+      )}
     </div>
   );
 }
@@ -77,6 +109,7 @@ function JobCard({
   const status = STATUS_META[job.status];
   const finished = job.steps.filter((s) => s.state !== "pending" && s.state !== "running").length;
   const pct = Math.round((finished / job.steps.length) * 100);
+  const live = job.status === "running" || job.status === "queued";
 
   return (
     <div className={`pv-card p-4 sm:p-5 ${highlight ? "ring-2 ring-accent/40" : ""}`} data-job={job.id}>
@@ -97,11 +130,17 @@ function JobCard({
         />
       </div>
 
-      <ol className="mt-3 space-y-1.5 text-xs" data-steps>
-        {job.steps.map((s) => (
-          <StepLine key={s.key} step={s} />
-        ))}
-      </ol>
+      {job.status === "queued" ? (
+        <p className="mt-3 text-xs text-muted-foreground" data-queued-note>
+          Waiting for the run ahead of it. It starts on its own — nothing else to do.
+        </p>
+      ) : (
+        <ol className="mt-3 space-y-1.5 text-xs" data-steps>
+          {job.steps.map((s) => (
+            <StepLine key={s.key} step={s} />
+          ))}
+        </ol>
+      )}
 
       {job.status === "interrupted" && (
         <p className="mt-2 text-xs text-warning">
@@ -111,9 +150,9 @@ function JobCard({
       )}
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        {job.status === "running" && (
+        {live && (
           <button type="button" className="pv-btn-ghost" onClick={() => void onAbort(job.id)}>
-            Stop run
+            {job.status === "queued" ? "Cancel" : "Stop run"}
           </button>
         )}
         {(job.errors.length > 0 || job.notMoved.length > 0 || job.settings.length > 0) && (
@@ -121,7 +160,14 @@ function JobCard({
             {open ? "Hide details" : "Details"}
           </button>
         )}
-        {job.status !== "running" && <RemoveJobButton onRemove={() => onRemove(job.id)} />}
+        {/* No confirm step: removing a finished run throws away a record of
+            what happened, not the work itself, and it is read far more often
+            than it is wanted. */}
+        {!live && (
+          <button type="button" className="pv-btn-ghost" onClick={() => void onRemove(job.id)} data-remove-run>
+            Remove
+          </button>
+        )}
       </div>
 
       {open && (

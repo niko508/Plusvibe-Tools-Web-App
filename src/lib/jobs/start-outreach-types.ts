@@ -10,7 +10,13 @@ import type {
 } from "@/lib/start-outreach/plan";
 import type { Category } from "@/lib/start-outreach/categories";
 
-export type StartOutreachStatus = "running" | "done" | "aborted" | "interrupted" | "error";
+/**
+ * "queued" is a run that has been accepted and will start on its own when the
+ * one ahead of it finishes. Batches are built far faster than they are moved,
+ * so the next one is lined up rather than made to wait for a free moment —
+ * but only one ever runs at a time, against one Plusvibe account and one sheet.
+ */
+export type StartOutreachStatus = "queued" | "running" | "done" | "aborted" | "interrupted" | "error";
 
 export type StepKey = "move" | "verify" | "settings" | "signatures" | "tags" | "sheet";
 

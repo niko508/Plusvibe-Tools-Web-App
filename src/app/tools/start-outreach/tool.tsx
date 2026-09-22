@@ -46,6 +46,13 @@ import {
 } from "@/lib/start-outreach/readiness";
 import type { MovingInbox } from "@/lib/start-outreach/plan";
 import { categorizeDomains, CATEGORY_LABELS } from "@/lib/start-outreach/categories";
+import {
+  FILL_PROVIDERS,
+  FILL_PROVIDER_LABELS,
+  describeFill,
+  fillDomains,
+  type FillProvider,
+} from "@/lib/start-outreach/autofill";
 
 /** The tool's three pages. */
 type OutreachView = "batch" | "settings" | "scheduled";
@@ -369,6 +376,18 @@ export function StartOutreachTool() {
   const allReadySelected =
     readyGroups.length > 0 && readyGroups.every((g) => selected.has(g.domain));
 
+  // --- Picking a batch by size --------------------------------------------
+  // "400 Microsoft inboxes" rather than forty ticks. The fill replaces the
+  // selection rather than adding to it, so the number on the button is always
+  // the number that would move.
+  const [fillProvider, setFillProvider] = useState<FillProvider>("microsoft");
+  const [fillWantRaw, setFillWantRaw] = useState("");
+  const fillWant = Number.parseInt(fillWantRaw, 10);
+  const fill = useMemo(
+    () => fillDomains(readyGroups, fillProvider, Number.isFinite(fillWant) ? fillWant : 0),
+    [readyGroups, fillProvider, fillWant]
+  );
+
   async function handleCopy() {
     const emails = totals.inboxes > 0 ? totals.emails : readyGroups.flatMap((g) => g.readyEmails);
     if (await copyToClipboard(emails.join("\n"))) {
@@ -642,6 +661,59 @@ export function StartOutreachTool() {
                   <span className="hidden sm:inline">Export CSV</span>
                 </button>
               </div>
+            </div>
+
+            {/* Pick a batch by size instead of by hand. */}
+            <div className="mt-4 flex flex-wrap items-end gap-2 border-t border-border pt-4" data-fill>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted-foreground">Provider</label>
+                <div className="flex gap-1">
+                  {FILL_PROVIDERS.map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      className={`pv-chip ${fillProvider === p ? "pv-chip-active" : "hover:text-foreground"}`}
+                      onClick={() => setFillProvider(p)}
+                      data-fill-provider={p}
+                    >
+                      {FILL_PROVIDER_LABELS[p]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted-foreground" htmlFor="fill-count">
+                  Inboxes to move
+                </label>
+                <input
+                  id="fill-count"
+                  type="number"
+                  min={0}
+                  step={1}
+                  className="pv-input w-28 text-right tabular-nums"
+                  placeholder="400"
+                  value={fillWantRaw}
+                  onChange={(e) => setFillWantRaw(e.target.value)}
+                  aria-label="Inboxes to move"
+                />
+              </div>
+              <button
+                type="button"
+                className="pv-btn-primary disabled:opacity-50"
+                disabled={fill.domains.length === 0}
+                onClick={() => {
+                  setSelected(new Set(fill.domains));
+                  setExpanded(null);
+                }}
+                data-fill-apply
+              >
+                <CheckIcon size={16} />
+                Select {formatNumber(fill.inboxes)} inbox{fill.inboxes === 1 ? "" : "es"}
+              </button>
+              <p className="basis-full text-xs text-muted-foreground" data-fill-note>
+                {describeFill(fill, fillProvider)} Whole domains only — every ready inbox on a domain moves together,
+                so the count rounds down. This replaces the current selection.
+              </p>
             </div>
           </div>
 

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
-import { ActiveJobError, createJob } from "@/lib/jobs/start-outreach";
+import { createJob } from "@/lib/jobs/start-outreach";
 import { EMPTY_OUTREACH_SETTINGS, type MovingInbox, type OutreachSettingsInput } from "@/lib/start-outreach/plan";
 import { CATEGORIES, isCategory, type Category } from "@/lib/start-outreach/categories";
 import type { TagInput } from "@/lib/tags/bulk-tags";
@@ -14,8 +14,9 @@ const MAX_VALUES = 20;
 const MAX_TAGS = 100;
 
 // POST /api/jobs/start-outreach/start
-// Body: StartOutreachStartPayload. Starts the run; it goes on in the
-// background and is polled via /list.
+// Body: StartOutreachStartPayload. Accepts the run; it goes on in the
+// background — starting now, or when the one ahead of it finishes — and is
+// polled via /list.
 export async function POST(request: Request) {
   try {
     const apiKey = resolveApiKey(request);
@@ -107,9 +108,8 @@ export async function POST(request: Request) {
     const jobId = await createJob(apiKey, payload);
     return NextResponse.json({ jobId });
   } catch (err) {
-    if (err instanceof ActiveJobError) {
-      return NextResponse.json({ error: err.message, activeJobId: err.activeJobId }, { status: 409 });
-    }
+    // A run already going never refuses this one — it is queued and starts
+    // itself, so there is no "busy" case to answer here.
     if (err instanceof Error && !("status" in err)) {
       return NextResponse.json({ error: err.message }, { status: 400 });
     }

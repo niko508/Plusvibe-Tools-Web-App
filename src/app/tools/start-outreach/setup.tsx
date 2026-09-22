@@ -131,6 +131,8 @@ export function OutreachSetup({
   const [error, setError] = useState<string | null>(null);
   const [jobs, setJobs] = useState<StartOutreachJob[]>([]);
   const [highlightJobId, setHighlightJobId] = useState<string | null>(null);
+  /** Runs started here since the page was opened — never folded away as old. */
+  const [sessionIds, setSessionIds] = useState<Set<string>>(new Set());
   const pollLock = useRef(false);
   /** Runs started from this page: job id → the addresses sent. */
   const sentRef = useRef(new Map<string, string[]>());
@@ -282,23 +284,36 @@ export function OutreachSetup({
   useEffect(() => {
     void refreshJobs();
   }, [refreshJobs]);
-  const anyRunning = jobs.some((j) => j.status === "running");
-  // A run started here has finished: the inboxes that arrived have left the
-  // warming workspace, so the page can drop them without fetching again.
+  const live = jobs.filter((j) => j.status === "running" || j.status === "queued");
+  const anyLive = live.length > 0;
+  // The inboxes a run took are out of the warming workspace as soon as it has
+  // checked they arrived — everything after that happens in the destination.
+  // So the list can drop them then, and the next batch can be built while the
+  // signatures and tags of this one are still going.
   useEffect(() => {
     for (const job of jobs) {
       const sent = sentRef.current.get(job.id);
-      if (!sent || job.status === "running") continue;
+      if (!sent) continue;
+      const verify = job.steps.find((s) => s.key === "verify");
+      const moveSettled =
+        !!verify && verify.state !== "pending" && verify.state !== "running";
+      const stopped = job.status !== "running" && job.status !== "queued";
+      if (!moveSettled && !stopped) continue;
       sentRef.current.delete(job.id);
+      // Stopped before the check ran: which inboxes actually moved is unknown,
+      // and "not moved" is empty because nothing looked. Dropping the lot would
+      // take inboxes off the list that are still sitting in the warming
+      // workspace, so nothing is dropped and the list stays as it is.
+      if (!moveSettled) continue;
       const notMoved = new Set(job.notMoved.map((e) => e.trim().toLowerCase()));
       onRunFinished(sent.filter((e) => !notMoved.has(e.trim().toLowerCase())));
     }
   }, [jobs, onRunFinished]);
   useEffect(() => {
-    if (!anyRunning) return;
+    if (!anyLive) return;
     const t = setInterval(() => void refreshJobs(), POLL_MS);
     return () => clearInterval(t);
-  }, [anyRunning, refreshJobs]);
+  }, [anyLive, refreshJobs]);
   useEffect(() => {
     if (!highlightJobId) return;
     const t = setTimeout(() => setHighlightJobId(null), 4000);
@@ -315,7 +330,9 @@ export function OutreachSetup({
   if (inboxes.length > 0 && present.length === 0) {
     problems.push("None of these domains is on Google or Microsoft, so there are no settings to apply.");
   }
-  const canRun = problems.length === 0 && armed && !starting && !anyRunning;
+  // A run already going is no reason to wait: this one queues behind it and
+  // starts itself.
+  const canRun = problems.length === 0 && armed && !starting;
 
   async function run() {
     if (!source || !destination || problems.length > 0) return;
@@ -341,6 +358,7 @@ export function OutreachSetup({
         },
       });
       sentRef.current.set(jobId, inboxes.map((i) => i.email));
+      setSessionIds((prev) => new Set(prev).add(jobId));
       setHighlightJobId(jobId);
       setArmed(false);
       await refreshJobs();
@@ -629,8 +647,14 @@ export function OutreachSetup({
             data-run
           >
             {starting ? <Spinner /> : <MoveIcon size={16} />}
-            {starting ? "Starting…" : anyRunning ? "A run is going" : "Move and set up"}
+            {starting ? "Starting…" : anyLive ? "Queue behind the run going" : "Move and set up"}
           </button>
+          {anyLive && !starting && (
+            <span className="text-xs text-muted-foreground" data-queue-note>
+              {formatNumber(live.length)} run{live.length === 1 ? "" : "s"} still going — this one waits its turn and
+              starts on its own.
+            </span>
+          )}
         </div>
       </div>
 
@@ -639,6 +663,7 @@ export function OutreachSetup({
         <JobsPanel
           jobs={jobs}
           highlightJobId={highlightJobId}
+          sessionIds={sessionIds}
           onAbort={async (id) => {
             await abortStartOutreachJob(id).catch(() => undefined);
             await refreshJobs();
