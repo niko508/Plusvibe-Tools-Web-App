@@ -1,12 +1,17 @@
 // Shared types for Auto-tag by Domain jobs (server + client).
 //
 // Every inbox in every selected workspace gets its TLD tag (from its email's
-// domain) and its domain platform tag (from the "Domain Host" column of the
-// 📋 Domains sheet), unless it already carries a tag from that set. Tags
-// missing from a workspace are created first. Runs in the background.
+// domain), its domain platform tag (from the "Domain Host" column of the
+// 📋 Domains sheet), and — when asked — its pool tag (from the provider that
+// sends it), unless it already carries a tag from that set. Tags missing from
+// a workspace are created first. Runs in the background.
+//
+// The three sets are independent, so a run can do any combination: the pool
+// pass alone is what the "Tag by provider" button starts.
 
 import type { TagInput } from "@/lib/tags/bulk-tags";
 import type { PlanCounts } from "@/lib/tags/domain-tags";
+import type { PoolCounts } from "@/lib/tags/pool-tags";
 
 export const MAX_STORED_ERRORS = 50;
 
@@ -23,7 +28,9 @@ export interface WorkspaceOutcome {
   /** Tags created because the workspace lacked them. */
   tagsCreated: string[];
   counts: PlanCounts;
-  /** Assignments made / that failed, over both sets. */
+  /** The pool pass, when this run does one. */
+  pools?: PoolCounts;
+  /** Assignments made / that failed, over every set. */
   assigned: number;
   failed: number;
   /** "digital ×3" — TLDs seen that have no tag in the set. */
@@ -44,6 +51,8 @@ export interface DomainTagsJob {
 
   tldTags: TagInput[];
   platformTags: TagInput[];
+  /** Whether this run also puts google-pool / microsoft-pool on by provider. */
+  pools: boolean;
   sheetUrl?: string;
   sheetTab?: string;
   /** How the sheet read went, once it has. */
@@ -62,6 +71,9 @@ export interface DomainTagsJob {
     hostNoTag: number;
     failed: number;
     tagsCreated: number;
+    poolAssigned: number;
+    poolHad: number;
+    poolNone: number;
   };
 
   errors: string[];
@@ -72,6 +84,12 @@ export interface DomainTagsStartPayload {
   workspaces: { id: string; name: string }[];
   tldTags: TagInput[];
   platformTags: TagInput[];
+  /**
+   * Also tag by provider: google-pool on Google mailboxes, microsoft-pool on
+   * Microsoft ones. Independent of the two domain sets, so a run can do the
+   * pools alone.
+   */
+  pools?: boolean;
   sheetUrl?: string;
   sheetTab?: string;
 }

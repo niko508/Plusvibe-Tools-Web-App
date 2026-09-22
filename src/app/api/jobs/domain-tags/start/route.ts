@@ -24,6 +24,7 @@ export async function POST(request: Request) {
       workspaces?: { id?: string; name?: string }[];
       tldTags?: unknown;
       platformTags?: unknown;
+      pools?: unknown;
       sheetUrl?: string;
       sheetTab?: string;
     };
@@ -40,6 +41,7 @@ export async function POST(request: Request) {
       workspaces,
       tldTags: tags(body.tldTags),
       platformTags: tags(body.platformTags),
+      pools: body.pools === true,
       sheetUrl: typeof body.sheetUrl === "string" ? body.sheetUrl : undefined,
       sheetTab: typeof body.sheetTab === "string" ? body.sheetTab : undefined,
     });

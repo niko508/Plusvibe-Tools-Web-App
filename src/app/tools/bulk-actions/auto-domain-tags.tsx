@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Workspace } from "@/lib/plusvibe-types";
 import type { DomainTagsJob, WorkspaceOutcome } from "@/lib/jobs/domain-tags-types";
 import { DEFAULT_PLATFORM_TAGS, DEFAULT_TLD_TAGS } from "@/lib/tags/domain-tags";
+import { POOL_TAGS } from "@/lib/campaign-types/pools";
 import { MAX_TAG_NAME_LENGTH, normalizeColor, prepareBatch, type TagInput } from "@/lib/tags/bulk-tags";
 import { DEFAULT_SHEET_URL, DEFAULT_SHEET_TAB } from "@/lib/jobs/azure-warmup-types";
 import { useSheetConfig } from "@/lib/use-sheet-config";
@@ -102,6 +103,9 @@ export function AutoDomainTags({
   const problems = tldBatch.problems.size + platformBatch.problems.size;
   const active = jobs.find((j) => j.status === "running") ?? null;
   const canStart = chosen.length > 0 && tldBatch.specs.length > 0 && problems === 0 && !busy && !active;
+  // The pool pass needs no tag set of its own: the two names are fixed, and
+  // the sheet is not read for it.
+  const canStartPools = chosen.length > 0 && !busy && !active;
 
   const refresh = useCallback(async () => {
     try {
@@ -125,18 +129,24 @@ export function AutoDomainTags({
     return () => clearTimeout(t);
   }, [toast]);
 
-  async function start() {
-    if (!canStart || lock.current) return;
+  /**
+   * Starts a run. "domain" does the two domain sets as before; "pools" does
+   * only the provider tags, so neither button can quietly do the other's work.
+   */
+  async function start(kind: "domain" | "pools" = "domain") {
+    const ok = kind === "pools" ? canStartPools : canStart;
+    if (!ok || lock.current) return;
     lock.current = true;
     setBusy(true);
     setError(null);
     try {
       await startDomainTags({
         workspaces: chosen,
-        tldTags: tldBatch.specs,
-        platformTags: platformBatch.specs,
-        sheetUrl: (sheetUrl ?? "").trim() || undefined,
-        sheetTab: sheetTab.trim() || undefined,
+        tldTags: kind === "pools" ? [] : tldBatch.specs,
+        platformTags: kind === "pools" ? [] : platformBatch.specs,
+        pools: kind === "pools",
+        sheetUrl: kind === "pools" ? undefined : (sheetUrl ?? "").trim() || undefined,
+        sheetTab: kind === "pools" ? undefined : sheetTab.trim() || undefined,
       });
       setToast("Tagging… you can close this tab, the job keeps going.");
       await refresh();
@@ -229,13 +239,46 @@ export function AutoDomainTags({
         )}
 
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className="pv-btn-primary disabled:opacity-50" disabled={!canStart} onClick={start}>
+          <button type="button" className="pv-btn-primary disabled:opacity-50" disabled={!canStart} onClick={() => start("domain")} data-start-domain>
             {busy ? <Spinner /> : <TagIcon size={16} />}
             Auto-tag inboxes in {formatNumber(chosen.length)} workspace{chosen.length === 1 ? "" : "s"}
           </button>
           {active && <span className="text-xs text-muted-foreground">A job is running — it has to finish before another can start.</span>}
           {chosen.length === 0 && !loading && !active && <span className="text-xs text-muted-foreground">Pick some workspaces above first.</span>}
           {problems > 0 && <span className="text-xs text-warning">Fix the tag sets first.</span>}
+        </div>
+      </div>
+
+      {/* The pools: by provider, not by domain, so its own button. */}
+      <div className="pv-card space-y-3 p-4 sm:p-5" data-pool-tags>
+        <div>
+          <h2 className="text-sm font-semibold">Tag inboxes by provider</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Puts <span className="font-mono text-foreground">{POOL_TAGS.google.name}</span> on every Google mailbox and{" "}
+            <span className="font-mono text-foreground">{POOL_TAGS.microsoft.name}</span> on every Microsoft one, across
+            the workspaces picked above. The same two tags Create All Campaign Types puts on campaigns, so a campaign and
+            the mailboxes that send it read the same.
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            An inbox already carrying either tag is skipped — including one moved to the other pool by hand, which was
+            put there on purpose. Anything on neither provider is left alone: there is no third pool to put it in.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="pv-btn-primary disabled:opacity-50"
+            disabled={!canStartPools}
+            onClick={() => start("pools")}
+            data-start-pools
+          >
+            {busy ? <Spinner /> : <TagIcon size={16} />}
+            Tag by provider in {formatNumber(chosen.length)} workspace{chosen.length === 1 ? "" : "s"}
+          </button>
+          {active && <span className="text-xs text-muted-foreground">A job is running — it has to finish before another can start.</span>}
+          {chosen.length === 0 && !loading && !active && (
+            <span className="text-xs text-muted-foreground">Pick some workspaces above first.</span>
+          )}
         </div>
       </div>
 
@@ -389,7 +432,8 @@ function wsFraction(w: WorkspaceOutcome): number {
     case "fetching":
       return 0.3;
     case "tagging": {
-      const planned = w.counts.tldAssign + w.counts.platformAssign;
+      const planned =
+        w.counts.tldAssign + w.counts.platformAssign + (w.pools ? w.pools.google + w.pools.microsoft : 0);
       return 0.5 + (planned > 0 ? ((w.assigned + w.failed) / planned) * 0.4 : 0.4);
     }
     case "verifying":
@@ -447,17 +491,34 @@ function JobCard({
 
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Metric label="Inboxes read" value={p.inboxesRead} />
-        <Metric label="TLD tags added" value={p.tldAssigned} tone={p.tldAssigned > 0 ? "success" : undefined} />
-        <Metric label="Platform tags added" value={p.platformAssigned} tone={p.platformAssigned > 0 ? "success" : undefined} />
+        {job.pools ? (
+          <Metric label="Pool tags added" value={p.poolAssigned} tone={p.poolAssigned > 0 ? "success" : undefined} />
+        ) : (
+          <Metric label="TLD tags added" value={p.tldAssigned} tone={p.tldAssigned > 0 ? "success" : undefined} />
+        )}
+        {job.pools ? (
+          <Metric label="Already in a pool" value={p.poolHad} />
+        ) : (
+          <Metric label="Platform tags added" value={p.platformAssigned} tone={p.platformAssigned > 0 ? "success" : undefined} />
+        )}
         <Metric label="Failed" value={p.failed} tone={p.failed > 0 ? "danger" : undefined} />
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        {formatNumber(p.tldHad)} already had a TLD tag · {formatNumber(p.platformHad)} already had a platform tag ·{" "}
-        {formatNumber(p.notInSheet)} not in the sheet
-        {p.tldNoTag > 0 && ` · ${formatNumber(p.tldNoTag)} with a TLD outside the set`}
-        {p.hostNoTag > 0 && ` · ${formatNumber(p.hostNoTag)} with a host outside the set`}
+        {job.pools ? (
+          <>
+            {formatNumber(p.poolHad)} already carried a pool tag and were skipped ·{" "}
+            {formatNumber(p.poolNone)} on neither provider
+          </>
+        ) : (
+          <>
+            {formatNumber(p.tldHad)} already had a TLD tag · {formatNumber(p.platformHad)} already had a platform tag ·{" "}
+            {formatNumber(p.notInSheet)} not in the sheet
+            {p.tldNoTag > 0 && ` · ${formatNumber(p.tldNoTag)} with a TLD outside the set`}
+            {p.hostNoTag > 0 && ` · ${formatNumber(p.hostNoTag)} with a host outside the set`}
+            {job.sheet && (job.sheet.note ? ` · ${job.sheet.note}` : ` · sheet: ${formatNumber(job.sheet.withHost)} domains with a host`)}
+          </>
+        )}
         {p.tagsCreated > 0 && ` · ${formatNumber(p.tagsCreated)} tag${p.tagsCreated === 1 ? "" : "s"} created`}
-        {job.sheet && (job.sheet.note ? ` · ${job.sheet.note}` : ` · sheet: ${formatNumber(job.sheet.withHost)} domains with a host`)}
       </p>
       {job.status === "interrupted" && (
         <p className="mt-3 text-xs text-warning">
@@ -505,14 +566,25 @@ function JobCard({
               {w.error && <p className="mt-1 text-danger">{w.error}</p>}
               {w.state !== "pending" && !w.error && (
                 <div className="mt-1 flex flex-wrap gap-1.5">
+                  {w.pools && (
+                    <span className={`rounded-full px-2 py-0.5 ${w.pools.google + w.pools.microsoft > 0 ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"}`}>
+                      Pools: {formatNumber(w.pools.google)} {POOL_TAGS.google.name} ·{" "}
+                      {formatNumber(w.pools.microsoft)} {POOL_TAGS.microsoft.name} ·{" "}
+                      {formatNumber(w.pools.has)} already · {formatNumber(w.pools.noPool)} on neither
+                    </span>
+                  )}
+                  {!w.pools && (
                   <span className={`rounded-full px-2 py-0.5 ${w.counts.tldAssign > 0 ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"}`}>
                     TLD: {formatNumber(w.counts.tldAssign)} added · {formatNumber(w.counts.tldHas)} had one
                     {w.counts.tldNoTag > 0 && ` · ${formatNumber(w.counts.tldNoTag)} outside the set`}
                   </span>
+                  )}
+                  {!w.pools && (
                   <span className={`rounded-full px-2 py-0.5 ${w.counts.platformAssign > 0 ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"}`}>
                     Platform: {formatNumber(w.counts.platformAssign)} added · {formatNumber(w.counts.platformHas)} had one · {formatNumber(w.counts.notInSheet)} not in sheet
                     {w.counts.hostNoTag > 0 && ` · ${formatNumber(w.counts.hostNoTag)} host outside the set`}
                   </span>
+                  )}
                   {w.failed > 0 && <span className="rounded-full bg-danger/10 px-2 py-0.5 text-danger">{formatNumber(w.failed)} failed</span>}
                   {w.tagsCreated.length > 0 && <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">created: {w.tagsCreated.join(", ")}</span>}
                 </div>

@@ -12,6 +12,7 @@ import { prepareBatch, type TagSpec } from "@/lib/tags/bulk-tags";
 import { chunk, verifyTags, ASSIGN_CHUNK, type InboxLite } from "@/lib/inbox-tags/plan";
 import { ACCOUNTS_MAX_PAGES, ACCOUNTS_PAGE, assignTag, readInboxPage, resolveTag } from "@/lib/inbox-tags/api";
 import { parseDomainHosts, planInboxes, topCounts } from "@/lib/tags/domain-tags";
+import { POOL_TAG_SET, planPools } from "@/lib/tags/pool-tags";
 import type { DomainTagsJob, DomainTagsStartPayload, WorkspaceOutcome } from "@/lib/jobs/domain-tags-types";
 import { MAX_STORED_ERRORS } from "@/lib/jobs/domain-tags-types";
 
@@ -101,6 +102,7 @@ async function loadOnce() {
         parsed.workspaces = Array.isArray(parsed.workspaces) ? parsed.workspaces : [];
         parsed.tldTags = Array.isArray(parsed.tldTags) ? parsed.tldTags : [];
         parsed.platformTags = Array.isArray(parsed.platformTags) ? parsed.platformTags : [];
+        parsed.pools = parsed.pools === true;
         parsed.errors = Array.isArray(parsed.errors) ? parsed.errors : [];
         records.set(parsed.id, parsed);
         meta.set(parsed.id, { fingerprint, aborted: false });
@@ -133,6 +135,15 @@ function activeIdFor(fp: string): string | null {
 
 const emptyCounts = () => ({ tldAssign: 0, tldHas: 0, tldNoTag: 0, platformAssign: 0, platformHas: 0, notInSheet: 0, hostNoTag: 0 });
 
+/** What a run is doing, for its card: only the sets it actually has. */
+function describeSets(tld: number, platform: number, pools: boolean): string {
+  const parts: string[] = [];
+  if (tld > 0) parts.push(`${tld} TLD tag${tld === 1 ? "" : "s"}`);
+  if (platform > 0) parts.push(`${platform} platform tag${platform === 1 ? "" : "s"}`);
+  if (pools) parts.push("pool tags by provider");
+  return parts.join(", ");
+}
+
 export async function createJob(apiKey: string, payload: DomainTagsStartPayload): Promise<string> {
   await loadOnce();
   const fp = fingerprintKey(apiKey);
@@ -147,7 +158,17 @@ export async function createJob(apiKey: string, payload: DomainTagsStartPayload)
       throw new Error(`${set} tag ${i + 1}: ${p.join(" ")}`);
     }
   }
-  if (tld.specs.length === 0) throw new Error("Add at least one TLD tag.");
+  // A run needs something to do: the domain sets, the pools, or both. The
+  // "Tag by provider" button starts a pools-only run with no domain tags.
+  const pools = payload.pools === true;
+  const domain = tld.specs.length > 0 || platform.specs.length > 0;
+  if (!domain && !pools) {
+    throw new Error("Nothing to tag: add at least one TLD tag, or tag by provider.");
+  }
+  // The domain pass is driven by the TLD set — the platform tags only reach
+  // inboxes whose domain is in the sheet, so platform tags on their own would
+  // quietly skip most of them.
+  if (domain && tld.specs.length === 0) throw new Error("Add at least one TLD tag.");
   const sheetUrl = payload.sheetUrl?.trim() || undefined;
   if (sheetUrl && !extractSheetId(sheetUrl)) throw new Error("Couldn't read a Google Sheets link. Paste the full share URL.");
 
@@ -156,12 +177,13 @@ export async function createJob(apiKey: string, payload: DomainTagsStartPayload)
   const n = payload.workspaces.length;
   const record: DomainTagsJob = {
     id,
-    label: `${tld.specs.length} TLD tag${tld.specs.length === 1 ? "" : "s"}${platform.specs.length > 0 ? `, ${platform.specs.length} platform tag${platform.specs.length === 1 ? "" : "s"}` : ""} · ${n} workspace${n === 1 ? "" : "s"}`,
+    label: `${describeSets(tld.specs.length, platform.specs.length, pools)} · ${n} workspace${n === 1 ? "" : "s"}`,
     status: "running",
     createdAt: now,
     updatedAt: now,
     tldTags: tld.specs,
     platformTags: platform.specs,
+    pools,
     sheetUrl,
     sheetTab: payload.sheetTab?.trim() || undefined,
     workspaces: payload.workspaces.map((w) => ({
@@ -174,7 +196,13 @@ export async function createJob(apiKey: string, payload: DomainTagsStartPayload)
       assigned: 0,
       failed: 0,
     })),
-    progress: { workspacesDone: 0, inboxesRead: 0, tldAssigned: 0, tldHad: 0, tldNoTag: 0, platformAssigned: 0, platformHad: 0, notInSheet: 0, hostNoTag: 0, failed: 0, tagsCreated: 0 },
+    progress: {
+      workspacesDone: 0, inboxesRead: 0,
+      tldAssigned: 0, tldHad: 0, tldNoTag: 0,
+      platformAssigned: 0, platformHad: 0, notInSheet: 0, hostNoTag: 0,
+      poolAssigned: 0, poolHad: 0, poolNone: 0,
+      failed: 0, tagsCreated: 0,
+    },
     errors: [],
   };
   records.set(id, record);
@@ -310,10 +338,11 @@ async function runWorkspace(
   } catch (err) {
     throw new Error(`Could not read the workspace's tags: ${msg(err)}`);
   }
-  let tldTags, platformTags;
+  let tldTags, platformTags, poolTags: { name: string; id: string }[];
   try {
     tldTags = await ensureTags(rec, ws, apiKey, existing, rec.tldTags);
     platformTags = await ensureTags(rec, ws, apiKey, existing, rec.platformTags);
+    poolTags = rec.pools ? await ensureTags(rec, ws, apiKey, existing, POOL_TAG_SET) : [];
   } catch (err) {
     throw new Error(`Could not find or create the tags: ${msg(err)}`);
   }
@@ -338,8 +367,25 @@ async function runWorkspace(
   }
 
   // 3. Plan, then assign per tag in chunks.
-  const plan = planInboxes(inboxes, tldTags, platformTags, hosts);
+  // A pools-only run has no domain tags, and planning against none of them
+  // would count every inbox as "TLD outside the set" and list its domain as
+  // unknown — numbers about a pass this run never made.
+  const doDomain = tldTags.length > 0 || platformTags.length > 0;
+  const plan = doDomain
+    ? planInboxes(inboxes, tldTags, platformTags, hosts)
+    : { assignments: new Map<string, string[]>(), counts: emptyCounts(), unknownTlds: new Map(), unknownHosts: new Map() };
   ws.counts = plan.counts;
+  // The pool pass reads the SAME inboxes — the provider is already on every
+  // one of them — so it costs no extra call, only the assignments it makes.
+  const poolPlan = rec.pools ? planPools(inboxes, poolTags) : null;
+  if (poolPlan) {
+    ws.pools = poolPlan.counts;
+    rec.progress.poolHad += poolPlan.counts.has;
+    rec.progress.poolNone += poolPlan.counts.noPool;
+    for (const [tagId, ids] of poolPlan.assignments) {
+      plan.assignments.set(tagId, [...(plan.assignments.get(tagId) ?? []), ...ids]);
+    }
+  }
   if (plan.unknownTlds.size > 0) ws.unknownTlds = topCounts(plan.unknownTlds);
   if (plan.unknownHosts.size > 0) ws.unknownHosts = topCounts(plan.unknownHosts);
   const p = rec.progress;
@@ -352,7 +398,8 @@ async function runWorkspace(
   await touch();
 
   const tldIds = new Set(tldTags.map((t) => t.id));
-  const nameOf = new Map([...tldTags, ...platformTags].map((t) => [t.id, t.name]));
+  const poolIds = new Set(poolTags.map((t) => t.id));
+  const nameOf = new Map([...tldTags, ...platformTags, ...poolTags].map((t) => [t.id, t.name]));
   const expected = new Map<string, string[]>();
   for (const [tagId, ids] of plan.assignments) {
     for (const part of chunk(ids, ASSIGN_CHUNK)) {
@@ -360,7 +407,8 @@ async function runWorkspace(
       try {
         await assignTag(apiKey, ws.workspaceId, part, tagId);
         ws.assigned += part.length;
-        if (tldIds.has(tagId)) p.tldAssigned += part.length;
+        if (poolIds.has(tagId)) p.poolAssigned += part.length;
+        else if (tldIds.has(tagId)) p.tldAssigned += part.length;
         else p.platformAssigned += part.length;
         for (const i of part) expected.set(i, [...(expected.get(i) ?? []), tagId]);
       } catch (err) {
