@@ -794,6 +794,15 @@ export function abortCampaignTypes(jobId: string, signal?: AbortSignal) {
   });
 }
 
+/** Continues a run a restart cut off. Returns the new run's id. */
+export function resumeCampaignTypes(jobId: string, signal?: AbortSignal) {
+  return request<{ jobId: string }>("/api/jobs/campaign-types/resume", {
+    method: "POST",
+    body: { jobId },
+    signal,
+  });
+}
+
 export function deleteCampaignTypesJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/campaign-types/delete", {
     method: "POST",

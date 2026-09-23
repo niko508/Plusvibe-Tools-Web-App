@@ -135,23 +135,50 @@ export function splitCounts(microsoft: number, other: number): SplitCounts {
   return splitCountsFor(microsoft, other, ALL_AVAILABLE);
 }
 
+/** Leads a copy already received, from an earlier run that was cut off. */
+export type Carried = Partial<Record<Exclude<Destination, "source">, number>>;
+
 /**
  * Assigns concrete leads to destinations. Order within each bucket is the order
  * given, so callers decide the ordering (we page leads in `_id` order, which is
  * stable across a resumed run).
+ *
+ * `carried` is what an interrupted run already moved. Those leads are no longer
+ * in the source, so a plain re-run would split only what is left — and the
+ * copy that was being filled when the run stopped would end up with its first
+ * share plus a fresh share of the rest. Instead the split is worked out on the
+ * whole, as the first run saw it, and each copy is given only what it is still
+ * short of. With nothing carried this is exactly the plain split.
  */
 export function planSplitFor<T>(
   microsoft: T[],
   other: T[],
-  avail: Availability = ALL_AVAILABLE
+  avail: Availability = ALL_AVAILABLE,
+  carried: Carried = {}
 ): SplitPlan<T> {
-  const counts = splitCountsFor(microsoft.length, other.length, avail);
+  const had = (d: Exclude<Destination, "source">) => Math.max(0, Math.floor(carried[d] ?? 0));
+  const whole = splitCountsFor(
+    microsoft.length + had("blue") + had("blueSignature") + had("blueOptOut"),
+    other.length + had("signature") + had("optOut"),
+    avail
+  );
 
   const moves: SplitPlan<T>["moves"] = [];
+  const counts: SplitCounts = { source: 0, optOut: 0, blue: 0, blueOptOut: 0, signature: 0, blueSignature: 0 };
   let at = 0;
   for (const d of ["blue", "blueSignature", "blueOptOut"] as const) {
-    moves.push({ destination: d, leads: microsoft.slice(at, at + counts[d]) });
-    at += counts[d];
+    const n = Math.min(Math.max(0, whole[d] - had(d)), microsoft.length - at);
+    moves.push({ destination: d, leads: microsoft.slice(at, at + n) });
+    counts[d] = n;
+    at += n;
+  }
+  // Only a resumed run can get here: a copy credited with more than its share
+  // leaves Microsoft leads over. They belong on the 🔵 side, not in the source.
+  if (at < microsoft.length && avail.blue) {
+    const blue = moves[0];
+    blue.leads = blue.leads.concat(microsoft.slice(at));
+    counts.blue += microsoft.length - at;
+    at = microsoft.length;
   }
   // Anything left of the Microsoft bucket had no 🔵 campaign to go to. It is
   // counted in `source` and simply not moved.
@@ -159,10 +186,14 @@ export function planSplitFor<T>(
 
   // The non-Microsoft bucket leads with the share that stays put, so the
   // ordering is the same one a full run uses.
-  let from = counts.source - strandedMicrosoft;
-  for (const d of ["signature", "optOut"] as const) {
-    moves.push({ destination: d, leads: other.slice(from, from + counts[d]) });
-    from += counts[d];
+  const signature = Math.min(Math.max(0, whole.signature - had("signature")), other.length);
+  const optOut = Math.min(Math.max(0, whole.optOut - had("optOut")), other.length - signature);
+  let from = other.length - signature - optOut;
+  counts.source = from + strandedMicrosoft;
+  for (const [d, n] of [["signature", signature], ["optOut", optOut]] as const) {
+    moves.push({ destination: d, leads: other.slice(from, from + n) });
+    counts[d] = n;
+    from += n;
   }
   return { counts, moves };
 }

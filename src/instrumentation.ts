@@ -30,5 +30,10 @@ export async function register() {
     // at six in the morning Helsinki time.
     const outreach = await import("@/lib/jobs/outreach-schedule");
     outreach.bootScheduler();
+
+    // Create All Campaign Types: a run a deploy cut off is picked up again,
+    // finishing the split it had started.
+    const campaignTypes = await import("@/lib/jobs/campaign-types");
+    void campaignTypes.bootResume().catch(() => undefined);
   }
 }

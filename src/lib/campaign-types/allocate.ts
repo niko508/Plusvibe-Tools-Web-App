@@ -141,11 +141,17 @@ export interface AllocPlan<T> {
  * exactly where they are. A bucket with no campaign picked strands its leads
  * rather than tipping them into the other bucket — a Microsoft lead does not
  * belong in a Google campaign just because that is the one that was picked.
+ *
+ * `carried` is what an interrupted run already put in each part. The division
+ * is worked out on the whole, as the first run would have made it, and each
+ * part gets only what it is still short of — so a resumed run finishes the
+ * split it started rather than making a second, lopsided one.
  */
 export function planAllocation<T>(
   leads: AllocLead<T>[],
   segment: string,
-  destinations: AllocDestination[]
+  destinations: AllocDestination[],
+  carried: Partial<Record<AllocRole, number>> = {}
 ): AllocPlan<T> {
   const want = segment.trim().toLowerCase();
   const mine = want === "" ? [] : leads.filter((l) => l.segment.trim().toLowerCase() === want);
@@ -160,21 +166,28 @@ export function planAllocation<T>(
     optOut: byRole.has("optOut"),
     signature: byRole.has("signature"),
   };
+  const had = (role: AllocRole) => (byRole.has(role) ? Math.max(0, Math.floor(carried[role] ?? 0)) : 0);
 
   const microsoft = mine.filter((l) => l.blue).map((l) => l.lead);
   const other = mine.filter((l) => !l.blue).map((l) => l.lead);
-  const counts = splitCountsFor(microsoft.length, other.length, avail);
-  // splitCountsFor assumes the plain campaign is always there, because in a
-  // normal run the leads are already sitting in it. Here they are not, so its
-  // share only moves if it was picked; otherwise those leads stay put.
-  const plain = byRole.get("source");
+  const msTotal = microsoft.length + had("blue") + had("blueSignature") + had("blueOptOut");
+  const otTotal = other.length + had("source") + had("signature") + had("optOut");
+  const counts = splitCountsFor(msTotal, otTotal, avail);
+  // splitCountsFor counts Microsoft leads with no 🔵 campaign into `source`,
+  // which is right in a normal run, where they are already sitting in it.
+  // Here they are not, so that part is taken back out of the plain share.
+  const msStranded = msTotal - counts.blue - counts.blueSignature - counts.blueOptOut;
+  const plainShare = counts.source - msStranded;
 
   const moves: AllocMove<T>[] = [];
   let stranded = 0;
-  const take = (role: AllocRole, from: T[], at: number, n: number): number => {
+  const take = (role: AllocRole, from: T[], at: number, want: number): number => {
+    const n = Math.min(Math.max(0, want - had(role)), from.length - at);
     const d = byRole.get(role);
     if (!d || n <= 0) return at;
-    moves.push({ campaignId: d.campaignId, campaignName: d.campaignName, role, leads: from.slice(at, at + n) });
+    const existing = moves.find((m) => m.campaignId === d.campaignId);
+    if (existing) existing.leads = existing.leads.concat(from.slice(at, at + n));
+    else moves.push({ campaignId: d.campaignId, campaignName: d.campaignName, role, leads: from.slice(at, at + n) });
     return at + n;
   };
 
@@ -182,21 +195,24 @@ export function planAllocation<T>(
   msAt = take("blue", microsoft, msAt, counts.blue);
   msAt = take("blueSignature", microsoft, msAt, counts.blueSignature);
   msAt = take("blueOptOut", microsoft, msAt, counts.blueOptOut);
-  // Microsoft leads with no 🔵 campaign picked are counted into `source` by
-  // the split, which is right when they are already there and wrong here.
-  const strandedMicrosoft = microsoft.length - msAt;
-  stranded += strandedMicrosoft;
+  // Left over only when a part was credited with more than its share on a
+  // resume: the plain 🔵 campaign takes them, if there is one.
+  if (byRole.has("blue")) msAt = take("blue", microsoft, msAt, microsoft.length - msAt + had("blue"));
+  stranded += microsoft.length - msAt;
 
   let otAt = 0;
-  if (plain) {
-    const n = counts.source - strandedMicrosoft;
-    otAt = take("source", other, otAt, n);
-  } else {
-    stranded += counts.source - strandedMicrosoft;
-    otAt += counts.source - strandedMicrosoft;
+  if (byRole.has("source")) otAt = take("source", other, otAt, plainShare);
+  else {
+    const n = Math.min(Math.max(0, plainShare), other.length);
+    stranded += n;
+    otAt += n;
   }
   otAt = take("signature", other, otAt, counts.signature);
   otAt = take("optOut", other, otAt, counts.optOut);
+  if (otAt < other.length) {
+    if (byRole.has("source")) otAt = take("source", other, otAt, other.length - otAt + had("source"));
+    stranded += other.length - otAt;
+  }
 
   return { moves, matched: mine.length, stranded, skipped };
 }

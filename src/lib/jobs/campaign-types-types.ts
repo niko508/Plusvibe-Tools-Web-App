@@ -171,6 +171,8 @@ export interface MoveTarget {
   moved: number;
   /** Planned for this campaign but left in the source: refused, or unconfirmed. */
   unmoved?: number;
+  /** Moved here by the interrupted run(s) this one continues. Not in `planned`. */
+  carried?: number;
   state: PhaseState;
 }
 
@@ -282,6 +284,20 @@ export interface CampaignTypesJob {
 
   errors: string[];
   errorsTruncated?: boolean;
+
+  /**
+   * What the run was started with — everything bar the API key — so it can
+   * be started again after a restart. Absent on records from before.
+   */
+  request?: CampaignTypesStartPayload;
+  /** When a restart cut the run off. */
+  interruptedAt?: number;
+  /** The run that picked this one up after it was interrupted. */
+  resumedAs?: string;
+  /** The interrupted run this one continues. */
+  resumedFrom?: string;
+  /** Why an automatic resume did not happen, when it could not. */
+  resumeBlocked?: string;
 }
 
 export interface SourceInput {
@@ -311,6 +327,8 @@ export interface AllocDestinationProgress {
   planned: number;
   moved: number;
   unmoved: number;
+  /** Moved here by the interrupted run(s) this one continues. Not in `planned`. */
+  carried?: number;
 }
 
 export interface AllocationProgress {
@@ -363,4 +381,13 @@ export interface CampaignTypesStartPayload {
   rules: SegmentRule[];
   /** Launch everything at the end. Off leaves the copies as drafts. */
   activate?: boolean;
+  /**
+   * Resuming only: leads an interrupted run already moved, per original and
+   * copy, so the split is finished rather than started over.
+   */
+  carry?: Record<string, Partial<Record<CreatedRole, number>>>;
+  /** Resuming a fix run only: leads already moved, per destination campaign id. */
+  carryAlloc?: Record<string, number>;
+  /** Resuming only: the run this one continues. */
+  resumedFrom?: string;
 }

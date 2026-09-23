@@ -9,6 +9,7 @@ import {
   startCampaignTypes,
   listCampaignTypesJobs,
   abortCampaignTypes,
+  resumeCampaignTypes,
   deleteCampaignTypesJob,
   ApiClientError,
 } from "@/lib/api-client";
@@ -22,6 +23,7 @@ import { Spinner, EmptyState } from "@/components/ui";
 import { LayersIcon, AlertIcon, ChevronDownIcon, CheckIcon, MoveIcon } from "@/components/icons";
 import { deriveNames } from "@/lib/campaign-types/names";
 import { isArchived, matchCompanions, normalizeName } from "@/lib/campaign-types/match";
+import { shouldAutoResume } from "@/lib/campaign-types/resume";
 import { JobCard } from "./job-card";
 
 const POLL_MS = 2000;
@@ -123,6 +125,45 @@ export function CampaignTypesTool() {
       void refreshJobs();
     }
   }, [ready, hasKey, loadWorkspaces, refreshJobs]);
+
+  // A run a server restart cut off is continued without being asked. The
+  // server does this itself at start-up when it has a key of its own; when it
+  // does not, the page does it with the key it holds, as soon as it sees one.
+  // Tried once per run per page, so a refusal is shown rather than retried.
+  const [resuming, setResuming] = useState<Set<string>>(() => new Set());
+  const resumeTried = useRef(new Set<string>());
+  const resume = useCallback(
+    async (id: string) => {
+      resumeTried.current.add(id);
+      setResuming((prev) => new Set(prev).add(id));
+      try {
+        await resumeCampaignTypes(id);
+        toggleJobs(true);
+      } catch (err) {
+        setError(errMessage(err));
+      } finally {
+        setResuming((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+        await refreshJobs();
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [refreshJobs]
+  );
+  useEffect(() => {
+    const now = Date.now();
+    // Oldest first, so the queue comes back in the order it was in.
+    const due = jobs
+      .filter((j) => shouldAutoResume(j, now, jobs) && !resumeTried.current.has(j.id))
+      .sort((a, b) => a.createdAt - b.createdAt);
+    if (due.length === 0) return;
+    void (async () => {
+      for (const j of due) await resume(j.id);
+    })();
+  }, [jobs, resume]);
 
   // Queued jobs need polling too — nothing else tells the page when one of them
   // reaches the front and starts.
@@ -764,6 +805,8 @@ export function CampaignTypesTool() {
                     setError(errMessage(err));
                   }
                 }}
+                onResume={resume}
+                resuming={resuming.has(job.id)}
                 onRemove={async (id) => {
                   try {
                     await deleteCampaignTypesJob(id);

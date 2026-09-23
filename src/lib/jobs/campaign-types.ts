@@ -17,7 +17,8 @@ import { duplicateCampaign, launchCampaign } from "@/lib/campaign-types/duplicat
 import { buildReuseIndex, matchCompanions, normalizeName } from "@/lib/campaign-types/match";
 import { rolesFor, type CampaignKind } from "@/lib/campaign-types/kinds";
 import { poolOf, sidesFor } from "@/lib/campaign-types/pools";
-import { classifyDestinations, planAllocation, type AllocDestination } from "@/lib/campaign-types/allocate";
+import { classifyDestinations, planAllocation, type AllocDestination, type AllocRole } from "@/lib/campaign-types/allocate";
+import { resumePayload, shouldAutoResume, supersededBy } from "@/lib/campaign-types/resume";
 import { describeUnmapped, planSegmentMoves, segmentKey, segmentOf, type SegmentRule } from "@/lib/campaign-types/segments";
 import { assignCampaignTag, readCampaignTags, resolvePoolTags, unassignCampaignTag } from "@/lib/campaign-types/tag-campaigns";
 import type { CampaignSummary } from "@/lib/plusvibe-types";
@@ -86,11 +87,28 @@ interface JobMeta {
   aborted: boolean;
 }
 
-const records = new Map<string, CampaignTypesJob>();
-const meta = new Map<string, JobMeta>();
-/** Ids waiting to run, oldest first, across every API key. */
-const queue: string[] = [];
-let loaded = false;
+// Next.js bundles the start-up hook (instrumentation) and the API routes
+// separately, so this module is loaded twice in one process. Were the jobs
+// kept in module variables, a run the start-up hook picked up would be
+// invisible to the routes — which, loading the file it keeps writing, would
+// take it for dead and show it as interrupted while it ran. So the state
+// lives in one place on the process, and both copies share it.
+interface SharedState {
+  records: Map<string, CampaignTypesJob>;
+  meta: Map<string, JobMeta>;
+  /** Ids waiting to run, oldest first, across every API key. */
+  queue: string[];
+  loaded: boolean;
+}
+const shared: SharedState = ((globalThis as { __pvCampaignTypesJobs?: SharedState }).__pvCampaignTypesJobs ??= {
+  records: new Map(),
+  meta: new Map(),
+  queue: [],
+  loaded: false,
+});
+const records = shared.records;
+const meta = shared.meta;
+const queue = shared.queue;
 
 /** Stops one runaway page from stacking up an unbounded backlog. */
 const MAX_QUEUED = 25;
@@ -134,6 +152,7 @@ function flushRunningSync() {
     const m = meta.get(id);
     if (!m) continue;
     rec.status = "interrupted";
+    rec.interruptedAt = Date.now();
     // Every phase, source and target inside that was mid-way, too — or the
     // card keeps a spinner on each and the run looks as if it is still going.
     settleRunning(rec);
@@ -285,8 +304,8 @@ function migrateRecord(raw: CampaignTypesJob): CampaignTypesJob {
 }
 
 async function loadOnce() {
-  if (loaded) return;
-  loaded = true;
+  if (shared.loaded) return;
+  shared.loaded = true;
   try {
     await ensureDir();
     for (const f of await fs.readdir(JOBS_DIR)) {
@@ -303,6 +322,7 @@ async function loadOnce() {
         if (parsed.status === "running" || parsed.status === "queued") {
           parsed.status = "interrupted";
           parsed.updatedAt = parsed.updatedAt || Date.now();
+          parsed.interruptedAt = parsed.interruptedAt ?? Date.now();
         }
         // Nothing is running at load, so nothing inside may say it is. This
         // also mends records saved before the shutdown settled them, which is
@@ -512,7 +532,12 @@ export async function createJob(apiKey: string, payload: CampaignTypesStartPaylo
       processed: 0,
       moved: 0,
     },
-    sources: payload.sources.map((s) => newSourceRun(s, roles, mode === "create" ? "create" : "move", activate)),
+    sources: payload.sources.map((s) => {
+      const run = newSourceRun(s, roles, mode === "create" ? "create" : "move", activate);
+      const carried = payload.carry?.[s.campaignId] ?? {};
+      for (const t of run.moving.targets) if ((carried[t.role] ?? 0) > 0) t.carried = carried[t.role];
+      return run;
+    }),
     // A fix run keeps its own progress: the sources are read and nothing else,
     // so none of a SourceRun's phases apply to them.
     ...(mode === "fix"
@@ -531,6 +556,7 @@ export async function createJob(apiKey: string, payload: CampaignTypesStartPaylo
               planned: 0,
               moved: 0,
               unmoved: 0,
+              ...((payload.carryAlloc?.[d.campaignId] ?? 0) > 0 ? { carried: payload.carryAlloc?.[d.campaignId] } : {}),
             })),
             leadsFound: 0,
             matched: 0,
@@ -542,6 +568,10 @@ export async function createJob(apiKey: string, payload: CampaignTypesStartPaylo
       : {}),
     tagging: { targets: [], tagsCreated: [] },
     errors: [],
+    // Kept so the run can be started again after a restart. The carry is left
+    // out: it is worked out afresh from this record's own progress then.
+    request: { ...payload, carry: undefined, carryAlloc: undefined, resumedFrom: undefined },
+    ...(payload.resumedFrom ? { resumedFrom: payload.resumedFrom } : {}),
   };
 
   records.set(id, record);
@@ -597,7 +627,19 @@ interface MoveResult {
  */
 async function moveInto(
   ctx: RunCtx,
-  opts: { from: string; to: string; toName: string; leads: RawLead[]; onProgress: (n: number) => void }
+  opts: {
+    from: string;
+    to: string;
+    toName: string;
+    leads: RawLead[];
+    onProgress: (n: number) => void;
+    /**
+     * After every chunk: how many of it landed and how many stayed behind.
+     * Counting as it goes is what lets a run cut off mid-way say exactly how
+     * far it got — and a resumed one finish the split rather than redo it.
+     */
+    onChunk?: (moved: number, unmoved: number) => void;
+  }
 ): Promise<MoveResult> {
   const { rec, m, apiKey, workspaceId, check } = ctx;
   const result: MoveResult = { moved: 0, unmoved: [], inBoth: 0 };
@@ -611,6 +653,7 @@ async function moveInto(
     if (ctx.quotaHit) {
       // The plan is full; every further add would be turned away.
       result.unmoved.push(...chunk.map((c) => ({ email: c.email, reason: "overflow" as UnmovedReason })));
+      opts.onChunk?.(0, chunk.length);
       opts.onProgress(chunk.length);
       continue;
     }
@@ -624,6 +667,7 @@ async function moveInto(
         chunk,
         isAborted: () => m.aborted,
       });
+    const before = { moved: result.moved, unmoved: result.unmoved.length };
     let outcome = await attempt();
     // A failed add changed nothing, so it gets one more go after a pause:
     // the usual cause is a passing 5xx or a rate-limit hiccup.
@@ -662,6 +706,7 @@ async function moveInto(
       }
     }
 
+    opts.onChunk?.(result.moved - before.moved, result.unmoved.length - before.unmoved);
     opts.onProgress(chunk.length);
     rec.updatedAt = Date.now();
     if (++ctx.sinceFlush >= PERSIST_EVERY) {
@@ -726,49 +771,54 @@ async function runFixAllocation(ctx: RunCtx, payload: CampaignTypesStartPayload)
   }
   check();
 
-  // 2. Plan, per source, so each move knows where its leads came from — the
-  //    move is an add to the destination and then a delete from the source.
+  // 2. Plan once, across every source, so the parts are divided as one whole.
+  //    Each lead keeps a note of where it came from, since the move is an add
+  //    to the destination and then a delete from that source.
   const destinations = alloc.destinations.map(
     (d) => ({ campaignId: d.campaignId, campaignName: d.campaignName, role: d.role }) as AllocDestination
   );
+  const all: { lead: { raw: RawLead; from: string }; segment: string; blue: boolean }[] = [];
   for (const src of snapshot) {
     check();
     // Which side each lead is on, the same way a normal run decides it: by
     // resolving the sending domain, not by trusting a field on the lead.
     const resolution = await resolveLeadEsps(src.leads, { isAborted: () => ctx.m.aborted });
-    const plan = planAllocation(
-      resolution.classified.map(({ lead, esp }) => ({
-        lead,
-        segment: segmentOf(lead),
-        blue: esp !== "GOOGLE",
-      })),
-      alloc.segment,
-      destinations
-    );
-    alloc.matched += plan.matched;
-    alloc.stranded += plan.stranded;
-    for (const mv of plan.moves) {
-      const d = alloc.destinations.find((x) => x.campaignId === mv.campaignId);
-      if (d) d.planned += mv.leads.length;
+    for (const { lead, esp } of resolution.classified) {
+      all.push({ lead: { raw: lead, from: src.campaignId }, segment: segmentOf(lead), blue: esp !== "GOOGLE" });
     }
-    await persist(id);
+  }
+  // A resumed run finishes the division the interrupted one started.
+  const carried: Partial<Record<AllocRole, number>> = {};
+  for (const d of alloc.destinations) if ((d.carried ?? 0) > 0) carried[d.role as AllocRole] = d.carried;
+  const plan = planAllocation(all, alloc.segment, destinations, carried);
+  alloc.matched = plan.matched;
+  alloc.stranded = plan.stranded;
+  for (const mv of plan.moves) {
+    const d = alloc.destinations.find((x) => x.campaignId === mv.campaignId);
+    if (d) d.planned += mv.leads.length;
+  }
+  await persist(id);
 
-    for (const mv of plan.moves) {
+  for (const mv of plan.moves) {
+    const d = alloc.destinations.find((x) => x.campaignId === mv.campaignId);
+    for (const src of snapshot) {
       check();
-      if (mv.leads.length === 0) continue;
+      const leads = mv.leads.filter((l) => l.from === src.campaignId).map((l) => l.raw);
+      if (leads.length === 0) continue;
       const res = await moveInto(ctx, {
         from: src.campaignId,
         to: mv.campaignId,
         toName: mv.campaignName,
-        leads: mv.leads,
+        leads,
         onProgress: () => undefined,
+        onChunk: (moved, unmoved) => {
+          alloc.moved += moved;
+          if (d) {
+            d.moved += moved;
+            d.unmoved += unmoved;
+          }
+        },
       });
-      const d = alloc.destinations.find((x) => x.campaignId === mv.campaignId);
-      if (d) {
-        d.moved += res.moved;
-        d.unmoved += res.unmoved.length;
-      }
-      alloc.moved += res.moved;
       if (res.unmoved.length > 0) {
         const reasons: Record<string, number> = {};
         countReasons(res.unmoved, reasons);
@@ -788,7 +838,9 @@ async function runFixAllocation(ctx: RunCtx, payload: CampaignTypesStartPayload)
       `${alloc.stranded} lead(s) carry "${alloc.segment}" but no campaign was picked for their side, so they stayed where they were. Pick one for every side you want filled.`
     );
   }
-  if (alloc.matched === 0) {
+  // On a resumed run, nothing left to move is the good outcome.
+  const movedEarlier = alloc.destinations.some((d) => (d.carried ?? 0) > 0);
+  if (alloc.matched === 0 && !movedEarlier) {
     pushError(
       rec,
       `No lead in the campaigns read carries the segment "${alloc.segment}". Check the spelling against the leads — it is matched exactly, bar case and spaces.`
@@ -1210,7 +1262,11 @@ async function runSource(
   // its share stays with the campaigns in the same pool that are there.
   const availability: Availability = { blue: false, blueOptOut: false, blueSignature: false, optOut: false, signature: false };
   for (const role of CREATED_ROLES) availability[role] = !!src.created.find((c) => c.role === role)?.campaignId;
-  const plan = planSplitFor(sides.blue, sides.plain, availability);
+  // A resumed run finishes the split the interrupted one started, rather than
+  // dividing what is left as if nothing had moved.
+  const carried: Partial<Record<CreatedRole, number>> = {};
+  for (const t of src.moving.targets) if ((t.carried ?? 0) > 0) carried[t.role] = t.carried;
+  const plan = planSplitFor(sides.blue, sides.plain, availability, carried);
   src.moving.staysInSource = plan.counts.source;
   for (const t of src.moving.targets) t.planned = plan.counts[t.role];
   src.moving.plannedTotal = src.moving.targets.reduce((n, t) => n + t.planned, 0);
@@ -1239,12 +1295,16 @@ async function runSource(
       onProgress: (n) => {
         src.moving.processed += n;
       },
+      onChunk: (moved, unmoved) => {
+        target.moved += moved;
+        if (unmoved > 0) {
+          target.unmoved = (target.unmoved ?? 0) + unmoved;
+          src.moving.unmoved = (src.moving.unmoved ?? 0) + unmoved;
+        }
+      },
     });
-    target.moved += res.moved;
     if (res.unmoved.length > 0) {
       countReasons(res.unmoved, reasons);
-      target.unmoved = (target.unmoved ?? 0) + res.unmoved.length;
-      src.moving.unmoved = (src.moving.unmoved ?? 0) + res.unmoved.length;
       src.moving.unmovedReasons = { ...reasons };
       moveProblems = true;
     }
@@ -1562,6 +1622,86 @@ export async function abortJob(apiKey: string, id: string): Promise<boolean> {
     await persist(id);
   }
   return true;
+}
+
+// --- Resuming after a restart ------------------------------------------------
+
+/**
+ * Starts an interrupted run again, as a new run that carries what the old one
+ * already moved. The old record stays, pointing at the new one.
+ *
+ * Returns the new run's id, or throws with a reason a person can act on.
+ */
+export async function resumeJob(apiKey: string, id: string): Promise<string> {
+  await loadOnce();
+  const rec = records.get(id);
+  const m = meta.get(id);
+  if (!rec || !m || m.fingerprint !== fingerprintKey(apiKey)) throw new QueueRejectedError("Run not found.");
+  if (rec.resumedAs) {
+    if (records.has(rec.resumedAs)) return rec.resumedAs;
+    throw new QueueRejectedError("This run was already continued.");
+  }
+  if (rec.status !== "interrupted") throw new QueueRejectedError("Only a run cut off by a restart can be continued.");
+  const later = supersededBy(
+    rec,
+    [...meta.entries()].filter(([, om]) => om.fingerprint === m.fingerprint).map(([oid]) => records.get(oid)).filter((r): r is CampaignTypesJob => !!r)
+  );
+  if (later) {
+    throw new QueueRejectedError(
+      `"${later.label}" was started after this run and reads the same campaign, so continuing this one would split those leads twice. Remove this card instead.`
+    );
+  }
+  const payload = resumePayload(rec);
+  if (!payload) throw new QueueRejectedError("This run is too old to continue on its own — start it again from the form.");
+
+  // Claimed before anything is awaited, so a second click, a second tab or
+  // the boot-time pass cannot start it twice.
+  rec.resumedAs = "pending";
+  try {
+    const newId = await createJob(apiKey, { ...payload, resumedFrom: id });
+    rec.resumedAs = newId;
+    rec.resumeBlocked = undefined;
+    rec.updatedAt = Date.now();
+    await persist(id);
+    return newId;
+  } catch (err) {
+    rec.resumedAs = undefined;
+    throw err;
+  }
+}
+
+/**
+ * At server start: picks up every run the restart cut off, in the order they
+ * were started, so a deploy costs a pause rather than the run.
+ *
+ * The API key those runs used lived only in memory, so this needs the
+ * server's own key, and only for runs that were started with that same key.
+ * Anything else is left for the next time the tool is opened, which continues
+ * it with the key the browser holds.
+ */
+export async function bootResume(): Promise<void> {
+  await loadOnce();
+  const serverKey = process.env.PLUSVIBE_API_KEY?.trim() || null;
+  const fp = serverKey ? fingerprintKey(serverKey) : null;
+  const now = Date.now();
+  const due = [...records.values()]
+    .filter((r) => shouldAutoResume(r, now, [...records.values()]))
+    .sort((a, b) => a.createdAt - b.createdAt);
+  for (const rec of due) {
+    const m = meta.get(rec.id);
+    if (!m) continue;
+    if (!serverKey || m.fingerprint !== fp) {
+      rec.resumeBlocked = "no-key";
+      await persist(rec.id);
+      continue;
+    }
+    try {
+      await resumeJob(serverKey, rec.id);
+    } catch (err) {
+      rec.resumeBlocked = msg(err);
+      await persist(rec.id);
+    }
+  }
 }
 
 export async function deleteJob(apiKey: string, id: string): Promise<boolean> {

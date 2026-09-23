@@ -22,10 +22,15 @@ export function JobCard({
   job,
   onAbort,
   onRemove,
+  onResume,
+  resuming,
 }: {
   job: CampaignTypesJob;
   onAbort: (id: string) => void | Promise<void>;
   onRemove: (id: string) => void | Promise<void>;
+  onResume?: (id: string) => void | Promise<void>;
+  /** A continue is on its way for this run. */
+  resuming?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const status = STATUS_META[job.status] ?? STATUS_META.error;
@@ -84,6 +89,7 @@ export function JobCard({
                 <span className="min-w-0 truncate text-xs">{d.campaignName}</span>
                 <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
                   {formatNumber(d.moved)} / {formatNumber(d.planned)}
+                  {d.carried ? ` · +${formatNumber(d.carried)} earlier` : ""}
                   {d.unmoved > 0 ? ` · ${formatNumber(d.unmoved)} did not arrive` : ""}
                 </span>
               </div>
@@ -223,10 +229,22 @@ export function JobCard({
       )}
 
       {job.status === "interrupted" && (
-        <p className="mt-2 text-xs text-warning">
-          {job.startedAt
-            ? "Interrupted by a server restart. Leads already moved are in their new campaigns — start again to finish the rest."
-            : "Still queued when the server restarted, so it never began. Nothing was created — start it again."}
+        <p className="mt-2 text-xs text-warning" data-interrupted>
+          {job.resumedAs && job.resumedAs !== "pending"
+            ? job.startedAt
+              ? "Interrupted by a server restart, and picked up again as the run above — it finishes the split this one started. Nothing to do here."
+              : "Still queued when the server restarted, so it was queued again as the run above. Nothing to do here."
+            : resuming
+              ? "Interrupted by a server restart — picking it up again…"
+              : job.startedAt
+                ? "Interrupted by a server restart. Leads already moved are in their new campaigns. Continue picks up where it stopped and finishes the same split."
+                : "Still queued when the server restarted, so it never began. Nothing was created — continue to queue it again."}
+        </p>
+      )}
+      {job.resumedFrom && (
+        <p className="mt-2 text-xs text-muted-foreground" data-resumed-from>
+          Continues a run a server restart cut off. The leads that run had already moved are counted, so the split comes out
+          as one.
         </p>
       )}
 
@@ -236,7 +254,14 @@ export function JobCard({
             {queued ? "Cancel" : "Stop task"}
           </button>
         ) : (
-          <RemoveJobButton onRemove={() => onRemove(job.id)} />
+          <>
+            {job.status === "interrupted" && !job.resumedAs && onResume && (
+              <button type="button" className="pv-btn-primary" data-resume disabled={resuming} onClick={() => onResume(job.id)}>
+                {resuming ? <Spinner size={12} /> : null} Continue run
+              </button>
+            )}
+            <RemoveJobButton onRemove={() => onRemove(job.id)} />
+          </>
         )}
         <button type="button" className="pv-btn-ghost" onClick={() => setOpen((v) => !v)}>
           {open ? "Hide details" : "Details"}
@@ -307,8 +332,9 @@ function SourceBlock({ source, mode, running }: { source: SourceRun; mode: Campa
               <Metric
                 key={t.role}
                 label={shortName(t.name)}
-                sub={`${formatNumber(t.moved)} of ${formatNumber(t.planned)} moved${t.unmoved ? ` · ${formatNumber(t.unmoved)} stayed` : ""}`}
-                value={t.planned}
+                sub={`${formatNumber(t.moved)} of ${formatNumber(t.planned)} moved${t.carried ? ` · +${formatNumber(t.carried)} earlier` : ""}${t.unmoved ? ` · ${formatNumber(t.unmoved)} stayed` : ""}`}
+                // A continued run shows the copy's whole share, earlier moves included.
+                value={t.planned + (t.carried ?? 0)}
                 tone={t.state === "error" ? "danger" : undefined}
               />
             ))}
