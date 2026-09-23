@@ -38,12 +38,35 @@ export const UNMOVED_LABELS: Record<UnmovedReason, string> = {
   "add-failed": "the add call failed",
 };
 
-// Deliberately loose: the point is to catch what Plusvibe will refuse, not to
-// police addresses. One @, something either side, a dot in the domain part.
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Plusvibe's own rule, as it quotes it when it refuses a batch:
+//
+//   "leads[60].email" … fails to match the required pattern:
+//   /^[a-z0-9]([a-z0-9._-]*[a-z0-9])?@[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{1,}$/i
+//
+// The point is to catch what Plusvibe will refuse BEFORE sending, because it
+// refuses the whole batch for one bad address — a single plus-addressed lead
+// ("it+tag@x.com") used to take ninety-nine good ones down with it. So this
+// matches Plusvibe exactly, strict or not, rather than what an email is.
+const EMAIL_RE = /^[a-z0-9]([a-z0-9._-]*[a-z0-9])?@[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{1,}$/i;
 
 export function isValidEmail(email: string): boolean {
   return EMAIL_RE.test(email.trim());
+}
+
+/**
+ * The lead a refused batch names, if it names one.
+ *
+ * Plusvibe validates a batch as a whole and fails it on the first bad lead,
+ * naming it by position — `"leads[60].email"`, or `leads>60>email` in the
+ * path form. Knowing which lies at the heart of not losing the other 99: drop
+ * that one and send the rest again. Null when the message names no lead, which
+ * means the failure is about the batch rather than one of its leads.
+ */
+export function rejectedIndex(message: string): number | null {
+  const m = /leads\[(\d+)\]/.exec(message) ?? /leads>(\d+)>/.exec(message);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isInteger(n) && n >= 0 ? n : null;
 }
 
 /** Splits a chunk into the leads worth sending and the ones to leave behind. */

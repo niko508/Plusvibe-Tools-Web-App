@@ -7,6 +7,7 @@ import {
   accountFor,
   prepareChunk,
   readAddCounts,
+  rejectedIndex,
   type UnmovedLead,
   type UnmovedReason,
 } from "@/lib/move-leads-plan";
@@ -27,6 +28,14 @@ import {
 // source and is named. A refused lead is never a reason to stop the run.
 
 export const MOVE_CHUNK = 100;
+
+/**
+ * The most leads one chunk will drop for being named in a refusal before it
+ * gives up on the chunk. Enough for a list with a few odd addresses in it; low
+ * enough that a batch refused for a reason that isn't about any one lead
+ * fails in a handful of calls rather than a hundred.
+ */
+const MAX_PEELED = 10;
 
 export type MoveChunkOutcome =
   | {
@@ -64,19 +73,36 @@ export async function moveLeadChunk(params: {
 }): Promise<MoveChunkOutcome> {
   const { apiKey, workspaceId, sourceCampaignId, destinationCampaignId, chunk } = params;
 
-  const { send, unmoved } = prepareChunk(chunk);
+  const prepared = prepareChunk(chunk);
+  const unmoved = prepared.unmoved;
+  let send = prepared.send;
   if (send.length === 0) {
     return { ok: true, uploaded: 0, alreadyThere: 0, deleted: 0, unmoved, confirmedIndividually: 0, quotaHit: false };
   }
 
-  await acquireSlot();
-  if (params.isAborted()) return { ok: false, stage: "add", reason: "aborted", unmoved };
-
-  let raw: Record<string, unknown>;
-  try {
-    raw = await addLeads(apiKey, workspaceId, destinationCampaignId, send);
-  } catch (err) {
-    return { ok: false, stage: "add", reason: message(err), unmoved };
+  // Plusvibe validates a batch whole and refuses all of it for one bad lead,
+  // naming that lead by position. Resending the same batch can only fail the
+  // same way, so the named lead is taken out and the rest go again — up to a
+  // bound, so a batch Plusvibe refuses for some other reason still gives up.
+  let raw: Record<string, unknown> | null = null;
+  for (let peeled = 0; ; peeled++) {
+    await acquireSlot();
+    if (params.isAborted()) return { ok: false, stage: "add", reason: "aborted", unmoved };
+    try {
+      raw = await addLeads(apiKey, workspaceId, destinationCampaignId, send);
+      break;
+    } catch (err) {
+      const reason = message(err);
+      const at = rejectedIndex(reason);
+      if (at === null || at >= send.length || peeled >= MAX_PEELED) {
+        return { ok: false, stage: "add", reason, unmoved };
+      }
+      unmoved.push({ email: send[at].email, reason: "rejected", detail: reason });
+      send = send.filter((_, i) => i !== at);
+      if (send.length === 0) {
+        return { ok: true, uploaded: 0, alreadyThere: 0, deleted: 0, unmoved, confirmedIndividually: 0, quotaHit: false };
+      }
+    }
   }
 
   const counts = readAddCounts(raw);

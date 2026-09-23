@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "crypto";
 import { promises as fs, mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import { onShutdownFlush } from "@/lib/jobs/shutdown";
+import { settleRunning } from "@/lib/jobs/settle";
 import { acquireSlot } from "@/lib/jobs/rate-limit";
 import { plusvibePost, plusvibePut } from "@/lib/plusvibe-server";
 import { listTags } from "@/lib/plusvibe-tags";
@@ -123,6 +124,8 @@ function flushRunningSync() {
     const m = meta.get(id);
     if (!m) continue;
     rec.status = "interrupted";
+    // Its steps too, or each keeps its spinner and the run looks alive.
+    settleRunning(rec);
     rec.updatedAt = Date.now();
     try {
       writeFileSync(fileFor(id), JSON.stringify({ ...rec, fingerprint: m.fingerprint }), "utf8");
@@ -148,6 +151,8 @@ async function loadOnce() {
         const fingerprint = parsed.fingerprint ?? "";
         delete (parsed as { fingerprint?: string }).fingerprint;
         if (live(parsed)) parsed.status = "interrupted";
+        // Nothing runs at load; mends runs saved before steps were settled.
+        settleRunning(parsed);
         parsed.steps = Array.isArray(parsed.steps) ? parsed.steps : [];
         parsed.errors = Array.isArray(parsed.errors) ? parsed.errors : [];
         parsed.notMoved = Array.isArray(parsed.notMoved) ? parsed.notMoved : [];

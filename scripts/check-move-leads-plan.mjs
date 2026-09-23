@@ -28,7 +28,22 @@ eq("addresses that aren't are left behind and named",
   p.unmoved.filter((u) => u.reason === "invalid-email").map((u) => u.email), ["not-an-email", "c@x"]);
 eq("a clean chunk is sent whole", prepareChunk([L("a@x.com"), L("b@x.com")]).unmoved, []);
 eq("an empty chunk", prepareChunk([]), { send: [], unmoved: [] });
-eq("the validator is loose, not a policeman", [isValidEmail("first.last+tag@sub.domain.co"), isValidEmail("a@b.c"), isValidEmail("a b@x.com"), isValidEmail("@x.com")], [true, true, false, false]);
+// The check matches Plusvibe's own rule, strict or not, because Plusvibe
+// refuses a whole batch for one address it won't take. This used to accept
+// "+" and let a single plus-addressed lead sink ninety-nine good ones.
+eq("ordinary addresses pass", [isValidEmail("first.last@sub.domain.co"), isValidEmail("a_b-c@x.com"), isValidEmail("A@B.CO")], [true, true, true]);
+eq("the address that sank a real batch is caught before sending",
+  isValidEmail("agency-it+exteriorscc@voicemediagroup.com"), false);
+eq("…as is any plus address", isValidEmail("first.last+tag@sub.domain.co"), false);
+eq("a local part may not start or end on punctuation", [isValidEmail(".a@x.com"), isValidEmail("a.@x.com"), isValidEmail("-a@x.com")], [false, false, false]);
+eq("…and the obvious non-addresses still fail", [isValidEmail("a b@x.com"), isValidEmail("@x.com"), isValidEmail("a@x"), isValidEmail("")], [false, false, false, false]);
+
+// --- which lead a refused batch names -----------------------------------------------
+const { rejectedIndex } = m;
+eq("the lead named in Plusvibe's message is found",
+  rejectedIndex('leads>60>email: "leads[60].email" with value "agency-it+exteriorscc@voicemediagroup.com" fails to match the required pattern'), 60);
+eq("…in either of the forms it uses", [rejectedIndex('"leads[0].email" is required'), rejectedIndex("leads>7>first_name: too long")], [0, 7]);
+eq("a refusal naming no lead is about the batch, and says so", [rejectedIndex("Campaign not found"), rejectedIndex("")], [null, null]);
 
 // --- what came back -------------------------------------------------------------
 const c = readAddCounts({ status: "success", total_sent: 100, leads_uploaded: 99, duplicate_email_count: 0, already_in_campaign: 0, invalid_email_count: 1, skipped: 0, overflowed_lead_count: 0 });

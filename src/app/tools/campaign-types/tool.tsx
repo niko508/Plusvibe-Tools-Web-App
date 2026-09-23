@@ -362,7 +362,7 @@ export function CampaignTypesTool() {
               ? "Sorts the leads by segment, builds the campaign types for each original, splits the leads into them and tags the pools."
               : mode === "move"
                 ? "The copies already exist: this sorts by segment, splits each original's not-contacted leads into them and tags the pools."
-                : "Puts leads where they should have gone: takes everything carrying one segment out of the campaigns you name and splits it into the ones you pick. Builds nothing, launches nothing."}
+                : "Puts leads where they should have gone: takes everything carrying one segment out of the campaigns you name and splits it into the ones you pick. Builds nothing; at the end, every campaign on both sides is checked and launched if it is not already active."}
           </span>
         </div>
 

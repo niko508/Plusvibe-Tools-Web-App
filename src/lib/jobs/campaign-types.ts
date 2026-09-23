@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "crypto";
 import { promises as fs, mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import { onShutdownFlush } from "@/lib/jobs/shutdown";
+import { settleRunning } from "@/lib/jobs/settle";
 import { fetchCampaignLeads, leadToPayload, type LeadPayload, type RawLead } from "@/lib/plusvibe-leads";
 import { listCampaigns } from "@/lib/plusvibe-campaigns";
 import { moveLeadChunk, MOVE_CHUNK } from "@/lib/move-leads-core";
@@ -22,6 +23,8 @@ import { assignCampaignTag, readCampaignTags, resolvePoolTags, unassignCampaignT
 import type { CampaignSummary } from "@/lib/plusvibe-types";
 import type {
   ActivationTarget,
+  AllocActivation,
+  AllocationProgress,
   CampaignRole,
   CampaignTypesJob,
   CampaignTypesMode,
@@ -131,6 +134,9 @@ function flushRunningSync() {
     const m = meta.get(id);
     if (!m) continue;
     rec.status = "interrupted";
+    // Every phase, source and target inside that was mid-way, too — or the
+    // card keeps a spinner on each and the run looks as if it is still going.
+    settleRunning(rec);
     rec.updatedAt = Date.now();
     try {
       writeFileSync(fileFor(id), JSON.stringify({ ...rec, fingerprint: m.fingerprint }), "utf8");
@@ -298,6 +304,10 @@ async function loadOnce() {
           parsed.status = "interrupted";
           parsed.updatedAt = parsed.updatedAt || Date.now();
         }
+        // Nothing is running at load, so nothing inside may say it is. This
+        // also mends records saved before the shutdown settled them, which is
+        // every interrupted run written before this line existed.
+        settleRunning(parsed);
         records.set(parsed.id, migrateRecord(parsed));
         meta.set(parsed.id, { fingerprint, aborted: false });
       } catch {
@@ -784,8 +794,129 @@ async function runFixAllocation(ctx: RunCtx, payload: CampaignTypesStartPayload)
       `No lead in the campaigns read carries the segment "${alloc.segment}". Check the spelling against the leads — it is matched exactly, bar case and spaces.`
     );
   }
+  // 3. Every campaign it touched, running. A source emptied of the segment
+  //    and a destination that was a draft both need launching before a single
+  //    email goes out, and having to find and start each one in Plusvibe by
+  //    hand is exactly the step that gets forgotten.
+  await activateAllocation(ctx, alloc);
+
   alloc.state = "done";
   rec.phaseStates.segmenting = "done";
+  rec.updatedAt = Date.now();
+  await persist(id);
+}
+
+/** What Plusvibe calls a campaign that is sending. */
+function isRunning(status: string | undefined): boolean {
+  const s = (status ?? "").trim().toUpperCase();
+  return s === "ACTIVE" || s === "RUNNING";
+}
+
+/**
+ * Checks every source and destination, launches the ones not running, and
+ * reads them back to be sure. A campaign that cannot be launched is reported
+ * by name with Plusvibe's own reason — most often an empty campaign, which
+ * Plusvibe refuses to start — and never undoes the moves: the leads are where
+ * they belong either way, and a launch is one click in Plusvibe.
+ */
+async function activateAllocation(ctx: RunCtx, alloc: AllocationProgress) {
+  const { rec, apiKey, workspaceId, check, id } = ctx;
+  const list: AllocActivation[] = [];
+  const seen = new Set<string>();
+  const add = (c: { campaignId: string; campaignName: string }, side: AllocActivation["side"]) => {
+    if (!c.campaignId || seen.has(c.campaignId)) return;
+    seen.add(c.campaignId);
+    list.push({ campaignId: c.campaignId, campaignName: c.campaignName, side, state: "pending" });
+  };
+  for (const s of alloc.sources) add(s, "source");
+  for (const d of alloc.destinations) add(d, "destination");
+  alloc.activation = list;
+  await persist(id);
+
+  // Status straight from the workspace, not from when the run was set up: a
+  // campaign may have been paused or launched by hand in the meantime.
+  const statuses = async () => {
+    const all = await listCampaigns(apiKey, workspaceId, { campaignType: "all" });
+    return new Map(all.map((c) => [c.id, c.status]));
+  };
+
+  let before: Map<string, string>;
+  try {
+    check();
+    before = await statuses();
+  } catch (err) {
+    if (err instanceof AbortedError || ctx.m.aborted) throw err;
+    for (const a of list) {
+      a.state = "error";
+      a.error = "status could not be read";
+    }
+    pushError(rec, `The leads moved, but the campaigns' status could not be read to activate them: ${msg(err)}. Check each one is active in Plusvibe.`);
+    await persist(id);
+    return;
+  }
+
+  for (const a of list) {
+    check();
+    a.before = before.get(a.campaignId);
+    if (isRunning(a.before)) {
+      a.after = a.before;
+      a.state = "done";
+      continue;
+    }
+    if (a.before === undefined) {
+      a.state = "error";
+      a.error = "not found in the workspace";
+      continue;
+    }
+    if (a.before === "ARCHIVED") {
+      a.state = "error";
+      a.error = "archived — unarchive it in Plusvibe before it can run";
+      continue;
+    }
+    a.state = "running";
+    await persist(id);
+    try {
+      await launchCampaign({ apiKey, workspaceId, campaignId: a.campaignId });
+      a.launched = true;
+    } catch (err) {
+      if (err instanceof AbortedError || ctx.m.aborted) throw err;
+      a.state = "error";
+      a.error = msg(err);
+    }
+    rec.updatedAt = Date.now();
+    await persist(id);
+  }
+
+  // A launch that answered "success" is not taken on its word: the status is
+  // read again, and only ACTIVE counts.
+  const launched = list.filter((a) => a.launched);
+  if (launched.length > 0) {
+    let after: Map<string, string> | null = null;
+    try {
+      check();
+      after = await statuses();
+    } catch (err) {
+      if (err instanceof AbortedError || ctx.m.aborted) throw err;
+      pushError(rec, `Launched ${launched.length} campaign${launched.length === 1 ? "" : "s"}, but could not read the status back to confirm: ${msg(err)}. Check them in Plusvibe.`);
+    }
+    for (const a of launched) {
+      if (!after) {
+        a.state = "done";
+        continue;
+      }
+      a.after = after.get(a.campaignId);
+      if (isRunning(a.after)) a.state = "done";
+      else {
+        a.state = "error";
+        a.error = `launched, but it reads ${a.after ?? "missing"} afterwards`;
+      }
+    }
+  }
+
+  for (const a of list) {
+    if (a.state !== "error") continue;
+    pushError(rec, `"${a.campaignName}" is not active: ${a.error}. Its leads are in place; launch it in Plusvibe once that is sorted.`);
+  }
   rec.updatedAt = Date.now();
   await persist(id);
 }
@@ -1289,11 +1420,15 @@ async function runJob(id: string) {
   };
 
   try {
-    // A fix run is its own thing: read, take the segment, move. Nothing is
-    // built and nothing is launched, so the three phases below do not apply.
+    // A fix run is its own thing: read, take the segment, move, and make sure
+    // every campaign it touched is running. Nothing is built, so the three
+    // phases below do not apply.
     if (mode === "fix") {
       await runFixAllocation(ctx, m.payload);
-      rec.status = rec.allocation?.state === "error" ? "error" : "done";
+      // A campaign left inactive is the one thing this run was asked to rule
+      // out, so it marks the run, even though every lead is in place.
+      const inactive = rec.allocation?.activation?.some((a) => a.state === "error") ?? false;
+      rec.status = rec.allocation?.state === "error" || inactive ? "error" : "done";
       return;
     }
 

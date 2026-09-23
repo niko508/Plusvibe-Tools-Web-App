@@ -325,6 +325,28 @@ export interface AllocationProgress {
   stranded: number;
   moved: number;
   state: PhaseState;
+  /**
+   * Every source and destination, checked once the leads have moved and
+   * launched if it was not already running. Absent on runs from before the
+   * check existed.
+   */
+  activation?: AllocActivation[];
+}
+
+/** One campaign's check at the end of a fix run. */
+export interface AllocActivation {
+  campaignId: string;
+  campaignName: string;
+  side: "source" | "destination";
+  /** Its status when checked, before anything was done: ACTIVE, PAUSED, DRAFT … */
+  before?: string;
+  /** Its status read back after launching. */
+  after?: string;
+  /** "done" = ACTIVE now (launched or already was); "error" = still not. */
+  state: PhaseState;
+  /** Launched by this run, rather than already running. */
+  launched?: boolean;
+  error?: string;
 }
 
 export interface CampaignTypesStartPayload {

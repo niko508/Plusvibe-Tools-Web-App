@@ -89,6 +89,50 @@ export function JobCard({
               </div>
             ))}
           </div>
+          {job.allocation.activation && job.allocation.activation.length > 0 && (
+            <div className="space-y-1 pt-1" data-alloc-activation>
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                <span className="text-xs font-medium">Activating every campaign</span>
+                <span className="text-[11px] tabular-nums text-muted-foreground">
+                  {formatNumber(job.allocation.activation.filter((a) => a.state === "done").length)} /{" "}
+                  {formatNumber(job.allocation.activation.length)} active
+                </span>
+              </div>
+              {job.allocation.activation.map((a) => (
+                <div
+                  key={a.campaignId}
+                  className="flex items-start gap-2 text-xs"
+                  data-alloc-active={a.campaignId}
+                  data-state={a.state}
+                >
+                  <span className="mt-0.5 shrink-0">
+                    {a.state === "done" ? (
+                      <CheckIcon size={13} className="text-success" />
+                    ) : a.state === "error" ? (
+                      <AlertIcon size={13} className="text-danger" />
+                    ) : a.state === "running" ? (
+                      <Spinner size={11} />
+                    ) : (
+                      <span className="inline-block h-3.5 w-3.5 rounded-full border border-border" />
+                    )}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="break-words">{a.campaignName}</span>
+                    <span className="text-muted-foreground">
+                      {" · "}
+                      {a.state === "error"
+                        ? a.error ?? "not active"
+                        : a.state === "done"
+                          ? a.launched
+                            ? `launched (was ${(a.before ?? "?").toLowerCase()})`
+                            : "already active"
+                          : a.side}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
