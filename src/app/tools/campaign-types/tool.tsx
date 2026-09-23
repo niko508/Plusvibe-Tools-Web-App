@@ -14,6 +14,7 @@ import {
 } from "@/lib/api-client";
 import { KIND_HINTS, KIND_LABELS, KIND_ORDER, rolesFor, type CampaignKind } from "@/lib/campaign-types/kinds";
 import { MAX_RULES, validateRules, type SegmentRule } from "@/lib/campaign-types/segments";
+import { ALLOC_ROLE_LABELS, classifyDestinations } from "@/lib/campaign-types/allocate";
 import { useApiKey } from "@/lib/use-api-key";
 import { formatNumber } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
@@ -60,6 +61,10 @@ export function CampaignTypesTool() {
   const [kinds, setKinds] = useState<CampaignKind[]>(KIND_ORDER);
   const [activate, setActivate] = useState(true);
   const [mode, setMode] = useState<CampaignTypesMode>("create");
+  /** Fix Allocation: the campaigns the leads go to, and the segment to take. */
+  const [destIds, setDestIds] = useState<string[]>([]);
+  const [fixSegment, setFixSegment] = useState("");
+  const [destFilter, setDestFilter] = useState("");
 
   const [jobs, setJobs] = useState<CampaignTypesJob[]>([]);
   const [jobsOpen, setJobsOpen] = useState(false);
@@ -168,6 +173,26 @@ export function CampaignTypesTool() {
     setEmptyTo((prev) => (prev && !selected.includes(prev) ? "" : prev));
   }, [selected]);
 
+  // Fix Allocation reads the part each destination plays off its own name, so
+  // what a pick will do can be shown before anything moves.
+  const destinations = useMemo(
+    () =>
+      classifyDestinations(
+        parents.filter((c) => destIds.includes(c.id)).map((c) => ({ campaignId: c.id, campaignName: c.name }))
+      ),
+    [parents, destIds]
+  );
+  const fixProblems = useMemo(() => {
+    if (mode !== "fix") return [];
+    const out = [...destinations.problems];
+    if (sources.length === 0) out.push("Pick the campaigns to take the leads from.");
+    if (destIds.length === 0) out.push("Pick the campaigns the leads go to.");
+    if (!fixSegment.trim()) out.push("Type the segment whose leads should move.");
+    const both = parents.find((c) => selected.includes(c.id) && destIds.includes(c.id));
+    if (both) out.push(`"${both.name}" is both a source and a destination. Un-tick it from one of them.`);
+    return out;
+  }, [mode, destinations.problems, sources.length, destIds, fixSegment, parents, selected]);
+
   const rules = useMemo<SegmentRule[]>(() => {
     const nameOf = (id: string) => sources.find((s) => s.id === id)?.name ?? "";
     const out: SegmentRule[] = rows
@@ -238,14 +263,16 @@ export function CampaignTypesTool() {
   );
   const canStart =
     sources.length > 0 &&
-    kinds.length > 0 &&
+    (mode === "fix" || kinds.length > 0) &&
+    (mode !== "fix" || fixProblems.length === 0) &&
     ruleProblems.length === 0 &&
-    !nameClash &&
+    (mode === "fix" || !nameClash) &&
     !pendingClash &&
     !starting &&
     // A move needs somewhere to move to, but not every copy: the campaigns
-    // that are there take the share of the ones that are not.
-    (mode === "create" || foundCount > 0);
+    // that are there take the share of the ones that are not. A fix run is
+    // told its destinations outright, so it has nothing to match.
+    (mode === "create" || mode === "fix" || foundCount > 0);
 
   // --- Actions -------------------------------------------------------------
   function toggleSource(id: string) {
@@ -271,8 +298,13 @@ export function CampaignTypesTool() {
         workspaceId: workspaceId!,
         workspaceName: workspaces.find((w) => w._id === workspaceId)?.name ?? "",
         sources: previews.map((p) => ({ campaignId: p.source.id, campaignName: p.source.name, names: p.names as RoleNames })),
-        kinds,
-        rules,
+        kinds: mode === "fix" ? [] : kinds,
+        rules: mode === "fix" ? [] : rules,
+        segment: mode === "fix" ? fixSegment.trim() : undefined,
+        destinations:
+          mode === "fix"
+            ? destinations.destinations.map((d) => ({ campaignId: d.campaignId, campaignName: d.campaignName }))
+            : undefined,
         activate: mode === "create" && activate,
       });
       setToast(activeJob || queuedCount > 0 ? "Added to the queue — it starts when the ones ahead finish" : "Job started — you can close this tab");
@@ -310,6 +342,7 @@ export function CampaignTypesTool() {
             [
               ["create", "Create all types"],
               ["move", "Move leads"],
+              ["fix", "Fix Allocation"],
             ] as const
           ).map(([value, label]) => (
             <button
@@ -327,7 +360,9 @@ export function CampaignTypesTool() {
           <span className="self-center text-xs text-muted-foreground">
             {mode === "create"
               ? "Sorts the leads by segment, builds the campaign types for each original, splits the leads into them and tags the pools."
-              : "The copies already exist: this sorts by segment, splits each original's not-contacted leads into them and tags the pools."}
+              : mode === "move"
+                ? "The copies already exist: this sorts by segment, splits each original's not-contacted leads into them and tags the pools."
+                : "Puts leads where they should have gone: takes everything carrying one segment out of the campaigns you name and splits it into the ones you pick. Builds nothing, launches nothing."}
           </span>
         </div>
 
@@ -359,7 +394,7 @@ export function CampaignTypesTool() {
           <div>
             <div className="mb-1.5 flex items-baseline justify-between gap-2">
               <label className="block text-xs font-medium text-muted-foreground" htmlFor="ct-filter">
-                Original campaigns
+                {mode === "fix" ? "Take leads from" : "Original campaigns"}
               </label>
               <span className="text-[11px] text-muted-foreground" data-selected-count>
                 {selected.length} selected
@@ -406,7 +441,105 @@ export function CampaignTypesTool() {
           </div>
         </div>
 
+        {/* Fix Allocation: where the leads go, and which segment moves. */}
+        {mode === "fix" && (
+          <div className="space-y-3" data-fix>
+            <div>
+              <div className="mb-1.5 flex items-baseline justify-between gap-2">
+                <label className="block text-xs font-medium text-muted-foreground" htmlFor="fix-dest-filter">
+                  Move them into
+                </label>
+                <span className="text-[11px] text-muted-foreground">
+                  {destIds.length} selected
+                  {destIds.length > 0 && (
+                    <>
+                      {" · "}
+                      <button type="button" className="underline hover:text-foreground" onClick={() => setDestIds([])}>
+                        clear
+                      </button>
+                    </>
+                  )}
+                </span>
+              </div>
+              <p className="mb-1.5 text-xs text-muted-foreground">
+                Pick the whole family. Which one a lead goes to is read off each campaign&apos;s own name — 🔵 is the
+                Microsoft side, &quot;Opt Out&quot; and &quot;Signature&quot; the variants — and the leads are then divided
+                exactly as a normal run divides them. A side you leave unpicked keeps its leads where they are.
+              </p>
+              <input
+                id="fix-dest-filter"
+                type="text"
+                className="pv-input mb-1.5 text-sm"
+                placeholder="Filter campaigns…"
+                value={destFilter}
+                disabled={campaignsLoading || parents.length === 0}
+                onChange={(e) => setDestFilter(e.target.value)}
+                aria-label="Filter destination campaigns"
+              />
+              <div className="max-h-52 overflow-y-auto rounded-xl border border-border" data-dest-list>
+                {parents.filter((c) => !isArchived(c) && c.name.toLowerCase().includes(destFilter.trim().toLowerCase())).length === 0 ? (
+                  <p className="p-3 text-xs text-muted-foreground">Nothing matches.</p>
+                ) : (
+                  parents
+                    .filter((c) => !isArchived(c) && c.name.toLowerCase().includes(destFilter.trim().toLowerCase()))
+                    .map((c) => {
+                      const on = destIds.includes(c.id);
+                      const role = destinations.destinations.find((d) => d.campaignId === c.id)?.role;
+                      return (
+                        <label
+                          key={c.id}
+                          className={`flex cursor-pointer items-center gap-2 border-b border-border/60 px-3 py-1.5 text-sm last:border-b-0 hover:bg-muted/50 ${on ? "bg-accent/5" : ""}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={() => setDestIds((prev) => (prev.includes(c.id) ? prev.filter((x) => x !== c.id) : [...prev, c.id]))}
+                            aria-label={`Move into ${c.name}`}
+                            data-dest-option={c.id}
+                          />
+                          <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                          {on && role && (
+                            <span className="shrink-0 text-[11px] text-accent" data-dest-role={c.id}>
+                              {ALLOC_ROLE_LABELS[role]}
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })
+                )}
+              </div>
+            </div>
+
+            <div className="max-w-xs">
+              <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="fix-segment">
+                Segment to move
+              </label>
+              <input
+                id="fix-segment"
+                type="text"
+                className="pv-input text-sm"
+                placeholder="app"
+                value={fixSegment}
+                onChange={(e) => setFixSegment(e.target.value)}
+                aria-label="Segment to move"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Matched exactly against each lead&apos;s Segment field, bar case and spaces. Every not-contacted lead
+                carrying it moves; everything else is left alone.
+              </p>
+            </div>
+
+            {fixProblems.length > 0 && (
+              <p className="flex gap-1.5 text-xs text-warning" data-fix-problems>
+                <AlertIcon size={13} className="mt-0.5 shrink-0" />
+                <span>{fixProblems.join(" ")}</span>
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Segments */}
+        {mode !== "fix" && (
         <div data-segments>
           <div className="mb-1.5 text-xs font-medium text-muted-foreground">Segments</div>
           <p className="mb-2 text-xs text-muted-foreground">
@@ -466,8 +599,10 @@ export function CampaignTypesTool() {
             </p>
           )}
         </div>
+        )}
 
         {/* Campaign types */}
+        {mode !== "fix" && (
         <div data-kinds>
           <div className="mb-1.5 text-xs font-medium text-muted-foreground">Campaign types</div>
           <div className="grid gap-2 sm:grid-cols-3">
@@ -491,9 +626,10 @@ export function CampaignTypesTool() {
             </p>
           )}
         </div>
+        )}
 
         {/* Preview */}
-        {sources.length > 0 && roles.length > 0 && (
+        {mode !== "fix" && sources.length > 0 && roles.length > 0 && (
           <div className="rounded-xl border border-border p-3 sm:p-4" data-preview>
             <h3 className="mb-1 text-sm font-medium">
               {mode === "create"

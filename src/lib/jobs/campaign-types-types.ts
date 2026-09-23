@@ -37,7 +37,12 @@ export type CampaignKind = "default" | "optOut" | "signature";
  * making them — they were built by an earlier run — and launches nothing;
  * the segment sort, the provider split and the pool tags happen either way.
  */
-export type CampaignTypesMode = "create" | "move";
+/**
+ * "fix" puts leads where they should have gone: it reads the campaigns it is
+ * given, takes the ones carrying a segment, and moves them into campaigns
+ * picked by hand. It builds nothing and launches nothing.
+ */
+export type CampaignTypesMode = "create" | "move" | "fix";
 
 export type CampaignTypesStatus =
   /** Accepted and waiting its turn — nothing has been created for it yet. */
@@ -271,6 +276,8 @@ export interface CampaignTypesJob {
 
   segmenting: SegmentingProgress;
   sources: SourceRun[];
+  /** A "fix" run's own progress. Absent on create and move runs. */
+  allocation?: AllocationProgress;
   tagging: TaggingProgress;
 
   errors: string[];
@@ -284,9 +291,49 @@ export interface SourceInput {
   names: RoleNames;
 }
 
+/** A campaign picked to receive leads, and the part it plays in its family. */
+export interface AllocDestinationInput {
+  campaignId: string;
+  campaignName: string;
+}
+
+export interface AllocSourceProgress {
+  campaignId: string;
+  campaignName: string;
+  leads: number;
+}
+
+export interface AllocDestinationProgress {
+  campaignId: string;
+  campaignName: string;
+  /** Read off its own name: source | blue | optOut | blueOptOut | … */
+  role: string;
+  planned: number;
+  moved: number;
+  unmoved: number;
+}
+
+export interface AllocationProgress {
+  segment: string;
+  sources: AllocSourceProgress[];
+  destinations: AllocDestinationProgress[];
+  /** Leads read across every source. */
+  leadsFound: number;
+  /** Of those, the ones carrying the segment. */
+  matched: number;
+  /** Carried it but had no campaign to go to, so left where they were. */
+  stranded: number;
+  moved: number;
+  state: PhaseState;
+}
+
 export interface CampaignTypesStartPayload {
   /** Defaults to "create". */
   mode?: CampaignTypesMode;
+  /** "fix" only: the segment whose leads are moved. */
+  segment?: string;
+  /** "fix" only: the campaigns they are moved into. */
+  destinations?: AllocDestinationInput[];
   workspaceId: string;
   workspaceName: string;
   sources: SourceInput[];

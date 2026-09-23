@@ -16,13 +16,15 @@ import { duplicateCampaign, launchCampaign } from "@/lib/campaign-types/duplicat
 import { buildReuseIndex, matchCompanions, normalizeName } from "@/lib/campaign-types/match";
 import { rolesFor, type CampaignKind } from "@/lib/campaign-types/kinds";
 import { poolOf, sidesFor } from "@/lib/campaign-types/pools";
-import { describeUnmapped, planSegmentMoves, segmentKey, type SegmentRule } from "@/lib/campaign-types/segments";
+import { classifyDestinations, planAllocation, type AllocDestination } from "@/lib/campaign-types/allocate";
+import { describeUnmapped, planSegmentMoves, segmentKey, segmentOf, type SegmentRule } from "@/lib/campaign-types/segments";
 import { assignCampaignTag, readCampaignTags, resolvePoolTags, unassignCampaignTag } from "@/lib/campaign-types/tag-campaigns";
 import type { CampaignSummary } from "@/lib/plusvibe-types";
 import type {
   ActivationTarget,
   CampaignRole,
   CampaignTypesJob,
+  CampaignTypesMode,
   CampaignTypesStartPayload,
   CreatedCampaign,
   CreatedRole,
@@ -466,7 +468,8 @@ export async function createJob(apiKey: string, payload: CampaignTypesStartPaylo
 
   const id = randomUUID();
   const now = Date.now();
-  const mode = payload.mode === "move" ? "move" : "create";
+  const mode: CampaignTypesMode =
+    payload.mode === "move" ? "move" : payload.mode === "fix" ? "fix" : "create";
   const activate = mode === "create" && payload.activate !== false;
   const roles = rolesFor(payload.kinds);
 
@@ -499,7 +502,34 @@ export async function createJob(apiKey: string, payload: CampaignTypesStartPaylo
       processed: 0,
       moved: 0,
     },
-    sources: payload.sources.map((s) => newSourceRun(s, roles, mode, activate)),
+    sources: payload.sources.map((s) => newSourceRun(s, roles, mode === "create" ? "create" : "move", activate)),
+    // A fix run keeps its own progress: the sources are read and nothing else,
+    // so none of a SourceRun's phases apply to them.
+    ...(mode === "fix"
+      ? {
+          allocation: {
+            segment: (payload.segment ?? "").trim(),
+            sources: payload.sources.map((s) => ({
+              campaignId: s.campaignId,
+              campaignName: s.campaignName,
+              leads: 0,
+            })),
+            destinations: classifyDestinations(payload.destinations ?? []).destinations.map((d) => ({
+              campaignId: d.campaignId,
+              campaignName: d.campaignName,
+              role: d.role,
+              planned: 0,
+              moved: 0,
+              unmoved: 0,
+            })),
+            leadsFound: 0,
+            matched: 0,
+            stranded: 0,
+            moved: 0,
+            state: "pending" as const,
+          },
+        }
+      : {}),
     tagging: { targets: [], tagsCreated: [] },
     errors: [],
   };
@@ -642,6 +672,122 @@ function describeReasons(reasons: Record<string, number>): string {
 
 function countReasons(list: UnmovedLead[], into: Record<string, number>) {
   for (const u of list) into[u.reason] = (into[u.reason] ?? 0) + 1;
+}
+
+// --- Fix Allocation: putting leads where they should have gone ----------------
+//
+// Reads the campaigns it is given, takes the leads carrying one segment, and
+// moves them into campaigns picked by hand. The sources are only ever read:
+// no names are derived from them and nothing is moved into them, which is what
+// makes it safe to name a copy here.
+
+async function runFixAllocation(ctx: RunCtx, payload: CampaignTypesStartPayload) {
+  const { rec, apiKey, workspaceId, check, id } = ctx;
+  const alloc = rec.allocation;
+  if (!alloc) return;
+  rec.phase = "segmenting";
+  rec.phaseStates = { segmenting: "running", building: "skipped", tagging: "skipped" };
+  await persist(id);
+
+  // 1. Read every source. A lead moved out of one must not be read again out
+  //    of another, so the whole snapshot is taken before anything moves.
+  const snapshot: { campaignId: string; campaignName: string; leads: RawLead[] }[] = [];
+  for (const src of alloc.sources) {
+    check();
+    let leads: RawLead[] = [];
+    try {
+      const got = await fetchCampaignLeads(apiKey, workspaceId, src.campaignId, MAX_LEADS);
+      leads = got.leads;
+      if (got.hitPageLimit) {
+        pushError(rec, `Stopped collecting "${src.campaignName}" at ${leads.length} leads — the paging budget ran out. Run again for the rest.`);
+      }
+      if (got.wrongStatus > 0) {
+        pushError(rec, `${got.wrongStatus} lead(s) of "${src.campaignName}" are past NOT_CONTACTED and were left alone.`);
+      }
+    } catch (err) {
+      if (err instanceof AbortedError || ctx.m.aborted) throw err;
+      pushError(rec, `Could not read "${src.campaignName}": ${msg(err)}. Nothing was taken from it.`);
+    }
+    src.leads = leads.length;
+    alloc.leadsFound += leads.length;
+    snapshot.push({ campaignId: src.campaignId, campaignName: src.campaignName, leads });
+    rec.updatedAt = Date.now();
+    await persist(id);
+  }
+  check();
+
+  // 2. Plan, per source, so each move knows where its leads came from — the
+  //    move is an add to the destination and then a delete from the source.
+  const destinations = alloc.destinations.map(
+    (d) => ({ campaignId: d.campaignId, campaignName: d.campaignName, role: d.role }) as AllocDestination
+  );
+  for (const src of snapshot) {
+    check();
+    // Which side each lead is on, the same way a normal run decides it: by
+    // resolving the sending domain, not by trusting a field on the lead.
+    const resolution = await resolveLeadEsps(src.leads, { isAborted: () => ctx.m.aborted });
+    const plan = planAllocation(
+      resolution.classified.map(({ lead, esp }) => ({
+        lead,
+        segment: segmentOf(lead),
+        blue: esp !== "GOOGLE",
+      })),
+      alloc.segment,
+      destinations
+    );
+    alloc.matched += plan.matched;
+    alloc.stranded += plan.stranded;
+    for (const mv of plan.moves) {
+      const d = alloc.destinations.find((x) => x.campaignId === mv.campaignId);
+      if (d) d.planned += mv.leads.length;
+    }
+    await persist(id);
+
+    for (const mv of plan.moves) {
+      check();
+      if (mv.leads.length === 0) continue;
+      const res = await moveInto(ctx, {
+        from: src.campaignId,
+        to: mv.campaignId,
+        toName: mv.campaignName,
+        leads: mv.leads,
+        onProgress: () => undefined,
+      });
+      const d = alloc.destinations.find((x) => x.campaignId === mv.campaignId);
+      if (d) {
+        d.moved += res.moved;
+        d.unmoved += res.unmoved.length;
+      }
+      alloc.moved += res.moved;
+      if (res.unmoved.length > 0) {
+        const reasons: Record<string, number> = {};
+        countReasons(res.unmoved, reasons);
+        pushError(
+          rec,
+          `${res.unmoved.length} lead(s) of "${src.campaignName}" did not reach "${mv.campaignName}": ${describeReasons(reasons)}. They are still in "${src.campaignName}".`
+        );
+      }
+      rec.updatedAt = Date.now();
+      await persist(id);
+    }
+  }
+
+  if (alloc.stranded > 0) {
+    pushError(
+      rec,
+      `${alloc.stranded} lead(s) carry "${alloc.segment}" but no campaign was picked for their side, so they stayed where they were. Pick one for every side you want filled.`
+    );
+  }
+  if (alloc.matched === 0) {
+    pushError(
+      rec,
+      `No lead in the campaigns read carries the segment "${alloc.segment}". Check the spelling against the leads — it is matched exactly, bar case and spaces.`
+    );
+  }
+  alloc.state = "done";
+  rec.phaseStates.segmenting = "done";
+  rec.updatedAt = Date.now();
+  await persist(id);
 }
 
 // --- Phase 1: sorting by segment ---------------------------------------------
@@ -1143,6 +1289,14 @@ async function runJob(id: string) {
   };
 
   try {
+    // A fix run is its own thing: read, take the segment, move. Nothing is
+    // built and nothing is launched, so the three phases below do not apply.
+    if (mode === "fix") {
+      await runFixAllocation(ctx, m.payload);
+      rec.status = rec.allocation?.state === "error" ? "error" : "done";
+      return;
+    }
+
     // --- Phase 1 --------------------------------------------------------------
     if (m.payload.rules.length > 0) await runSegmenting(ctx, m.payload.rules);
     else rec.phaseStates.segmenting = "skipped";

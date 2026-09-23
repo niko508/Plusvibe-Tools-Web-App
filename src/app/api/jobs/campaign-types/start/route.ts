@@ -7,6 +7,7 @@ import { CREATED_ROLES } from "@/lib/jobs/campaign-types-types";
 import { normalizeName } from "@/lib/campaign-types/match";
 import { normalizeKinds, rolesFor } from "@/lib/campaign-types/kinds";
 import { normalizeRules, validateRules } from "@/lib/campaign-types/segments";
+import { classifyDestinations } from "@/lib/campaign-types/allocate";
 
 export const dynamic = "force-dynamic";
 
@@ -35,8 +36,10 @@ export async function POST(request: Request) {
     const workspaceId = String(body.workspaceId ?? "").trim();
     if (!workspaceId) return bad("workspaceId is required");
 
+    // A fix run builds nothing, so it has no types to pick.
+    const isFix = body.mode === "fix";
     const kinds = normalizeKinds(body.kinds);
-    if (kinds.length === 0) return bad("Pick at least one campaign type.");
+    if (!isFix && kinds.length === 0) return bad("Pick at least one campaign type.");
     const roles = rolesFor(kinds);
 
     // --- the originals --------------------------------------------------------
@@ -58,6 +61,48 @@ export async function POST(request: Request) {
         if (roles.includes(role) && !names[role]) return bad(`No name for the "${role}" campaign of "${campaignName}".`);
       }
       sources.push({ campaignId, campaignName, names });
+    }
+
+    // --- a fix run --------------------------------------------------------------
+    // It reads the campaigns it is given and moves one segment's leads into
+    // campaigns picked by hand. Nothing is derived from a name, nothing is
+    // built, nothing is launched — so none of the checks below apply, and a
+    // copy is a perfectly good source.
+    const mode = body.mode === "move" ? "move" : isFix ? "fix" : "create";
+    if (mode === "fix") {
+      const segment = String(body.segment ?? "").trim();
+      if (!segment) return bad("Type the segment whose leads should move.");
+      const picked: { campaignId: string; campaignName: string }[] = [];
+      for (const raw of Array.isArray(body.destinations) ? body.destinations : []) {
+        const campaignId = String((raw as { campaignId?: unknown })?.campaignId ?? "").trim();
+        if (!campaignId) continue;
+        if (picked.some((p) => p.campaignId === campaignId)) continue;
+        picked.push({
+          campaignId,
+          campaignName: String((raw as { campaignName?: unknown })?.campaignName ?? "").trim() || campaignId,
+        });
+      }
+      if (picked.length === 0) return bad("Pick at least one campaign for the leads to go to.");
+      if (picked.length > MAX_SOURCES) return bad(`At most ${MAX_SOURCES} destination campaigns in one run.`);
+      // A campaign that is both read and written would have its own leads
+      // taken out and put back, which is at best pointless.
+      const overlap = picked.find((p) => sources.some((s) => s.campaignId === p.campaignId));
+      if (overlap) return bad(`"${overlap.campaignName}" is both a source and a destination. Un-tick it from one of them.`);
+      const { problems: roleProblems } = classifyDestinations(picked);
+      if (roleProblems.length > 0) return bad(roleProblems.join(" "));
+
+      const jobId = await createJob(apiKey, {
+        mode: "fix",
+        workspaceId,
+        workspaceName: String(body.workspaceName ?? ""),
+        sources,
+        segment,
+        destinations: picked,
+        kinds: [],
+        rules: [],
+        activate: false,
+      });
+      return NextResponse.json({ jobId });
     }
 
     // Two copies under the same name would be indistinguishable afterwards,
@@ -82,7 +127,7 @@ export async function POST(request: Request) {
     for (const r of rules) r.campaignName = sources.find((s) => s.campaignId === r.campaignId)?.campaignName ?? r.campaignName;
 
     const jobId = await createJob(apiKey, {
-      mode: body.mode === "move" ? "move" : "create",
+      mode,
       workspaceId,
       workspaceName: String(body.workspaceName ?? ""),
       sources,

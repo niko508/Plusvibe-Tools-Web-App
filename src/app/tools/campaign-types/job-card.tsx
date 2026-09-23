@@ -62,7 +62,38 @@ export function JobCard({
         <span className="shrink-0 text-xs text-muted-foreground">{relativeTime(job.createdAt)}</span>
       </div>
 
+      {/* A fix run has one phase of its own: read, take the segment, move. */}
+      {job.mode === "fix" && job.allocation && (
+        <div className="mt-4 space-y-2 text-sm" data-allocation>
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+            <span className="font-medium">
+              Moving “{job.allocation.segment}” leads
+            </span>
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {formatNumber(job.allocation.moved)} / {formatNumber(job.allocation.matched)} moved
+              {job.allocation.stranded > 0 ? ` · ${formatNumber(job.allocation.stranded)} stayed put` : ""}
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {formatNumber(job.allocation.leadsFound)} lead{job.allocation.leadsFound === 1 ? "" : "s"} read from{" "}
+            {job.allocation.sources.map((x) => x.campaignName).join(", ") || "nothing"}
+          </p>
+          <div className="space-y-1">
+            {job.allocation.destinations.map((d) => (
+              <div key={d.campaignId} className="flex flex-wrap items-baseline justify-between gap-x-3 rounded-lg border border-border/70 px-2.5 py-1.5" data-alloc-dest={d.campaignId}>
+                <span className="min-w-0 truncate text-xs">{d.campaignName}</span>
+                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                  {formatNumber(d.moved)} / {formatNumber(d.planned)}
+                  {d.unmoved > 0 ? ` · ${formatNumber(d.unmoved)} did not arrive` : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* The three phases */}
+      {job.mode !== "fix" && (
       <ol className="mt-4 space-y-2.5">
         {JOB_PHASE_ORDER.map((phase, i) => {
           const state = phaseStates[phase] ?? "pending";
@@ -123,6 +154,7 @@ export function JobCard({
           );
         })}
       </ol>
+      )}
 
       {errors.length > 0 && (
         <div className="mt-3 space-y-1.5">
