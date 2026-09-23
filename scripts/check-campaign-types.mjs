@@ -674,7 +674,7 @@ eq("the types read as a list", describeKinds(["signature", "default"]), "Default
 // --- sorting by segment ---------------------------------------------------------
 console.log("--- segments");
 const segMod = await importTs("@/lib/campaign-types/segments");
-const { segmentOf, segmentKey, validateRules, normalizeRules, planSegmentMoves, describeRule, MAX_RULES } = segMod;
+const { segmentOf, segmentKey, validateRules, normalizeRules, planSegmentMoves, describeRule, describeUnmapped, nearestRule, MAX_RULES } = segMod;
 eq("four rows: three segments and the empty one", MAX_RULES, 4);
 eq("the segment is read off the lead, trimmed", segmentOf({ email: "a@x.com", segment: "  cash pay " }), "cash pay");
 eq("…whatever the key's case", segmentOf({ Segment: "insurance" }), "insurance");
@@ -738,6 +738,36 @@ eq("no rules, nothing moves", planSegmentMoves([{ campaignId: "A", leads: [L("a1
 eq("a rule without a campaign is ignored rather than moving leads nowhere",
   planSegmentMoves([{ campaignId: "A", leads: [L("a1", "x")] }], [{ segment: "x", campaignId: "", campaignName: "" }]).counts.unmapped, 1);
 eq("a rule reads as a sentence", [describeRule(RULES[0]), describeRule(RULES[2])], ["cash pay → 🟡 A", "no segment → 🟡 C"]);
+
+// --- saying why leads were left behind ------------------------------------------------
+// Matching is exact bar case and space, so a row off by one letter covers
+// nothing at all — and the two strings are never otherwise seen side by side.
+console.log("--- the uncovered-segment message");
+const ROWS = [
+  { segment: "apps", campaignId: "A", campaignName: "🟡 Apps (August)" },
+  { segment: "ecommerce", campaignId: "B", campaignName: "🟡 eCommerce (August)" },
+];
+eq("a row that is nearly the segment is spotted", nearestRule("app", ROWS), "apps");
+eq("…the other way round too", nearestRule("ecommerce and retail", ROWS), "ecommerce");
+eq("…case and space do not hide it", nearestRule("  APP ", ROWS), "apps");
+// Only a prefix either way: two segments sharing a few letters are not a match.
+eq("an unrelated segment is not guessed at", nearestRule("local", ROWS), null);
+eq("…nor is an exact one, which would have been covered", nearestRule("apps", ROWS), null);
+eq("…and the empty row is never the near miss", nearestRule("app", [{ segment: null, campaignId: "C", campaignName: "🟡 C" }]), null);
+
+eq("the message names the miss, the likely cause, and the rows that were set",
+  describeUnmapped(1980, ["app"], ROWS),
+  '1,980 lead(s) carry a segment no row covers ("app"). They stayed where they were. Did the row for "apps" mean "app"? The rows were: apps → 🟡 Apps (August) · ecommerce → 🟡 eCommerce (August).');
+eq("…with no near miss it still says what the rows were",
+  describeUnmapped(5, ["dental"], ROWS),
+  '5 lead(s) carry a segment no row covers ("dental"). They stayed where they were. The rows were: apps → 🟡 Apps (August) · ecommerce → 🟡 eCommerce (August).');
+// A run with no rows at all reaches here too; "the rows were:" with nothing
+// after it would read like a bug.
+eq("…and no rows at all says so plainly",
+  describeUnmapped(3, ["app"], []),
+  '3 lead(s) carry a segment no row covers ("app"). They stayed where they were. No rows were set at all.');
+eq("…a row with no campaign does not count as set",
+  describeUnmapped(3, ["x"], [{ segment: "y", campaignId: "", campaignName: "" }]).endsWith("No rows were set at all."), true);
 
 // --- the label ------------------------------------------------------------------
 console.log("--- label");

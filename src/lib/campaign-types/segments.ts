@@ -197,3 +197,51 @@ export function planSegmentMoves<T extends RawLead>(
 export function describeRule(r: { segment: string | null; campaignName: string }): string {
   return `${r.segment === null ? "no segment" : r.segment} → ${r.campaignName}`;
 }
+
+/**
+ * A row whose segment is nearly the uncovered one — "apps" against leads that
+ * say "app". Matching is exact (bar case and space), so a row off by a letter
+ * silently covers nothing, and the two strings are never seen side by side.
+ *
+ * Deliberately narrow: one being the start of the other. That catches the
+ * singular/plural and half-typed cases without claiming a match between two
+ * segments that merely share a few letters.
+ */
+export function nearestRule(
+  segment: string,
+  rules: { segment: string | null; campaignName: string }[]
+): string | null {
+  const key = segmentKey(segment);
+  if (!key) return null;
+  for (const r of rules) {
+    if (r.segment === null) continue;
+    const other = segmentKey(r.segment);
+    if (!other || other === key) continue;
+    if (other.startsWith(key) || key.startsWith(other)) return r.segment.trim();
+  }
+  return null;
+}
+
+/**
+ * What to say about leads whose segment no row covers.
+ *
+ * Names the rows that WERE set, because "no row covers app" on its own leaves
+ * the obvious question — what did the rows say, then? — for someone to go and
+ * look up, and the answer is nearly always a row that reads slightly
+ * differently from the data.
+ */
+export function describeUnmapped(
+  unmapped: number,
+  segments: string[],
+  rules: { segment: string | null; campaignName: string; campaignId?: string }[]
+): string {
+  const examples = segments.length > 0 ? ` (${segments.map((s) => `"${s}"`).join(", ")})` : "";
+  const parts = [
+    `${unmapped.toLocaleString()} lead(s) carry a segment no row covers${examples}. They stayed where they were.`,
+  ];
+  const near = segments.map((s) => [s, nearestRule(s, rules)] as const).filter(([, n]) => n);
+  for (const [s, n] of near) parts.push(`Did the row for "${n}" mean "${s}"?`);
+  const set = rules.filter((r) => r.campaignId !== "").map((r) => describeRule(r));
+  parts.push(set.length > 0 ? `The rows were: ${set.join(" · ")}.` : "No rows were set at all.");
+  return parts.join(" ");
+}

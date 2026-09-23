@@ -16,7 +16,7 @@ import { duplicateCampaign, launchCampaign } from "@/lib/campaign-types/duplicat
 import { buildReuseIndex, matchCompanions, normalizeName } from "@/lib/campaign-types/match";
 import { rolesFor, type CampaignKind } from "@/lib/campaign-types/kinds";
 import { poolOf, sidesFor } from "@/lib/campaign-types/pools";
-import { planSegmentMoves, segmentKey, type SegmentRule } from "@/lib/campaign-types/segments";
+import { describeUnmapped, planSegmentMoves, segmentKey, type SegmentRule } from "@/lib/campaign-types/segments";
 import { assignCampaignTag, readCampaignTags, resolvePoolTags, unassignCampaignTag } from "@/lib/campaign-types/tag-campaigns";
 import type { CampaignSummary } from "@/lib/plusvibe-types";
 import type {
@@ -683,8 +683,7 @@ async function runSegmenting(ctx: RunCtx, rules: SegmentRule[]) {
     if (r.planned === 0) r.state = "done";
   }
   if (seg.unmapped > 0) {
-    const examples = seg.unmappedSegments.length > 0 ? ` (${seg.unmappedSegments.map((s) => `"${s}"`).join(", ")})` : "";
-    pushError(rec, `${seg.unmapped} lead(s) carry a segment no row covers${examples}. They stayed where they were.`);
+    pushError(rec, describeUnmapped(seg.unmapped, seg.unmappedSegments, seg.rules));
   }
   await persist(id);
 
