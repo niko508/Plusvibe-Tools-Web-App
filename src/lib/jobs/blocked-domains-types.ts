@@ -242,6 +242,13 @@ export interface BlockedDomainJob {
   bounceReason?: string;
   /** Where the trigger came from — "clay", or "manual" from the UI. */
   source: string;
+  /**
+   * The registrar, from RDAP, for when the sheet names no Domain Host.
+   * "Porkbun LLC" as the registry spells it; the card shows it as a platform.
+   */
+  registrar?: string;
+  /** When the registrar was last looked up, found or not. */
+  registrarCheckedAt?: number;
   /** Later webhook hits for a domain already being handled. */
   duplicateHits: number;
   lastDuplicateAt?: number;

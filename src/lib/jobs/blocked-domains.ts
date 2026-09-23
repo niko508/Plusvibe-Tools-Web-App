@@ -70,6 +70,7 @@ import {
   rebaseNextAt,
   startRecheck,
 } from "@/lib/blocked-domains/recheck";
+import { lookupRegistrar } from "@/lib/blocked-domains/registrar";
 import { countProviders } from "@/lib/plusvibe-providers";
 import { daysAgo, toApiDate } from "@/lib/format";
 import type {
@@ -108,10 +109,32 @@ const RECORDS_DIR = path.join(JOBS_DIR, "records");
 // what re-arms it, which makes re-running a deliberate act rather than
 // something that happens on its own after enough time passes.
 
-const records = new Map<string, BlockedDomainJob>();
-/** Memory-only: the inboxes that were stopped, so confirming doesn't re-scan. */
-const quarantinedInboxes = new Map<string, Inbox[]>();
-let loaded = false;
+// Next.js bundles the start-up hook (instrumentation, which runs the repeat
+// checks) and the API routes separately, so this module is loaded twice in
+// one process. With the records in module variables, a check the scheduler
+// ran was invisible to the page until the next restart — and the page's own
+// stale copy could write over it. So the state lives in one place on the
+// process, and both copies share it.
+interface SharedState {
+  records: Map<string, BlockedDomainJob>;
+  /** Memory-only: the inboxes that were stopped, so confirming doesn't re-scan. */
+  quarantinedInboxes: Map<string, Inbox[]>;
+  loaded: boolean;
+  schedulerStarted: boolean;
+  rechecking: Set<string>;
+  rejudging: Set<string>;
+  rejudgeAll?: { running: boolean; total: number; done: number; startedAt: number };
+}
+const shared: SharedState = ((globalThis as { __pvBlockedDomains?: SharedState }).__pvBlockedDomains ??= {
+  records: new Map(),
+  quarantinedInboxes: new Map(),
+  loaded: false,
+  schedulerStarted: false,
+  rechecking: new Set(),
+  rejudging: new Set(),
+});
+const records = shared.records;
+const quarantinedInboxes = shared.quarantinedInboxes;
 
 export function serverApiKey(): string | null {
   return process.env.PLUSVIBE_API_KEY?.trim() || null;
@@ -182,8 +205,8 @@ function migrateRecord(raw: BlockedDomainJob): BlockedDomainJob {
 }
 
 async function loadOnce() {
-  if (loaded) return;
-  loaded = true;
+  if (shared.loaded) return;
+  shared.loaded = true;
   try {
     await fs.mkdir(RECORDS_DIR, { recursive: true });
     for (const f of await fs.readdir(RECORDS_DIR)) {
@@ -330,6 +353,7 @@ async function runLocateAndQuarantine(id: string) {
     if (client || domainHost) {
       rec.sheet = { ...(rec.sheet ?? emptySheet()), client, domainHost };
     }
+    await ensureRegistrar(rec);
     rec.phaseStates.locating = "done";
     rec.updatedAt = Date.now();
     await persist(id);
@@ -1131,20 +1155,20 @@ async function runSheet(rec: BlockedDomainJob) {
 // and a domain that has now fallen under its bar is written off.
 
 const TICK_MS = 60_000;
-let schedulerStarted = false;
 /** Ids with a recheck in flight, so a slow run can't be started twice. */
-const rechecking = new Set<string>();
+const rechecking = shared.rechecking;
 
 export async function bootScheduler() {
   await loadOnce();
-  if (schedulerStarted) return;
-  schedulerStarted = true;
+  if (shared.schedulerStarted) return;
+  shared.schedulerStarted = true;
   const timer = setInterval(() => void tick(), TICK_MS);
   // Never keep the process alive just for this.
   timer.unref?.();
   // A check that came due while the process was down shouldn't wait a further
   // minute — on Railway the process is replaced on every deploy.
   void tick();
+  void backfillRegistrars().catch(() => undefined);
 }
 
 async function tick() {
@@ -1180,6 +1204,39 @@ async function refreshDomainHost(rec: BlockedDomainJob) {
     }
   } catch {
     // the card simply won't show a host
+  }
+  await ensureRegistrar(rec);
+}
+
+/** How long a failed registrar lookup waits before it is tried again. */
+const REGISTRAR_RETRY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The registrar from RDAP, for a domain the sheet names no host for — so the
+ * card still says which platform it was bought on. Looked up once; a failed
+ * lookup is retried a day later rather than on every check.
+ */
+async function ensureRegistrar(rec: BlockedDomainJob): Promise<boolean> {
+  if (rec.sheet?.domainHost?.trim() || rec.registrar) return false;
+  if (rec.registrarCheckedAt && Date.now() - rec.registrarCheckedAt < REGISTRAR_RETRY_MS) return false;
+  rec.registrarCheckedAt = Date.now();
+  const registrar = await lookupRegistrar(rec.domain);
+  if (registrar) rec.registrar = registrar;
+  return true;
+}
+
+/**
+ * Once per start: the platform for every domain handled before the registrar
+ * was looked up. One at a time and spaced out, since rdap.org limits how
+ * fast it may be asked, and nothing waits on this.
+ */
+async function backfillRegistrars() {
+  for (const rec of [...records.values()]) {
+    if (rec.sheet?.domainHost?.trim() || rec.registrar) continue;
+    const looked = await ensureRegistrar(rec);
+    if (!looked) continue;
+    await persist(rec.id);
+    await new Promise((r) => setTimeout(r, 1500));
   }
 }
 
@@ -1458,11 +1515,10 @@ export async function dismissJob(id: string): Promise<boolean> {
 // applies the current rules to it. It decides nothing itself: Restore and
 // Undo write-off are separate actions a person takes after seeing the figures.
 
-const rejudging = new Set<string>();
-let rejudgeAllState: { running: boolean; total: number; done: number; startedAt: number } | undefined;
+const rejudging = shared.rejudging;
 
 export function rejudgeAllStatus() {
-  return rejudgeAllState;
+  return shared.rejudgeAll;
 }
 
 const lower = (s: string) => s.trim().toLowerCase();
@@ -1564,12 +1620,12 @@ export async function rejudgeJob(id: string): Promise<boolean> {
  */
 export async function rejudgeAll(): Promise<{ started: boolean; total: number }> {
   await loadOnce();
-  if (rejudgeAllState?.running) return { started: false, total: rejudgeAllState.total };
+  if (shared.rejudgeAll?.running) return { started: false, total: shared.rejudgeAll.total };
   const ids = [...records.values()]
     .filter((r) => canRecheck(r))
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((r) => r.id);
-  rejudgeAllState = { running: true, total: ids.length, done: 0, startedAt: Date.now() };
+  shared.rejudgeAll = { running: true, total: ids.length, done: 0, startedAt: Date.now() };
   void (async () => {
     for (const id of ids) {
       try {
@@ -1577,9 +1633,9 @@ export async function rejudgeAll(): Promise<{ started: boolean; total: number }>
       } catch {
         // recorded on the job
       }
-      if (rejudgeAllState) rejudgeAllState.done += 1;
+      if (shared.rejudgeAll) shared.rejudgeAll.done += 1;
     }
-    if (rejudgeAllState) rejudgeAllState.running = false;
+    if (shared.rejudgeAll) shared.rejudgeAll.running = false;
   })();
   return { started: true, total: ids.length };
 }

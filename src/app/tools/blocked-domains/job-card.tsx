@@ -21,6 +21,7 @@ import {
 } from "@/components/icons";
 import { describeNext } from "@/lib/blocked-domains/recheck";
 import { normalizeLimit } from "@/lib/blocked-domains/rejudge";
+import { platformLabel } from "@/lib/blocked-domains/registrar";
 import { bucketOf, describeProviders, PROVIDER_LABELS } from "@/lib/plusvibe-providers";
 import {
   GOOGLE_CANCEL_TAB,
@@ -93,7 +94,13 @@ export function JobCard({
   const perf = job.performance;
   const domain = perf?.domain;
   const recheck = job.recheck;
-  const host = sheet?.domainHost;
+  // The sheet's Domain Host first; the registrar from the public registry
+  // (RDAP) for a domain the sheet has no host for.
+  const sheetHost = sheet?.domainHost?.trim();
+  const host = sheetHost || (job.registrar ? platformLabel(job.registrar) : undefined);
+  const hostTitle = sheetHost
+    ? "Domain Host, from the Domains sheet"
+    : `Registrar, from the domain's public record: ${job.registrar ?? ""}. The Domains sheet has no Domain Host for it.`;
   // Records from before the provider was captured have no counts; the chip is
   // left off rather than claiming a domain had no mailboxes.
   const providerMix = job.providers ? describeProviders(job.providers) : "";
@@ -204,7 +211,7 @@ export function JobCard({
             </span>
           )}
           {host && (
-            <span className="pv-chip shrink-0" title="Domain Host, from the Domains sheet">
+            <span className="pv-chip shrink-0" title={hostTitle} data-domain-platform>
               {host}
             </span>
           )}
@@ -656,7 +663,7 @@ export function JobCard({
               job.inboxesKept ?? 0
             )} above the inbox bar · ${formatNumber(job.inboxesDeleted)} deleted`}
           />
-          {host && <Detail label="Domain host" value={`${host} — from the Domains sheet`} />}
+          {host && <Detail label="Domain host" value={sheetHost ? `${host} — from the Domains sheet` : `${host} — registrar ${job.registrar ?? ""}, from the public record (not in the Domains sheet)`} />}
           {providerMix && <Detail label="Mailboxes" value={providerMix} />}
           {perf && (
             <>
