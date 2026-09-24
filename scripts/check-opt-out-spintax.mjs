@@ -1,78 +1,85 @@
-// Verifies OPT_OUT_SPINTAX is exactly the PHRASE_TEMPLATES × REPLY_TOKENS cross
-// product, in order. This copy goes out to real recipients, so a stray edit to
-// one of the 621 options must fail loudly rather than ship.
+// Verifies both opt-out blocks character for character. This copy goes out to
+// real recipients, so a stray edit to one option must fail loudly rather than
+// ship.
+//
+//   current   OPT_OUT_SPINTAX: the 18 × 19 cross product of PHRASE_TEMPLATES
+//             and REPLY_TOKENS, then EXTRA_OPTIONS — 447 options
+//   previous  PREVIOUS_OPT_OUT_SPINTAX: 23 × 27 — 621 options. No longer
+//             appended, only recognised, so it must never drift either.
 //
 //   node scripts/check-opt-out-spintax.mjs
 
 import { readFileSync } from "fs";
 
-const src = readFileSync(
-  new URL("../src/lib/campaign-types/opt-out-spintax.ts", import.meta.url),
-  "utf8"
-);
-
-// Pull the three exported literals out of the TS source without a compiler.
-function backtickLiteral(name) {
-  const m = src.match(new RegExp(`export const ${name}[^\`]*\`([\\s\\S]*?)\`;`));
-  if (!m) throw new Error(`could not find ${name}`);
-  return m[1];
-}
-function backtickArray(name) {
-  const m = src.match(new RegExp(`export const ${name}[^\\[]*\\[([\\s\\S]*?)\\n\\];`));
-  if (!m) throw new Error(`could not find ${name}`);
-  return [...m[1].matchAll(/^\s*[`"](.*)[`"],$/gm)].map((x) => x[1]);
-}
-
-const block = backtickLiteral("OPT_OUT_SPINTAX");
-const replies = backtickArray("REPLY_TOKENS");
-const phrases = backtickArray("PHRASE_TEMPLATES");
-
 let failures = 0;
 const check = (label, ok, detail = "") => {
-  if (ok) {
-    console.log(`PASS  ${label}`);
-  } else {
+  if (ok) console.log(`PASS  ${label}`);
+  else {
     failures++;
     console.log(`FAIL  ${label}${detail ? `\n   ${detail}` : ""}`);
   }
 };
 
-check("block is wrapped in {{Random | … }}", block.startsWith("{{Random | ") && block.endsWith("}}"));
-check("replies parsed", replies.length === 27, `got ${replies.length}`);
-check("phrases parsed", phrases.length === 23, `got ${phrases.length}`);
-
-const inner = block.slice("{{Random | ".length, -"}}".length);
-const options = inner.split(" | ");
-check("621 options", options.length === 621, `got ${options.length}`);
-
-// The whole point: rebuild from the two axes and compare option by option.
-const expected = replies.flatMap((r) => phrases.map((p) => p.replaceAll("{P}", r)));
-check("expected cross product is 621", expected.length === 621, `got ${expected.length}`);
-
-let firstMismatch = null;
-for (let i = 0; i < Math.max(options.length, expected.length); i++) {
-  if (options[i] !== expected[i]) {
-    firstMismatch = i;
-    break;
-  }
+// Pull the literals out of the TS source without a compiler.
+function read(file) {
+  const src = readFileSync(new URL(`../src/lib/campaign-types/${file}`, import.meta.url), "utf8");
+  return {
+    literal(name) {
+      const m = src.match(new RegExp(`export const ${name}[^\`]*\`([\\s\\S]*?)\`;`));
+      if (!m) throw new Error(`could not find ${name}`);
+      return m[1];
+    },
+    array(name) {
+      const m = src.match(new RegExp(`export const ${name}[^\\[]*\\[([\\s\\S]*?)\\n\\];`));
+      if (!m) throw new Error(`could not find ${name}`);
+      return [...m[1].matchAll(/^\s*[`"](.*)[`"],$/gm)].map((x) => x[1]);
+    },
+  };
 }
-check(
-  "every option matches the cross product",
-  firstMismatch === null,
-  firstMismatch === null
-    ? ""
-    : `option ${firstMismatch} (reply "${replies[Math.floor(firstMismatch / 23)]}", phrase ${firstMismatch % 23}):\n   got      ${JSON.stringify(options[firstMismatch])}\n   expected ${JSON.stringify(expected[firstMismatch])}`
-);
 
-// Guard the details that are easy to lose to an editor: the em dash, the
-// curly-free straight quotes, and no doubled/missing separators.
-check("no empty options", options.every((o) => o.trim().length > 0));
-check("no option contains a stray pipe", options.every((o) => !o.includes("|")));
-check("every option quotes its reply token", options.every((o) => /"[^"]+"/.test(o)));
-check("em dash preserved", options.filter((o) => o.includes("—")).length === 27,
-  `${options.filter((o) => o.includes("—")).length} options with an em dash, expected 27 (one per reply)`);
-check("no curly quotes", !/[‘’“”]/.test(block));
-check("all options unique", new Set(options).size === 621, `${new Set(options).size} unique`);
+function verify(label, block, replies, phrases, extras, counts) {
+  console.log(`--- ${label}`);
+  check("wrapped in {{Random | … }}", block.startsWith("{{Random | ") && block.endsWith("}}"));
+  check(`${counts.replies} reply tokens`, replies.length === counts.replies, `got ${replies.length}`);
+  check(`${counts.phrases} phrasings`, phrases.length === counts.phrases, `got ${phrases.length}`);
+  check(`${counts.extras} one-off lines`, extras.length === counts.extras, `got ${extras.length}`);
+  const options = block.slice("{{Random | ".length, -"}}".length).split(" | ");
+  check(`${counts.total} options`, options.length === counts.total, `got ${options.length}`);
 
-console.log(failures === 0 ? "\nspintax block OK" : `\n${failures} failure(s)`);
+  // The point: rebuild from the parts and compare option by option.
+  const expected = [...replies.flatMap((r) => phrases.map((p) => p.replaceAll("{P}", r))), ...extras];
+  let first = null;
+  for (let i = 0; i < Math.max(options.length, expected.length); i++) {
+    if (options[i] !== expected[i]) {
+      first = i;
+      break;
+    }
+  }
+  check("every option matches, in order", first === null,
+    first === null ? "" : `option ${first}:\n   got      ${JSON.stringify(options[first])}\n   expected ${JSON.stringify(expected[first])}`);
+  check("no empty options", options.every((o) => o.trim().length > 0));
+  check("no option contains a stray pipe", options.every((o) => !o.includes("|")));
+  check("every option quotes its reply", options.every((o) => /"[^"]+"/.test(o)));
+  check("no curly quotes", !/[‘’“”]/.test(block));
+  check("all options unique", new Set(options).size === options.length, `${new Set(options).size} unique`);
+  return options;
+}
+
+const cur = read("opt-out-spintax.ts");
+const current = verify("current block", cur.literal("OPT_OUT_SPINTAX"), cur.array("REPLY_TOKENS"), cur.array("PHRASE_TEMPLATES"), cur.array("EXTRA_OPTIONS"),
+  { replies: 19, phrases: 18, extras: 105, total: 447 });
+check("the one-off lines end with the wave", current.at(-1) === 'Not a match? Reply "wave" or 👋 and I\'ll leave with a smile.');
+check("…and the first is the baton", current[342] === 'Not your thing? Reply "pass the baton" and I\'ll hand this to someone else.');
+
+const prev = read("opt-out-spintax-previous.ts");
+const previous = verify("previous block", prev.literal("PREVIOUS_OPT_OUT_SPINTAX"), prev.array("PREVIOUS_REPLY_TOKENS"), prev.array("PREVIOUS_PHRASE_TEMPLATES"), [],
+  { replies: 27, phrases: 23, extras: 0, total: 621 });
+check("previous keeps its em dash", previous.filter((o) => o.includes("—")).length === 27);
+
+console.log("--- the two are told apart");
+const curBlock = cur.literal("OPT_OUT_SPINTAX");
+const prevBlock = prev.literal("PREVIOUS_OPT_OUT_SPINTAX");
+check("neither block contains the other", !curBlock.includes(prevBlock) && !prevBlock.includes(curBlock));
+
+console.log(failures === 0 ? "\nspintax blocks OK" : `\n${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);

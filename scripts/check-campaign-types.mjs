@@ -283,6 +283,22 @@ eq("missing body field is tolerated", hasBlock(appendStepOne(
 eq("campaign with no step 1 is a no-op", appendStepOne(
   [{ step: 2, variations: [{ variation: "A", body: "x" }] }]).changed, []);
 
+// A campaign made before the text changed carries the previous block. It is
+// swapped for the current one in place — never a second opt-out line under it.
+{
+  const prevSrc = readFileSync("src/lib/campaign-types/opt-out-spintax-previous.ts", "utf8");
+  const PREV = prevSrc.match(/export const PREVIOUS_OPT_OUT_SPINTAX[^`]*`([\s\S]*?)`;/)[1];
+  const oldBody = `<div>hello</div>${SPACER}<div>${PREV}</div>`;
+  const r = appendStepOne([{ step: 1, variations: [{ variation: "A", body: oldBody }, { variation: "B", body: "<div>fresh</div>" }] }]);
+  const a = r.steps[0].variations[0].body;
+  eq("the previous block is recognised and swapped", [r.changed, r.replaced, r.alreadyPresent], [["A", "B"], ["A"], []]);
+  eq("…leaving the current block exactly once, and none of the old", [a.split(SPINTAX).length - 1, a.includes(PREV)], [1, false]);
+  eq("…in the same place, the rest of the body untouched", a, `<div>hello</div>${SPACER}<div>${SPINTAX}</div>`);
+  eq("a body with neither still just gets it appended", r.steps[0].variations[1].body, `<div>fresh</div>${SPACER}<div>${SPINTAX}</div>`);
+  const again = appendStepOne(r.steps);
+  eq("…and a second pass changes nothing", [again.changed, again.alreadyPresent], [[], ["A", "B"]]);
+}
+
 
 // --- sign-off swap ----------------------------------------------------------
 const {

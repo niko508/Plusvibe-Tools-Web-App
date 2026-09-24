@@ -1,5 +1,6 @@
 import type { SequenceStep } from "@/lib/plusvibe-types";
 import { OPT_OUT_SPINTAX } from "./opt-out-spintax";
+import { PREVIOUS_OPT_OUT_SPINTAX } from "./opt-out-spintax-previous";
 
 // Appends the opt-out spintax to the bottom of every variation in STEP 1 of the
 // parent sequence — and nowhere else. Not later steps, not sub-sequences.
@@ -27,15 +28,28 @@ export function hasOptOutBlock(body: string): boolean {
   return body.includes(OPT_OUT_SPINTAX);
 }
 
+/** True if a body carries the opt-out block the tool used before the current one. */
+export function hasPreviousOptOutBlock(body: string): boolean {
+  return body.includes(PREVIOUS_OPT_OUT_SPINTAX);
+}
+
+/**
+ * The body with the current block: left as it is when it already has it, the
+ * previous block swapped for it in place (every copy of it, so a body that
+ * somehow carries two ends with none of the old text), or appended.
+ */
 export function appendOptOutToBody(body: string): string {
   if (hasOptOutBlock(body)) return body;
+  if (hasPreviousOptOutBlock(body)) return body.split(PREVIOUS_OPT_OUT_SPINTAX).join(OPT_OUT_SPINTAX);
   return `${body}${optOutHtml()}`;
 }
 
 export interface AppendResult {
   steps: SequenceStep[];
-  /** Variation labels that got the block, e.g. ["A", "B"]. */
+  /** Variation labels that got the block, e.g. ["A", "B"] — swapped ones included. */
   changed: string[];
+  /** Of those, the ones whose previous opt-out text was swapped for the current one. */
+  replaced: string[];
   /** Labels already carrying it, left untouched. */
   alreadyPresent: string[];
 }
@@ -49,6 +63,7 @@ export interface AppendResult {
  */
 export function appendOptOutToStepOne(steps: SequenceStep[]): AppendResult {
   const changed: string[] = [];
+  const replaced: string[] = [];
   const alreadyPresent: string[] = [];
 
   const out = steps.map((s) => {
@@ -62,10 +77,11 @@ export function appendOptOutToStepOne(steps: SequenceStep[]): AppendResult {
           return v;
         }
         changed.push(v.variation);
+        if (hasPreviousOptOutBlock(body)) replaced.push(v.variation);
         return { ...v, body: appendOptOutToBody(body) };
       }),
     };
   });
 
-  return { steps: out, changed, alreadyPresent };
+  return { steps: out, changed, replaced, alreadyPresent };
 }

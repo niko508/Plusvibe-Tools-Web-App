@@ -9,7 +9,7 @@ import {
   splitDeleted,
   toWriteStep,
 } from "@/lib/plusvibe-campaigns";
-import { appendOptOutToStepOne } from "./append-opt-out";
+import { appendOptOutToStepOne, hasOptOutBlock, hasPreviousOptOutBlock } from "./append-opt-out";
 
 // Writes the opt-out spintax onto every step-1 variation of one campaign.
 //
@@ -24,6 +24,8 @@ import { appendOptOutToStepOne } from "./append-opt-out";
 
 export interface ApplyOptOutResult {
   applied: string[];
+  /** Of `applied`, the variations whose previous opt-out text was swapped for the current one. */
+  replaced: string[];
   alreadyPresent: string[];
   droppedDeleted: number;
   verified: boolean;
@@ -66,13 +68,14 @@ export async function applyOptOutToCampaign(params: {
     throw new Error("Step 1 has no live variations to add the opt-out line to");
   }
 
-  const { steps, changed, alreadyPresent } = appendOptOutToStepOne(sequences);
+  const { steps, changed, replaced, alreadyPresent } = appendOptOutToStepOne(sequences);
 
   // Nothing to do — a resumed or repeated run. Skip the write entirely rather
   // than PATCHing identical content.
   if (changed.length === 0) {
     return {
       applied: [],
+      replaced: [],
       alreadyPresent,
       droppedDeleted,
       verified: true,
@@ -110,8 +113,9 @@ export async function applyOptOutToCampaign(params: {
   const verified =
     !!afterStepOne &&
     afterStepOne.variations.length >= stepOne.variations.length &&
-    afterStepOne.variations.every((v) => !changed.includes(v.variation) ||
-      (v.body ?? "").includes("{{Random |"));
+    afterStepOne.variations.every(
+      (v) => !changed.includes(v.variation) || (hasOptOutBlock(v.body ?? "") && !hasPreviousOptOutBlock(v.body ?? ""))
+    );
 
-  return { applied: changed, alreadyPresent, droppedDeleted, verified };
+  return { applied: changed, replaced, alreadyPresent, droppedDeleted, verified };
 }

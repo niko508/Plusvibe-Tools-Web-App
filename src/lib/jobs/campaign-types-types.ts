@@ -130,6 +130,8 @@ export interface CreatedCampaign {
     state: PhaseState;
     /** Variation labels that got the block on this run. */
     applied: string[];
+    /** Of those, the ones whose previous opt-out text was swapped for the current one. */
+    replaced?: string[];
     /** Labels that already had it. */
     alreadyPresent: string[];
     error?: string;

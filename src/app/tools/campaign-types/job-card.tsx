@@ -374,7 +374,12 @@ function SourceDetails({ source, many }: { source: SourceRun; many: boolean }) {
               c.optOut!.state === "error"
                 ? c.optOut!.error || "failed"
                 : c.optOut!.applied.length > 0
-                  ? `added to step 1 ${c.optOut!.applied.join(", ")}`
+                  ? (c.optOut!.replaced ?? []).length > 0
+                    ? `updated to the new text on step 1 ${c.optOut!.replaced!.join(", ")}` +
+                      (c.optOut!.applied.length > c.optOut!.replaced!.length
+                        ? `; added to ${c.optOut!.applied.filter((l) => !c.optOut!.replaced!.includes(l)).join(", ")}`
+                        : "")
+                    : `added to step 1 ${c.optOut!.applied.join(", ")}`
                   : c.optOut!.alreadyPresent.length > 0
                     ? `already present on ${c.optOut!.alreadyPresent.join(", ")}`
                     : c.optOut!.state

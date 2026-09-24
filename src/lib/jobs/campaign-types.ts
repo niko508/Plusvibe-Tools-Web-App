@@ -1196,6 +1196,7 @@ async function runSource(
     try {
       const res = await applyOptOutToCampaign({ apiKey, workspaceId, campaignId: target.campaignId });
       target.optOut.applied = res.applied;
+      target.optOut.replaced = res.replaced;
       target.optOut.alreadyPresent = res.alreadyPresent;
       target.optOut.state = "done";
       if (!res.verified) pushError(rec, `${who}Opt-out copy was written to "${target.name}" but the re-read didn't confirm it. Check step 1 in Plusvibe before launching.`);
