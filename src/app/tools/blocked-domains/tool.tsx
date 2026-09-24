@@ -334,7 +334,6 @@ export function BlockedDomainsTool() {
                     key={item.key}
                     d={item.d}
                     busy={busyId === item.key}
-                    onOpen={() => setSection(isTenantBlock(item.d) ? "tenants" : "domains")}
                     onRemove={(domain) => withBusy(item.key, () => blockedInboxAction({ action: "hide-domain", domain }))}
                   />
                 )

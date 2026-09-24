@@ -160,7 +160,7 @@ export function InboxCard({
                     : "Take it off Home; the next bounce from this inbox is judged afresh."
               }
             >
-              {job.status === "queued" ? "Take out of line" : "Remove from Home"}
+              {job.status === "queued" ? "Take out of line" : "Remove"}
             </button>
           )}
         </div>

@@ -181,12 +181,10 @@ export function TenantBlocksView({
 export function DomainEventCard({
   d,
   busy,
-  onOpen,
   onRemove,
 }: {
   d: InboxDomainState;
   busy: boolean;
-  onOpen: () => void;
   onRemove: (domain: string) => void;
 }) {
   const tenantBlock = d.cancelReason === "tenant-block";
@@ -215,11 +213,8 @@ export function DomainEventCard({
             : `Its last Google inbox${d.lastInboxEmail ? `, ${d.lastInboxEmail},` : ""} was blocked, so it was set Not Active in 📋 Domains.`}
         {d.errors.length > 0 && <span className="text-warning"> {formatNumber(d.errors.length)} problem{d.errors.length === 1 ? "" : "s"} — see Tenant Blocks.</span>}
       </p>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button type="button" className="pv-btn-ghost" onClick={onOpen}>
-          {d.cancelledAt !== undefined || inProgress ? "Open in Tenant Blocks" : "Open in Blocked Domains"}
-        </button>
-        {!inProgress && (
+      {!inProgress && (
+        <div className="mt-3 flex flex-wrap gap-2">
           <button
             type="button"
             className="pv-btn-ghost disabled:opacity-50"
@@ -228,10 +223,10 @@ export function DomainEventCard({
             onClick={() => onRemove(d.domain)}
             title="Take it off Home. It stays on Blocked Domains and Tenant Blocks."
           >
-            Remove from Home
+            Remove
           </button>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
