@@ -12,6 +12,28 @@
 
 export const WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 export type WeekDay = (typeof WEEK_DAYS)[number];
+export const WEEKDAYS: WeekDay[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+
+/** Plusvibe's Business Type choices, as its API lists them. */
+export const BUSINESS_TYPES = [
+  "Artificial Intelligence and Machine Learning",
+  "Consulting Firms",
+  "Cryptocurrency and Blockchain",
+  "Digital Marketing Agencies",
+  "E-commerce Businesses",
+  "Education and Training Services",
+  "Financial Services",
+  "Healthcare and Wellness Providers",
+  "Hospitality Services",
+  "Human Resources and Recruiting",
+  "Legal Services",
+  "Manufacturing Companies",
+  "Non-profit Organizations",
+  "Pharmaceuticals and Biotech",
+  "Real Estate Agencies",
+  "Software and Technology Companies",
+  "Transportation and Logistics",
+] as const;
 
 export interface WarmupSettings {
   /** Warmup emails a day to start from. */
@@ -22,10 +44,12 @@ export interface WarmupSettings {
   maxDailyLimit: number;
   /** Ramp up gradually rather than starting at the maximum. */
   slowRampup: boolean;
-  /** Vary the daily count so it does not look mechanical. */
+  /** Randomized Warm-Up Limit: vary the daily limit so it looks natural. */
   randomize: boolean;
-  /** How far the daily count may vary, in emails. */
+  /** Range in %: 20 means the day's limit falls between 80% and 100% of the maximum. */
   randomizeNum: number;
+  /** One of BUSINESS_TYPES, or "" for Plusvibe's Generic Business Type (not sent). */
+  businessType: string;
   /** Share of warmup emails that get a reply, in percent. */
   replyRatePct: number;
   /** IANA time zone the window is read in, e.g. "Asia/Singapore". */
@@ -51,6 +75,7 @@ export const DEFAULT_WARMUP_SETTINGS: WarmupSettings = {
   slowRampup: true,
   randomize: true,
   randomizeNum: 10,
+  businessType: "",
   replyRatePct: 46,
   timezone: "Asia/Singapore",
   fromTime: "00:00",
@@ -64,7 +89,8 @@ export const MAX_SIGNATURE_LENGTH = 5000;
 
 /** The limits the form and the server both hold to. */
 export const WARMUP_LIMITS = {
-  dailyLimit: { min: 1, max: 100 },
+  // Plusvibe's own cap on the Daily Warmup Limit.
+  dailyLimit: { min: 1, max: 50 },
   paceIncrement: { min: 1, max: 50 },
   randomizeNum: { min: 1, max: 50 },
   replyRatePct: { min: 0, max: 100 },
@@ -104,33 +130,38 @@ export function validateWarmupSettings(input: unknown): { settings: WarmupSettin
   };
 
   const L = WARMUP_LIMITS;
-  const initialDailyLimit = whole("initialDailyLimit", "Starting emails per day", L.dailyLimit.min, L.dailyLimit.max);
+  const initialDailyLimit = whole("initialDailyLimit", "Starting daily limit", L.dailyLimit.min, L.dailyLimit.max);
   const paceIncrement = whole("paceIncrement", "Daily increase", L.paceIncrement.min, L.paceIncrement.max);
-  const maxDailyLimit = whole("maxDailyLimit", "Maximum emails per day", L.dailyLimit.min, L.dailyLimit.max);
-  const slowRampup = flag("slowRampup", "Slow ramp-up");
-  const randomize = flag("randomize", "Randomize");
-  const randomizeNum = whole("randomizeNum", "Randomize by", L.randomizeNum.min, L.randomizeNum.max);
+  const maxDailyLimit = whole("maxDailyLimit", "Daily Warmup Limit", L.dailyLimit.min, L.dailyLimit.max);
+  const slowRampup = flag("slowRampup", "Warmup Email Ramp-Up");
+  const randomize = flag("randomize", "Randomized Warm-Up Limit");
+  const randomizeNum = whole("randomizeNum", "Range in %", L.randomizeNum.min, L.randomizeNum.max);
+  const businessType = typeof src.businessType === "string" ? src.businessType.trim() : "";
+  if (businessType && !(BUSINESS_TYPES as readonly string[]).includes(businessType)) {
+    problems.push(`"${businessType}" is not one of Plusvibe's business types.`);
+  }
 
   const rate = asNumber(src.replyRatePct);
   if (!Number.isFinite(rate) || rate < L.replyRatePct.min || rate > L.replyRatePct.max) {
-    problems.push(`Reply rate must be a percentage from ${L.replyRatePct.min} to ${L.replyRatePct.max}.`);
+    problems.push(`Warmup Reply Rate must be a percentage from ${L.replyRatePct.min} to ${L.replyRatePct.max}.`);
   }
   if (Number.isFinite(initialDailyLimit) && Number.isFinite(maxDailyLimit) && initialDailyLimit > maxDailyLimit) {
-    problems.push("Starting emails per day can't be more than the maximum.");
+    problems.push("The starting daily limit can't be more than the Daily Warmup Limit.");
   }
 
   const timezone = typeof src.timezone === "string" ? src.timezone.trim() : "";
   if (!timezone || !isTimeZone(timezone)) problems.push(`"${timezone}" is not a time zone. Use a name like Asia/Singapore or Europe/Helsinki.`);
   const fromTime = typeof src.fromTime === "string" ? src.fromTime.trim() : "";
   const toTime = typeof src.toTime === "string" ? src.toTime.trim() : "";
-  if (!TIME_RE.test(fromTime)) problems.push("Send from must be a time like 08:00.");
-  if (!TIME_RE.test(toTime)) problems.push("Send until must be a time like 18:00.");
-  if (TIME_RE.test(fromTime) && TIME_RE.test(toTime) && fromTime >= toTime) problems.push("Send until must be later than send from.");
+  if (!TIME_RE.test(fromTime)) problems.push("Start time must be a time like 08:00.");
+  if (!TIME_RE.test(toTime)) problems.push("End time must be a time like 18:00.");
+  if (TIME_RE.test(fromTime) && TIME_RE.test(toTime) && fromTime >= toTime) problems.push("End time must be later than the start time.");
 
   const rawDays = Array.isArray(src.days) ? src.days.map(String) : [];
   // Kept in week order whatever order they were ticked in.
   const days = WEEK_DAYS.filter((d) => rawDays.includes(d));
-  if (days.length === 0) problems.push("Pick at least one day.");
+  // Plusvibe takes a schedule of at least five days.
+  if (days.length < 5) problems.push("The warmup schedule needs at least 5 days.");
 
   const signature = typeof src.signature === "string" ? src.signature.trim() : "";
   if (src.signature !== undefined && typeof src.signature !== "string") problems.push("The signature must be text.");
@@ -146,6 +177,7 @@ export function validateWarmupSettings(input: unknown): { settings: WarmupSettin
       slowRampup,
       randomize,
       randomizeNum,
+      businessType,
       // Whole percent to one decimal: 46 → 0.46 exactly on the wire.
       replyRatePct: Math.round(rate * 10) / 10,
       timezone,
@@ -199,6 +231,8 @@ export function toPlusvibeWarmup(s: WarmupSettings, { withSignature = true }: { 
     : {};
   return {
     ...signature,
+    // Left out for the generic type, so it stays whatever the inbox has.
+    ...(s.businessType ? { warmup_business_type: s.businessType } : {}),
     warmup_max_daily_limit: s.maxDailyLimit,
     bulk_warmup_is_slow_rampup: s.slowRampup ? "yes" : "no",
     warmup_initial_daily_limit: s.initialDailyLimit,
@@ -218,8 +252,10 @@ export function toPlusvibeWarmup(s: WarmupSettings, { withSignature = true }: { 
 
 /** "2 → 18/day, +3 a day (slow ramp-up) ±10 · 46% replies · every day, all day (Asia/Singapore)" */
 export function describeWarmup(s: WarmupSettings): string {
-  const ramp = `${s.initialDailyLimit} → ${s.maxDailyLimit}/day, +${s.paceIncrement} a day${s.slowRampup ? " (slow ramp-up)" : ""}`;
-  const vary = s.randomize ? ` ±${s.randomizeNum}` : "";
+  const ramp = s.slowRampup
+    ? `${s.maxDailyLimit}/day, ramp-up from ${s.initialDailyLimit} (+${s.paceIncrement} a day)`
+    : `${s.maxDailyLimit}/day, no ramp-up`;
+  const vary = s.randomize ? ` ±${s.randomizeNum}%` : "";
   const everyDay = s.days.length === 7;
   const weekdays = s.days.length === 5 && WEEK_DAYS.slice(0, 5).every((d) => s.days.includes(d));
   const when = everyDay ? "every day" : weekdays ? "weekdays" : s.days.map((d) => d.slice(0, 3)).join(", ");
@@ -229,5 +265,6 @@ export function describeWarmup(s: WarmupSettings): string {
     : s.warmupSignature
       ? " · each inbox's own signature, in warmup emails"
       : "";
-  return `${ramp}${vary} · ${s.replyRatePct}% replies · ${when}, ${hours} (${s.timezone})${sig}`;
+  const type = s.businessType ? ` · ${s.businessType}` : "";
+  return `${ramp}${vary} · ${s.replyRatePct}% replies${type} · ${when}, ${hours} (${s.timezone})${sig}`;
 }
