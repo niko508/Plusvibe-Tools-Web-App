@@ -15,13 +15,13 @@ const eq = (label, got, want) => {
   }
 };
 
-const { DEFAULT_WARMUP_SETTINGS: D, validateWarmupSettings, normalizeWarmupSettings, toPlusvibeWarmup, describeWarmup, signatureHtml } =
+const { DEFAULT_WARMUP_SETTINGS: D, LEGACY_WARMUP_SETTINGS: LEGACY, validateWarmupSettings, normalizeWarmupSettings, toPlusvibeWarmup, describeWarmup, signatureHtml } =
   await importTs("@/lib/azure-warmup/warmup-settings");
 
-console.log("--- the defaults change nothing");
+console.log("--- defaults, and runs from before the settings tab");
 // Exactly what the tool sent when these values were fixed in code — which
 // is what a run from before the signature setting still sends.
-eq("without the signature, the defaults send what the tool always sent", toPlusvibeWarmup(D, { withSignature: false }), {
+eq("a run from before the settings tab still sends what the tool always sent", toPlusvibeWarmup(LEGACY, { withSignature: false }), {
   warmup_max_daily_limit: 18,
   bulk_warmup_is_slow_rampup: "yes",
   warmup_initial_daily_limit: 2,
@@ -39,7 +39,8 @@ eq("without the signature, the defaults send what the tool always sent", toPlusv
 eq("the signature is on by default: {{sender_first_name}}, used in warmup",
   [D.signature, D.warmupSignature, toPlusvibeWarmup(D).signature, toPlusvibeWarmup(D).warmup_signature],
   ["{{sender_first_name}}", true, "{{sender_first_name}}", "yes"]);
-eq("…and read as", describeWarmup(D), "18/day, ramp-up from 2 (+3 a day) ±10% · 46% replies · every day, all day (Asia/Singapore) · signature “{{sender_first_name}}”, in warmup emails");
+eq("the default time zone is New York", [D.timezone, toPlusvibeWarmup(D).warmup_schedule.tz], ["America/New_York", "America/New_York"]);
+eq("…and read as", describeWarmup(D), "18/day, ramp-up from 2 (+3 a day) ±10% · 46% replies · every day, all day (America/New_York) · signature “{{sender_first_name}}”, in warmup emails");
 
 console.log("--- the signature");
 eq("a typed line break becomes <br>", signatureHtml("Best,\n{{sender_first_name}} {{sender_last_name}}\n"), "Best,<br>{{sender_first_name}} {{sender_last_name}}");

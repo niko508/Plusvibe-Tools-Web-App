@@ -26,7 +26,7 @@ import type {
   AzureWarmupJob,
 } from "@/lib/jobs/azure-warmup-types";
 import { loadWarmupSettings } from "@/lib/azure-warmup/settings-store";
-import { normalizeWarmupSettings, toPlusvibeWarmup } from "@/lib/azure-warmup/warmup-settings";
+import { LEGACY_WARMUP_SETTINGS, normalizeWarmupSettings, toPlusvibeWarmup } from "@/lib/azure-warmup/warmup-settings";
 import {
   CHECK_INTERVAL_MS,
   COL_DOMAIN,
@@ -720,7 +720,9 @@ async function runCheck(rec: StoredJob, apiKey: string, doneSet: Set<string>) {
           ids,
           // A run started before the signature was a setting never touched
           // it, and keeps not touching it.
-          ...toPlusvibeWarmup(normalizeWarmupSettings(rec.warmup), { withSignature: rec.warmup?.signature !== undefined }),
+          ...toPlusvibeWarmup(rec.warmup ? normalizeWarmupSettings(rec.warmup) : LEGACY_WARMUP_SETTINGS, {
+            withSignature: rec.warmup?.signature !== undefined,
+          }),
         },
       });
       await acquireSlot();

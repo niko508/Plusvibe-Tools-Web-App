@@ -39,7 +39,7 @@ import {
 } from "@/components/icons";
 import { parseUpload, type ParsedUpload } from "./parse";
 import { WarmupSettingsPanel } from "./settings-panel";
-import { DEFAULT_WARMUP_SETTINGS, describeWarmup, type WarmupSettings } from "@/lib/azure-warmup/warmup-settings";
+import { LEGACY_WARMUP_SETTINGS, describeWarmup, type WarmupSettings } from "@/lib/azure-warmup/warmup-settings";
 
 export function AzureWarmupTool() {
   const { hasKey, ready } = useApiKey();
@@ -680,7 +680,9 @@ function JobCard({
         {describeWarmup(
           job.warmup?.signature !== undefined
             ? job.warmup
-            : { ...DEFAULT_WARMUP_SETTINGS, ...(job.warmup ?? {}), signature: "", warmupSignature: false }
+            : job.warmup
+              ? { ...job.warmup, signature: "", warmupSignature: false }
+              : LEGACY_WARMUP_SETTINGS
         )}
         {job.warmup ? "" : " (the defaults — this run started before settings existed)"}
       </p>

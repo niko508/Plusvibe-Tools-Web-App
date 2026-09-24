@@ -77,12 +77,24 @@ export const DEFAULT_WARMUP_SETTINGS: WarmupSettings = {
   randomizeNum: 10,
   businessType: "",
   replyRatePct: 46,
-  timezone: "Asia/Singapore",
+  timezone: "America/New_York",
   fromTime: "00:00",
   toTime: "23:59",
   days: [...WEEK_DAYS],
   signature: "{{sender_first_name}}",
   warmupSignature: true,
+};
+
+/**
+ * What runs started before the settings tab existed applied, and still apply:
+ * they kept no copy of their own, and a new default must not reach into a
+ * run that is already going.
+ */
+export const LEGACY_WARMUP_SETTINGS: WarmupSettings = {
+  ...DEFAULT_WARMUP_SETTINGS,
+  timezone: "Asia/Singapore",
+  signature: "",
+  warmupSignature: false,
 };
 
 export const MAX_SIGNATURE_LENGTH = 5000;
@@ -250,7 +262,7 @@ export function toPlusvibeWarmup(s: WarmupSettings, { withSignature = true }: { 
   };
 }
 
-/** "2 → 18/day, +3 a day (slow ramp-up) ±10 · 46% replies · every day, all day (Asia/Singapore)" */
+/** "18/day, ramp-up from 2 (+3 a day) ±10% · 46% replies · every day, all day (America/New_York) · …" */
 export function describeWarmup(s: WarmupSettings): string {
   const ramp = s.slowRampup
     ? `${s.maxDailyLimit}/day, ramp-up from ${s.initialDailyLimit} (+${s.paceIncrement} a day)`
