@@ -76,7 +76,10 @@ export function BlockedDomainsTool() {
     if (pollRef.current) clearTimeout(pollRef.current);
     if (!view) return;
     const busy = (s: string) => s === "queued" || s === "working" || s === "deleting";
-    const active = view.jobs.some((j) => busy(j.status)) || (view.inboxJobs ?? []).some((j) => busy(j.status));
+    const active =
+      view.jobs.some((j) => busy(j.status)) ||
+      (view.inboxJobs ?? []).some((j) => busy(j.status)) ||
+      (view.inboxDomains ?? []).some((d) => d.cancelRequestedAt !== undefined && d.cancelledAt === undefined);
     pollRef.current = setTimeout(() => void refresh(), active ? POLL_ACTIVE_MS : POLL_IDLE_MS);
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current);
@@ -127,6 +130,7 @@ export function BlockedDomainsTool() {
   // Inboxes waiting their turn are counted, not listed: Clay can send hundreds at once.
   const inLine = inboxJobs.filter((j) => j.status === "queued").length;
   const checkingNow = inboxJobs.filter((j) => j.status === "working").length;
+  const domainsInLine = (view?.inboxDomains ?? []).filter((d) => d.cancelRequestedAt !== undefined && d.cancelledAt === undefined).length;
   const recent = inboxJobs.filter((j) => j.status !== "awaiting_confirmation" && j.status !== "queued");
 
   // The domain-level runs from before the move to inboxes. Kept: some still
@@ -242,6 +246,20 @@ export function BlockedDomainsTool() {
             </div>
           )}
 
+          {domainsInLine > 0 && (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-xl border border-border bg-muted/40 px-4 py-3 text-left text-sm"
+              data-domains-in-line
+              onClick={() => setSection("domains")}
+            >
+              <Spinner size={14} />
+              <span>
+                <strong className="tabular-nums">{formatNumber(domainsInLine)}</strong> {domainsInLine === 1 ? "domain" : "domains"} being blocked as a whole — see Blocked
+                Domains.
+              </span>
+            </button>
+          )}
           {inLine > 0 && (
             <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm" data-in-line>
               <Spinner size={14} />

@@ -6,6 +6,7 @@ import {
   confirmInbox,
   dismissInbox,
   intakeInbox,
+  intakeTenantBlock,
   removeInboxJob,
 } from "@/lib/jobs/blocked-inboxes";
 
@@ -15,13 +16,14 @@ export const dynamic = "force-dynamic";
 // Body: { action: "confirm" | "dismiss" | "remove", jobId }
 //     | { action: "confirm-all" }
 //     | { action: "check", email }   — run one inbox by hand, as Clay would
+//     | { action: "tenant-block", domain } — block a whole domain by hand
 //
 // Like the list, the log is shared rather than per key, so a valid key is
 // what gates it; the work itself runs with the server's own key.
 export async function POST(request: Request) {
   try {
     resolveApiKey(request);
-    const body = (await request.json().catch(() => ({}))) as { action?: string; jobId?: string; email?: string };
+    const body = (await request.json().catch(() => ({}))) as { action?: string; jobId?: string; email?: string; domain?: string };
     switch (body.action) {
       case "confirm":
       case "dismiss":
@@ -38,6 +40,11 @@ export async function POST(request: Request) {
         const r = await intakeInbox({ email: body.email, source: "manual" });
         if (r.outcome === "invalid") return NextResponse.json({ error: r.reason }, { status: 400 });
         return NextResponse.json({ ok: true, outcome: r.outcome, jobId: r.job.id });
+      }
+      case "tenant-block": {
+        const r = await intakeTenantBlock({ domain: body.domain, email: body.email, source: "manual" });
+        if (r.outcome === "invalid") return NextResponse.json({ error: r.reason }, { status: 400 });
+        return NextResponse.json({ ok: true, outcome: r.outcome, domain: r.domain });
       }
       default:
         return NextResponse.json({ error: "Unknown action" }, { status: 400 });

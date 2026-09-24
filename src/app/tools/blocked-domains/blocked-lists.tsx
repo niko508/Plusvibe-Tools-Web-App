@@ -5,7 +5,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { isBlocked, type BlockedInboxJob, type InboxDomainState } from "@/lib/jobs/blocked-inboxes-types";
-import { blockedDomains, platformKey, UNKNOWN_PLATFORM } from "@/lib/blocked-inboxes/domains";
+import { blockedDomains, platformKey, UNKNOWN_PLATFORM, type BlockedDomainEntry } from "@/lib/blocked-inboxes/domains";
 import { PROVIDER_LABELS } from "@/lib/plusvibe-providers";
 import { formatNumber } from "@/lib/format";
 import { EmptyState, Spinner } from "@/components/ui";
@@ -135,10 +135,13 @@ export function BlockedInboxesView({
 /** What has happened to the domain as a whole, in a few words, and how loud to say it. */
 function domainStatus(state: InboxDomainState | undefined, cancelAfter: number): { text: string; tone: string } {
   if (!state) return { text: "—", tone: "text-muted-foreground" };
-  if (state.cancelling) return { text: "Cancelling…", tone: "text-accent" };
+  const tenantBlock = state.cancelReason === "tenant-block";
+  if (state.cancelling) return { text: tenantBlock ? "Tenant blocking…" : "Cancelling…", tone: "text-accent" };
   if (state.cancelledAt !== undefined) {
-    return { text: state.tenantQueued || state.tenantAlreadyQueued ? "Cancelled · tenant queued" : "Cancelled", tone: "text-danger" };
+    const what = tenantBlock ? "Tenant blocked" : "Cancelled";
+    return { text: state.tenantQueued || state.tenantAlreadyQueued ? `${what} · tenant queued` : what, tone: "text-danger" };
   }
+  if (state.cancelRequestedAt !== undefined) return { text: tenantBlock ? "Tenant block in line" : "Cancellation in line", tone: "text-accent" };
   if (state.notActiveReason === "last-google-inbox") return { text: "Not Active · last inbox", tone: "text-danger" };
   if (state.provider === "microsoft") {
     return { text: `${state.deletedByRules} deleted · cancels at ${cancelAfter + 1}`, tone: state.deletedByRules > 0 ? "text-warning" : "text-muted-foreground" };
@@ -155,8 +158,32 @@ export function BlockedDomainsList({
   states?: InboxDomainState[];
   cancelAfter: number;
 }) {
-  const domains = useMemo(() => blockedDomains(jobs), [jobs]);
   const stateOf = useMemo(() => new Map(states.map((st) => [st.domain, st])), [states]);
+  // A domain cancelled as a whole shows here even with no blocked inbox on it:
+  // a Tenant Block still in line, or one that found no inboxes left.
+  const domains = useMemo(() => {
+    const list = blockedDomains(jobs);
+    const seen = new Set(list.map((d) => d.domain));
+    const extra: BlockedDomainEntry[] = states
+      .filter((st) => !seen.has(st.domain) && (st.cancelRequestedAt !== undefined || st.cancelledAt !== undefined))
+      .map((st) => {
+        const at = st.cancelledAt ?? st.cancelRequestedAt ?? st.updatedAt;
+        return {
+          domain: st.domain,
+          tld: st.domain.slice(st.domain.lastIndexOf(".")),
+          platform: UNKNOWN_PLATFORM,
+          provider: st.provider ? PROVIDER_LABELS[st.provider] : "—",
+          workspaceName: st.workspaceName,
+          inboxes: [],
+          blockedInboxes: 0,
+          deletedInboxes: 0,
+          firstBlockedAt: at,
+          lastBlockedAt: at,
+          fromDomainRun: false,
+        };
+      });
+    return [...extra, ...list].sort((a, b) => b.lastBlockedAt - a.lastBlockedAt || a.domain.localeCompare(b.domain));
+  }, [jobs, states]);
   const [open, setOpen] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [shown, setShown] = useState(PAGE);
@@ -183,7 +210,7 @@ export function BlockedDomainsList({
         />
         <span className="text-xs text-muted-foreground">
           {formatNumber(domains.length)} domain{domains.length === 1 ? "" : "s"} with a blocked inbox. A Google domain goes Not Active when its last inbox is blocked; a Microsoft
-          one is cancelled once more than {cancelAfter} of its inboxes have been deleted.
+          one is cancelled once more than {cancelAfter} of its inboxes have been deleted, or straight away when Clay&apos;s Tenant Block says YES.
         </span>
       </div>
       <div className="pv-card overflow-x-auto p-0">
@@ -274,12 +301,26 @@ function FragmentRow({ cells, detail, open, onToggle }: { cells: ReactNode; deta
 
 /** The domain-level side of a domain: its cancellation, or its Not Active. */
 function DomainDetail({ state }: { state: InboxDomainState | undefined }) {
-  if (!state || (state.cancelledAt === undefined && state.notActiveAt === undefined && state.errors.length === 0)) return null;
+  if (
+    !state ||
+    (state.cancelledAt === undefined && state.cancelRequestedAt === undefined && state.notActiveAt === undefined && state.errors.length === 0)
+  ) {
+    return null;
+  }
+  const tenantBlock = state.cancelReason === "tenant-block";
   return (
     <div className="rounded-lg border border-border p-2" data-domain-detail>
+      {state.cancelRequestedAt !== undefined && state.cancelledAt === undefined && (
+        <p>
+          {tenantBlock ? "Tenant Block" : "Cancellation"} asked for {relativeTime(state.cancelRequestedAt)}
+          {state.tenantBlockEmail ? ` (Clay sent ${state.tenantBlockEmail})` : ""} — {state.cancelling ? "under way." : "in line."}
+        </p>
+      )}
       {state.cancelledAt !== undefined && (
         <p>
-          Cancelled {relativeTime(state.cancelledAt)} after {state.deletedByRules} inboxes were deleted:{" "}
+          {tenantBlock
+            ? `Tenant blocked ${relativeTime(state.cancelledAt)}, as Clay's Tenant Block column said${state.tenantBlockEmail ? ` (sent with ${state.tenantBlockEmail})` : ""}: `
+            : `Cancelled ${relativeTime(state.cancelledAt)} after ${state.deletedByRules} inboxes were deleted: `}
           {state.notActiveAt ? "set Not Active in 📋 Domains" : "could not be set Not Active"}
           {state.tenantQueued
             ? `, tenant ${state.tenantEmail} queued on 🚯 Tenants to Cancel`
@@ -287,9 +328,11 @@ function DomainDetail({ state }: { state: InboxDomainState | undefined }) {
               ? `, tenant ${state.tenantEmail} already on 🚯 Tenants to Cancel`
               : ", no tenant queued"}
           . {state.cancelledInboxes?.length ?? 0} inbox{(state.cancelledInboxes?.length ?? 0) === 1 ? "" : "es"} stopped with it
-          {state.keptInboxes && state.keptInboxes.length > 0
-            ? `; kept, still getting replies: ${state.keptInboxes.map((k) => `${k.email} (${k.oooReplyRate}%)`).join(", ")}`
-            : "; none kept"}
+          {tenantBlock
+            ? ""
+            : state.keptInboxes && state.keptInboxes.length > 0
+              ? `; kept, still getting replies: ${state.keptInboxes.map((k) => `${k.email} (${k.oooReplyRate}%)`).join(", ")}`
+              : "; none kept"}
           .
         </p>
       )}

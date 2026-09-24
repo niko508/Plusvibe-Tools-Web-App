@@ -65,6 +65,9 @@ export function SettingsView({
   const [checkEmail, setCheckEmail] = useState("");
   const [checking, setChecking] = useState(false);
   const [checkNote, setCheckNote] = useState<string | null>(null);
+  const [blockDomain, setBlockDomain] = useState("");
+  const [blocking, setBlocking] = useState(false);
+  const [blockNote, setBlockNote] = useState<string | null>(null);
 
   // Follow what the server holds until someone starts editing.
   useEffect(() => {
@@ -149,6 +152,27 @@ export function SettingsView({
       onError(err instanceof Error ? err.message : "Could not check that inbox.");
     } finally {
       setChecking(false);
+    }
+  }
+
+  async function tenantBlock() {
+    const domain = blockDomain.trim();
+    if (!domain) return;
+    const ok = window.confirm(
+      `Block all of ${domain}? Every inbox on it is stopped now and deleted${view?.settings.autoDelete ? " straight away" : " once you confirm"}, the domain is set Not Active, and its tenant goes onto 🚯 Tenants to Cancel.`
+    );
+    if (!ok) return;
+    setBlocking(true);
+    setBlockNote(null);
+    try {
+      const r = await blockedInboxAction({ action: "tenant-block", domain });
+      setBlockNote(r.outcome === "duplicate" ? `${r.domain} is already blocked, or being blocked.` : `Blocking ${r.domain} — follow it on Blocked Domains.`);
+      setBlockDomain("");
+      await onChanged();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Could not block that domain.");
+    } finally {
+      setBlocking(false);
     }
   }
 
@@ -247,6 +271,32 @@ export function SettingsView({
           </div>
           {checkNote && <p className="mt-2 text-xs text-muted-foreground">{checkNote}</p>}
         </section>
+
+        {/* Block a whole domain */}
+        <section className="pv-card p-4 sm:p-6 lg:col-span-2">
+          <h2 className="text-base font-semibold">Block a whole domain now</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Does what Clay&apos;s Tenant Block does: every inbox on the domain is stopped and deleted, the domain is set Not Active,
+            and its tenant goes onto 🚯 Tenants to Cancel.
+          </p>
+          <div className="mt-3 flex items-center gap-2">
+            <input
+              className="pv-input"
+              placeholder="domain.com"
+              value={blockDomain}
+              aria-label="Domain to block"
+              data-block-domain
+              onChange={(e) => setBlockDomain(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void tenantBlock();
+              }}
+            />
+            <button type="button" className="pv-btn-ghost text-danger disabled:opacity-50" data-tenant-block disabled={blocking || !blockDomain.trim()} onClick={tenantBlock}>
+              {blocking ? <Spinner size={14} /> : <TrashIcon size={14} />} Block domain
+            </button>
+          </div>
+          {blockNote && <p className="mt-2 text-xs text-muted-foreground">{blockNote}</p>}
+        </section>
       </div>
 
       {/* Clay */}
@@ -257,6 +307,13 @@ export function SettingsView({
           <span className="font-mono">x-webhook-secret</span> and a body of{" "}
           <span className="font-mono">{'{ "email": "sender@domain.com" }'}</span>. Repeat bounces are counted, not re-run: a
           blocked inbox is never judged again, and one that passed is judged again on its first bounce 24 hours later.
+        </p>
+        <p className="mt-2 text-xs text-muted-foreground" data-tenant-block-doc>
+          <strong>Tenant Block:</strong> add <span className="font-mono">{'"tenant_block": "{{Tenant Block}}"'}</span> to the same body.
+          When it is <span className="font-mono">YES</span>, the inbox is not judged — its whole domain is blocked: every inbox on it
+          stopped and deleted{view?.settings.autoDelete ? "" : " (once you confirm, while Auto-delete is off)"}, the domain set Not Active,
+          and the domain and its tenant added to 🚯 Tenants to Cancel. Once per domain; later YES rows for it are only counted. Empty
+          or anything else: the inbox is judged as usual.
         </p>
         <div className="mt-3 flex items-center gap-2">
           <code className="flex-1 truncate rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-xs">{url}</code>

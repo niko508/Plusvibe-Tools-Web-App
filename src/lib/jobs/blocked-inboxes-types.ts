@@ -16,6 +16,8 @@
 //              automation cancelled one: inboxes still getting replies are
 //              kept, every other inbox is stopped and deleted, the domain goes
 //              Not Active and its tenant onto 🚯 Tenants to Cancel.
+//   Tenant Block  Clay's Tenant Block column says YES → the same, but for
+//              every inbox on the domain: none are kept.
 //
 // What each domain has had done is kept in InboxDomainState, the deletion
 // count among it.
@@ -142,9 +144,19 @@ export interface InboxDomainState {
   deletedByRules: number;
   /** Set to Not Active in 📋 Domains, and why. */
   notActiveAt?: number;
-  notActiveReason?: "last-google-inbox" | "microsoft-cancelled";
+  notActiveReason?: "last-google-inbox" | "microsoft-cancelled" | "tenant-block";
   previousStatus?: string;
-  /** Microsoft: cancelled — the old write-off, run once. */
+  /**
+   * Why the whole domain is being cancelled: its Microsoft inboxes passed the
+   * deletion count, or Clay's Tenant Block column said so. Asked for at
+   * `cancelRequestedAt`; a restart before `cancelledAt` picks it up again.
+   */
+  cancelReason?: "deleted-count" | "tenant-block";
+  cancelRequestedAt?: number;
+  /** Tenant Block: the inbox Clay sent it with, and later hits for the same domain. */
+  tenantBlockEmail?: string;
+  tenantBlockHits?: number;
+  /** Cancelled — the old write-off, run once. */
   cancelledAt?: number;
   cancelling?: boolean;
   /** Inboxes kept at cancellation because they are still getting replies. */

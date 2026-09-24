@@ -2,7 +2,7 @@ import "server-only";
 
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
-import { intakeInbox } from "@/lib/jobs/blocked-inboxes";
+import { intakeInbox, intakeTenantBlock } from "@/lib/jobs/blocked-inboxes";
 import type { BlockedInboxJob } from "@/lib/jobs/blocked-inboxes-types";
 
 // The Clay webhook, as a handler both route paths share.
@@ -49,6 +49,18 @@ function describeExisting(job: BlockedInboxJob): string {
   }
 }
 
+/**
+ * Whether Clay's Tenant Block column said yes. Clay sends the cell as text,
+ * so "YES", "yes", "true" and a real true all count; an empty cell, "NO" and
+ * a missing field don't.
+ */
+export function saysYes(v: unknown): boolean {
+  if (v === true || v === 1) return true;
+  return typeof v === "string" && ["yes", "y", "true", "1"].includes(v.trim().toLowerCase());
+}
+
+const TENANT_BLOCK_KEYS = ["tenant_block", "tenantBlock", "Tenant Block", "tenant_blocked", "tenantBlocked"];
+
 /** Constant-time compare, so a wrong secret can't be found a byte at a time. */
 function secretMatches(provided: string, expected: string): boolean {
   const a = Buffer.from(provided);
@@ -87,7 +99,29 @@ export async function handleBlockedDomainWebhook(request: Request) {
 
   const email =
     body.email ?? body.Email ?? body.inbox ?? body.sender ?? body.sender_email ?? body.senderEmail ?? body.from_email;
-  if (email === undefined && (body.domain ?? body.Domain ?? body.blocked_domain) !== undefined) {
+  const domain = body.domain ?? body.Domain ?? body.blocked_domain;
+
+  // Tenant Block: the whole domain goes, rather than the one inbox being judged.
+  if (TENANT_BLOCK_KEYS.some((k) => saysYes(body[k]))) {
+    const r = await intakeTenantBlock({ email, domain, source: typeof body.source === "string" ? body.source : "clay" });
+    if (r.outcome === "invalid") return NextResponse.json({ status: "invalid", error: r.reason }, { status: 400 });
+    if (r.outcome === "duplicate") {
+      const d = r.state;
+      return NextResponse.json({
+        status: "already_handled",
+        action: "tenant_block",
+        domain: r.domain,
+        repeatHits: d.tenantBlockHits ?? 0,
+        message:
+          d.cancelledAt !== undefined
+            ? `${r.domain} is already cancelled${d.tenantQueued || d.tenantAlreadyQueued ? " and its tenant queued" : ""}. Nothing to do.`
+            : `${r.domain} is already being cancelled. Nothing to do.`,
+      });
+    }
+    return NextResponse.json({ status: "accepted", action: "tenant_block", domain: r.domain }, { status: 202 });
+  }
+
+  if (email === undefined && domain !== undefined) {
     // The old body. Refused rather than guessed at: a domain says nothing
     // about which of its inboxes bounced.
     return NextResponse.json(
@@ -148,7 +182,7 @@ export function describeBlockedDomainWebhook() {
       endpoint: "blocked-domain",
       ok: true,
       message:
-        "This is the Blocked Domains webhook. Send a POST, not a GET, with the x-webhook-secret header and a JSON body of { \"email\": \"sender@example.com\" } — the sender inbox that bounced.",
+        "This is the Blocked Domains webhook. Send a POST, not a GET, with the x-webhook-secret header and a JSON body of { \"email\": \"sender@example.com\" } — the sender inbox that bounced. Add \"tenant_block\": \"YES\" to block its whole domain instead.",
       secretConfigured: configured,
       ...(configured
         ? {}
