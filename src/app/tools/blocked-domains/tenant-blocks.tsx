@@ -176,3 +176,35 @@ export function TenantBlocksView({
     </div>
   );
 }
+
+/** A domain taken out as a whole, as a compact card for Home. Opens Tenant Blocks. */
+export function DomainEventCard({ d, onOpen }: { d: InboxDomainState; onOpen: () => void }) {
+  const tenantBlock = d.cancelReason === "tenant-block";
+  const label =
+    d.cancelledAt === undefined && d.cancelRequestedAt !== undefined
+      ? { text: d.cancelling ? "Blocking domain…" : "Domain block in line", className: "bg-accent/10 text-accent" }
+      : d.cancelledAt !== undefined
+        ? { text: tenantBlock ? "Tenant blocked" : "Domain cancelled", className: "bg-danger/10 text-danger" }
+        : { text: "Not Active · last inbox", className: "bg-danger/10 text-danger" };
+  const stopped = d.cancelledInboxes?.length ?? 0;
+  return (
+    <button type="button" onClick={onOpen} className="pv-card block w-full p-4 text-left sm:p-5" data-domain-event={d.domain}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${label.className}`}>{label.text}</span>
+          <span className="truncate font-mono text-sm font-medium">{d.domain}</span>
+          {d.workspaceName && <span className="pv-chip shrink-0">{d.workspaceName}</span>}
+        </div>
+        <span className="shrink-0 text-xs text-muted-foreground">{relativeTime(d.cancelledAt ?? d.notActiveAt ?? d.cancelRequestedAt ?? d.updatedAt)}</span>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        {d.cancelledAt !== undefined
+          ? `${tenantBlock ? (d.tenantBlockSource === "manual" ? "Blocked by hand" : "Clay's Tenant Block said YES") : "More than the allowed inboxes deleted"}: ${formatNumber(stopped)} inbox${stopped === 1 ? "" : "es"} stopped${d.notActiveAt ? ", set Not Active" : ""}${d.tenantQueued || d.tenantAlreadyQueued ? `, tenant ${d.tenantEmail} on 🚯 Tenants to Cancel` : ""}.`
+          : d.cancelRequestedAt !== undefined
+            ? "Every inbox on it will be stopped, the domain set Not Active and its tenant queued to cancel."
+            : "Its last Google inbox was blocked, so it was set Not Active in 📋 Domains."}
+        {d.errors.length > 0 && <span className="text-warning"> {formatNumber(d.errors.length)} problem{d.errors.length === 1 ? "" : "s"} — see Tenant Blocks.</span>}
+      </p>
+    </button>
+  );
+}

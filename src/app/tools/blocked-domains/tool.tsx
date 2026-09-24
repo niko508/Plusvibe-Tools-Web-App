@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { BlockedDomainsView } from "@/lib/jobs/blocked-domains-types";
 import { isBlocked } from "@/lib/jobs/blocked-inboxes-types";
 import { blockedDomains } from "@/lib/blocked-inboxes/domains";
@@ -29,7 +29,7 @@ import { InboxCard } from "./inbox-card";
 import { BlockedDomainsList, BlockedInboxesView } from "./blocked-lists";
 import { StatsView } from "./stats-view";
 import { SettingsView } from "./settings-view";
-import { TenantBlocksView, isTenantBlock } from "./tenant-blocks";
+import { DomainEventCard, TenantBlocksView, isTenantBlock } from "./tenant-blocks";
 
 /** Polled while anything is in flight; slower otherwise, since Clay drives it. */
 const POLL_ACTIVE_MS = 2000;
@@ -56,6 +56,10 @@ export function BlockedDomainsTool() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [recentShown, setRecentShown] = useState(RECENT);
   const [oldOpen, setOldOpen] = useState(false);
+  const [passedOpen, setPassedOpen] = useState(false);
+  const [otherOpen, setOtherOpen] = useState(false);
+  const [passedShown, setPassedShown] = useState(RECENT);
+  const [otherShown, setOtherShown] = useState(RECENT);
   const [confirmingAll, setConfirmingAll] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -133,7 +137,21 @@ export function BlockedDomainsTool() {
   const inLine = inboxJobs.filter((j) => j.status === "queued").length;
   const checkingNow = inboxJobs.filter((j) => j.status === "working").length;
   const domainsInLine = (view?.inboxDomains ?? []).filter((d) => d.cancelRequestedAt !== undefined && d.cancelledAt === undefined).length;
-  const recent = inboxJobs.filter((j) => j.status !== "awaiting_confirmation" && j.status !== "queued" && j.hiddenAt === undefined);
+  // Home leads with what was blocked — inboxes and whole domains, newest
+  // first. Waiting ones have their own section above; passed and the rest are
+  // folded away, since there is nothing to do about them.
+  const onHome = inboxJobs.filter((j) => j.hiddenAt === undefined && j.status !== "queued" && j.status !== "working");
+  const blockedFeed = [
+    ...onHome
+      .filter((j) => isBlocked(j) && j.status !== "awaiting_confirmation")
+      .map((job) => ({ kind: "inbox" as const, key: job.id, at: job.blockedAt ?? job.createdAt, job })),
+    ...(view?.inboxDomains ?? [])
+      .filter((d) => isTenantBlock(d) || d.notActiveAt !== undefined)
+      .map((d) => ({ kind: "domain" as const, key: `domain:${d.domain}`, at: d.cancelledAt ?? d.notActiveAt ?? d.cancelRequestedAt ?? d.updatedAt, d })),
+  ].sort((a, b) => b.at - a.at);
+  const passedJobs = onHome.filter((j) => j.status === "passed");
+  const otherJobs = onHome.filter((j) => !isBlocked(j) && j.status !== "passed");
+  const otherErrors = otherJobs.filter((j) => j.status === "error" || j.status === "interrupted").length;
 
   // The domain-level runs from before the move to inboxes. Kept: some still
   // have stopped inboxes waiting to be deleted.
@@ -272,14 +290,24 @@ export function BlockedDomainsTool() {
               </span>
             </button>
           )}
-          {inLine > 0 && (
+          {inLine + checkingNow > 0 && (
             <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm" data-in-line>
               <Spinner size={14} />
-              <span>
-                <strong className="tabular-nums">{formatNumber(inLine)}</strong> {inLine === 1 ? "inbox" : "inboxes"} in line to be checked
-                {checkingNow > 0 ? `, ${formatNumber(checkingNow)} being checked now` : ""}. They are taken a few at a time, so Plusvibe&apos;s
-                rate limit isn&apos;t swamped.
-              </span>
+              {inLine > 0 ? (
+                <span>
+                  <strong className="tabular-nums">{formatNumber(inLine)}</strong> {inLine === 1 ? "inbox" : "inboxes"} in line to be checked
+                  {checkingNow > 0 ? `, ${formatNumber(checkingNow)} being checked now` : ""}. They are taken a few at a time, so Plusvibe&apos;s
+                  rate limit isn&apos;t swamped.
+                </span>
+              ) : (
+                <span>
+                  Checking{" "}
+                  {checkingNow === 1
+                    ? inboxJobs.find((j) => j.status === "working")?.email
+                    : `${formatNumber(checkingNow)} inboxes`}
+                  … Blocked ones show up below; passed ones fold into Passed Inboxes.
+                </span>
+              )}
             </div>
           )}
 
@@ -295,23 +323,65 @@ export function BlockedDomainsTool() {
             </div>
           )}
 
-          {recent.length > 0 ? (
+          {blockedFeed.length > 0 ? (
             <div className="space-y-3" data-recent>
-              <h2 className="text-sm font-semibold">Recent inboxes</h2>
-              {recent.slice(0, recentShown).map(inboxCard)}
-              {recent.length > recentShown && (
+              <h2 className="text-sm font-semibold">Blocked Inboxes &amp; Domains</h2>
+              {blockedFeed.slice(0, recentShown).map((item) =>
+                item.kind === "inbox" ? inboxCard(item.job) : <DomainEventCard key={item.key} d={item.d} onOpen={() => setSection("tenants")} />
+              )}
+              {blockedFeed.length > recentShown && (
                 <button type="button" className="text-xs text-muted-foreground underline" onClick={() => setRecentShown((n) => n + RECENT)}>
-                  {formatNumber(recent.length - recentShown)} more
+                  {formatNumber(blockedFeed.length - recentShown)} more
                 </button>
               )}
             </div>
           ) : (
-            waiting.length === 0 && (
+            waiting.length === 0 &&
+            inboxJobs.length === 0 && (
               <EmptyState icon={<FireIcon />} title="No inboxes yet">
                 Nothing has come through from Clay since the automation moved to inboxes. The webhook details are on Settings; point the Clay column at the
                 sender inbox and every bounce lands here.
               </EmptyState>
             )
+          )}
+
+          {passedJobs.length > 0 && (
+            <Fold
+              id="passed"
+              title={`Passed Inboxes (${formatNumber(passedJobs.length)})`}
+              note="Within their tier: nothing was done to them."
+              open={passedOpen}
+              onToggle={() => setPassedOpen((v) => !v)}
+            >
+              {passedJobs.slice(0, passedShown).map(inboxCard)}
+              {passedJobs.length > passedShown && (
+                <button type="button" className="text-xs text-muted-foreground underline" onClick={() => setPassedShown((n) => n + RECENT)}>
+                  {formatNumber(passedJobs.length - passedShown)} more
+                </button>
+              )}
+            </Fold>
+          )}
+
+          {otherJobs.length > 0 && (
+            <Fold
+              id="other"
+              title={`Not found, left alone & errors (${formatNumber(otherJobs.length)})`}
+              note={
+                otherErrors > 0
+                  ? `${formatNumber(otherErrors)} ended in an error and may need a look.`
+                  : "Not in any workspace, or neither Microsoft nor Google."
+              }
+              warn={otherErrors > 0}
+              open={otherOpen}
+              onToggle={() => setOtherOpen((v) => !v)}
+            >
+              {otherJobs.slice(0, otherShown).map(inboxCard)}
+              {otherJobs.length > otherShown && (
+                <button type="button" className="text-xs text-muted-foreground underline" onClick={() => setOtherShown((n) => n + RECENT)}>
+                  {formatNumber(otherJobs.length - otherShown)} more
+                </button>
+              )}
+            </Fold>
           )}
 
           {domainJobs.length > 0 && (
@@ -360,6 +430,38 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: "wa
       <div className={`mt-0.5 text-lg font-semibold tabular-nums ${tone === "danger" ? "text-danger" : tone === "warning" ? "text-warning" : ""}`}>
         {formatNumber(value)}
       </div>
+    </div>
+  );
+}
+
+/** A folded section on Home: a title that opens it, and a line saying what's in it. */
+function Fold({
+  id,
+  title,
+  note,
+  warn,
+  open,
+  onToggle,
+  children,
+}: {
+  id: string;
+  title: string;
+  note: string;
+  warn?: boolean;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="space-y-3" data-fold={id}>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="flex items-center gap-1.5 text-sm font-semibold" onClick={onToggle} aria-expanded={open}>
+          <ChevronDownIcon size={16} className={`transition-transform ${open ? "" : "-rotate-90"}`} />
+          {title}
+        </button>
+        <span className={`text-xs ${warn ? "text-warning" : "text-muted-foreground"}`}>{note}</span>
+      </div>
+      {open && <div className="space-y-3">{children}</div>}
     </div>
   );
 }
