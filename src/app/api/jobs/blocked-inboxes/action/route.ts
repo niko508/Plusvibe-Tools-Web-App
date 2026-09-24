@@ -5,6 +5,7 @@ import {
   confirmAllInboxes,
   confirmInbox,
   dismissInbox,
+  hideInboxDomain,
   intakeInbox,
   intakeTenantBlock,
   removeInboxJob,
@@ -17,6 +18,7 @@ export const dynamic = "force-dynamic";
 //     | { action: "confirm-all" }
 //     | { action: "check", email }   — run one inbox by hand, as Clay would
 //     | { action: "tenant-block", domain } — block a whole domain by hand
+//     | { action: "hide-domain", domain }  — take a domain's card off Home
 //
 // Like the list, the log is shared rather than per key, so a valid key is
 // what gates it; the work itself runs with the server's own key.
@@ -40,6 +42,12 @@ export async function POST(request: Request) {
         const r = await intakeInbox({ email: body.email, source: "manual" });
         if (r.outcome === "invalid") return NextResponse.json({ error: r.reason }, { status: 400 });
         return NextResponse.json({ ok: true, outcome: r.outcome, jobId: r.job.id });
+      }
+      case "hide-domain": {
+        if (!body.domain) return NextResponse.json({ error: "domain is required" }, { status: 400 });
+        const ok = await hideInboxDomain(body.domain);
+        if (!ok) return NextResponse.json({ error: "That domain can't be removed right now." }, { status: 409 });
+        return NextResponse.json({ ok });
       }
       case "tenant-block": {
         const r = await intakeTenantBlock({ domain: body.domain, email: body.email, source: "manual" });

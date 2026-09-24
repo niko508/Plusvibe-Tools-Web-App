@@ -146,7 +146,7 @@ export function BlockedDomainsTool() {
       .filter((j) => isBlocked(j) && j.status !== "awaiting_confirmation")
       .map((job) => ({ kind: "inbox" as const, key: job.id, at: job.blockedAt ?? job.createdAt, job })),
     ...(view?.inboxDomains ?? [])
-      .filter((d) => isTenantBlock(d) || d.notActiveAt !== undefined)
+      .filter((d) => d.hiddenAt === undefined && (isTenantBlock(d) || d.notActiveAt !== undefined))
       .map((d) => ({ kind: "domain" as const, key: `domain:${d.domain}`, at: d.cancelledAt ?? d.notActiveAt ?? d.cancelRequestedAt ?? d.updatedAt, d })),
   ].sort((a, b) => b.at - a.at);
   const passedJobs = onHome.filter((j) => j.status === "passed");
@@ -327,7 +327,17 @@ export function BlockedDomainsTool() {
             <div className="space-y-3" data-recent>
               <h2 className="text-sm font-semibold">Blocked Inboxes &amp; Domains</h2>
               {blockedFeed.slice(0, recentShown).map((item) =>
-                item.kind === "inbox" ? inboxCard(item.job) : <DomainEventCard key={item.key} d={item.d} onOpen={() => setSection("tenants")} />
+                item.kind === "inbox" ? (
+                  inboxCard(item.job)
+                ) : (
+                  <DomainEventCard
+                    key={item.key}
+                    d={item.d}
+                    busy={busyId === item.key}
+                    onOpen={() => setSection(isTenantBlock(item.d) ? "tenants" : "domains")}
+                    onRemove={(domain) => withBusy(item.key, () => blockedInboxAction({ action: "hide-domain", domain }))}
+                  />
+                )
               )}
               {blockedFeed.length > recentShown && (
                 <button type="button" className="text-xs text-muted-foreground underline" onClick={() => setRecentShown((n) => n + RECENT)}>

@@ -156,15 +156,16 @@ export function BlockedDomainsList({
   cancelAfter: number;
 }) {
   const stateOf = useMemo(() => new Map(states.map((st) => [st.domain, st])), [states]);
-  // A domain cancelled as a whole shows here even with no blocked inbox on it:
-  // a Tenant Block still in line, or one that found no inboxes left.
+  // A domain dealt with as a whole shows here even with no blocked inbox on
+  // record: a Tenant Block still in line or one that found no inboxes left,
+  // or one whose inbox records were removed before Remove kept them.
   const domains = useMemo(() => {
     const list = blockedDomains(jobs);
     const seen = new Set(list.map((d) => d.domain));
     const extra: BlockedDomainEntry[] = states
-      .filter((st) => !seen.has(st.domain) && (st.cancelRequestedAt !== undefined || st.cancelledAt !== undefined))
+      .filter((st) => !seen.has(st.domain) && (st.cancelRequestedAt !== undefined || st.cancelledAt !== undefined || st.notActiveAt !== undefined))
       .map((st) => {
-        const at = st.cancelledAt ?? st.cancelRequestedAt ?? st.updatedAt;
+        const at = st.cancelledAt ?? st.notActiveAt ?? st.cancelRequestedAt ?? st.updatedAt;
         return {
           domain: st.domain,
           tld: st.domain.slice(st.domain.lastIndexOf(".")),
@@ -334,7 +335,10 @@ export function DomainDetail({ state }: { state: InboxDomainState | undefined })
         </p>
       )}
       {state.cancelledAt === undefined && state.notActiveReason === "last-google-inbox" && (
-        <p>Its last inbox was blocked, so it was set Not Active in 📋 Domains {state.notActiveAt ? relativeTime(state.notActiveAt) : ""}.</p>
+        <p>
+          Its last inbox{state.lastInboxEmail ? `, ${state.lastInboxEmail},` : ""} was blocked, so it was set Not Active in 📋 Domains{" "}
+          {state.notActiveAt ? relativeTime(state.notActiveAt) : ""}.
+        </p>
       )}
       {state.errors.map((e, i) => (
         <p key={i} className="text-warning">

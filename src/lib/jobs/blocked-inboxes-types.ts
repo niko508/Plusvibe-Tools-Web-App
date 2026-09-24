@@ -152,6 +152,10 @@ export interface InboxDomainState {
   /** Set to Not Active in 📋 Domains, and why. */
   notActiveAt?: number;
   notActiveReason?: "last-google-inbox" | "microsoft-cancelled" | "tenant-block";
+  /** Removed from Home; still on Blocked Domains and Tenant Blocks. */
+  hiddenAt?: number;
+  /** Google: the last inbox, whose blocking set the domain Not Active. Kept here so it outlives the inbox's own record. */
+  lastInboxEmail?: string;
   previousStatus?: string;
   /**
    * Why the whole domain is being cancelled: its Microsoft inboxes passed the

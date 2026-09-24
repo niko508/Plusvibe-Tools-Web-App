@@ -766,6 +766,7 @@ async function endGoogleDomainIfLast(apiKey: string, rec: BlockedInboxJob) {
     } else {
       d.notActiveAt = Date.now();
       d.notActiveReason = "last-google-inbox";
+      d.lastInboxEmail = rec.email;
       d.previousStatus = r.previousStatus;
     }
     d.updatedAt = Date.now();
@@ -1111,6 +1112,19 @@ export async function confirmAllInboxes(): Promise<number> {
     for (const r of waiting) await runDelete(r.id);
   })();
   return waiting.length;
+}
+
+/**
+ * Takes a domain's card off Home. It stays on Blocked Domains and Tenant
+ * Blocks. One still being blocked can't be: it isn't finished.
+ */
+export async function hideInboxDomain(domain: string): Promise<boolean> {
+  await loadOnce();
+  const d = domains.get(domain.trim().toLowerCase());
+  if (!d || d.cancelling || (d.cancelRequestedAt !== undefined && d.cancelledAt === undefined)) return false;
+  d.hiddenAt = Date.now();
+  await persistDomains();
+  return true;
 }
 
 /** Keeps a blocked inbox: not deleted, left stopped. */
