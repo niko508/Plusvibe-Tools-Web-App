@@ -4,7 +4,7 @@
 // one of those inboxes was on.
 
 import { useMemo, useState, type ReactNode } from "react";
-import { isBlocked, type BlockedInboxJob } from "@/lib/jobs/blocked-inboxes-types";
+import { isBlocked, type BlockedInboxJob, type InboxDomainState } from "@/lib/jobs/blocked-inboxes-types";
 import { blockedDomains, platformKey, UNKNOWN_PLATFORM } from "@/lib/blocked-inboxes/domains";
 import { PROVIDER_LABELS } from "@/lib/plusvibe-providers";
 import { formatNumber } from "@/lib/format";
@@ -132,8 +132,31 @@ export function BlockedInboxesView({
   );
 }
 
-export function BlockedDomainsList({ jobs }: { jobs: BlockedInboxJob[] }) {
+/** What has happened to the domain as a whole, in a few words, and how loud to say it. */
+function domainStatus(state: InboxDomainState | undefined, cancelAfter: number): { text: string; tone: string } {
+  if (!state) return { text: "—", tone: "text-muted-foreground" };
+  if (state.cancelling) return { text: "Cancelling…", tone: "text-accent" };
+  if (state.cancelledAt !== undefined) {
+    return { text: state.tenantQueued || state.tenantAlreadyQueued ? "Cancelled · tenant queued" : "Cancelled", tone: "text-danger" };
+  }
+  if (state.notActiveReason === "last-google-inbox") return { text: "Not Active · last inbox", tone: "text-danger" };
+  if (state.provider === "microsoft") {
+    return { text: `${state.deletedByRules} deleted · cancels at ${cancelAfter + 1}`, tone: state.deletedByRules > 0 ? "text-warning" : "text-muted-foreground" };
+  }
+  return { text: "Active", tone: "text-muted-foreground" };
+}
+
+export function BlockedDomainsList({
+  jobs,
+  states = [],
+  cancelAfter,
+}: {
+  jobs: BlockedInboxJob[];
+  states?: InboxDomainState[];
+  cancelAfter: number;
+}) {
   const domains = useMemo(() => blockedDomains(jobs), [jobs]);
+  const stateOf = useMemo(() => new Map(states.map((st) => [st.domain, st])), [states]);
   const [open, setOpen] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [shown, setShown] = useState(PAGE);
@@ -159,7 +182,8 @@ export function BlockedDomainsList({ jobs }: { jobs: BlockedInboxJob[] }) {
           onChange={(e) => setFilter(e.target.value)}
         />
         <span className="text-xs text-muted-foreground">
-          {formatNumber(domains.length)} domain{domains.length === 1 ? "" : "s"} with a blocked inbox. Nothing is done to a domain as a whole — this is where its blocked inboxes add up.
+          {formatNumber(domains.length)} domain{domains.length === 1 ? "" : "s"} with a blocked inbox. A Google domain goes Not Active when its last inbox is blocked; a Microsoft
+          one is cancelled once more than {cancelAfter} of its inboxes have been deleted.
         </span>
       </div>
       <div className="pv-card overflow-x-auto p-0">
@@ -173,6 +197,7 @@ export function BlockedDomainsList({ jobs }: { jobs: BlockedInboxJob[] }) {
               <th className="px-3 py-2 font-medium">Workspace</th>
               <th className="px-3 py-2 text-right font-medium">Blocked inboxes</th>
               <th className="px-3 py-2 text-right font-medium">Deleted</th>
+              <th className="px-3 py-2 font-medium">Domain status</th>
               <th className="px-3 py-2 font-medium">Last blocked</th>
             </tr>
           </thead>
@@ -191,11 +216,16 @@ export function BlockedDomainsList({ jobs }: { jobs: BlockedInboxJob[] }) {
                     <td className="px-3 py-2">{d.workspaceName ?? "—"}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatNumber(d.blockedInboxes)}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatNumber(d.deletedInboxes)}</td>
+                    <td className={`whitespace-nowrap px-3 py-2 ${domainStatus(stateOf.get(d.domain), cancelAfter).tone}`} data-domain-status={d.domain}>
+                      {domainStatus(stateOf.get(d.domain), cancelAfter).text}
+                    </td>
                     <td className="px-3 py-2 text-muted-foreground">{relativeTime(d.lastBlockedAt)}</td>
                   </>
                 }
                 detail={
-                  <ul className="space-y-1 px-1 py-1 text-xs">
+                  <div className="space-y-2 px-1 py-1 text-xs">
+                    <DomainDetail state={stateOf.get(d.domain)} />
+                  <ul className="space-y-1">
                     {d.inboxes.map((i) => (
                       <li key={i.jobId} className="flex flex-wrap gap-x-3">
                         <span className="font-mono">{i.email}</span>
@@ -205,6 +235,7 @@ export function BlockedDomainsList({ jobs }: { jobs: BlockedInboxJob[] }) {
                       </li>
                     ))}
                   </ul>
+                  </div>
                 }
               />
             ))}
@@ -232,11 +263,44 @@ function FragmentRow({ cells, detail, open, onToggle }: { cells: ReactNode; deta
       </tr>
       {open && (
         <tr>
-          <td colSpan={9} className="bg-muted/20 px-3 py-3">
+          <td colSpan={10} className="bg-muted/20 px-3 py-3">
             {detail}
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+/** The domain-level side of a domain: its cancellation, or its Not Active. */
+function DomainDetail({ state }: { state: InboxDomainState | undefined }) {
+  if (!state || (state.cancelledAt === undefined && state.notActiveAt === undefined && state.errors.length === 0)) return null;
+  return (
+    <div className="rounded-lg border border-border p-2" data-domain-detail>
+      {state.cancelledAt !== undefined && (
+        <p>
+          Cancelled {relativeTime(state.cancelledAt)} after {state.deletedByRules} inboxes were deleted:{" "}
+          {state.notActiveAt ? "set Not Active in 📋 Domains" : "could not be set Not Active"}
+          {state.tenantQueued
+            ? `, tenant ${state.tenantEmail} queued on 🚯 Tenants to Cancel`
+            : state.tenantAlreadyQueued
+              ? `, tenant ${state.tenantEmail} already on 🚯 Tenants to Cancel`
+              : ", no tenant queued"}
+          . {state.cancelledInboxes?.length ?? 0} inbox{(state.cancelledInboxes?.length ?? 0) === 1 ? "" : "es"} stopped with it
+          {state.keptInboxes && state.keptInboxes.length > 0
+            ? `; kept, still getting replies: ${state.keptInboxes.map((k) => `${k.email} (${k.oooReplyRate}%)`).join(", ")}`
+            : "; none kept"}
+          .
+        </p>
+      )}
+      {state.cancelledAt === undefined && state.notActiveReason === "last-google-inbox" && (
+        <p>Its last inbox was blocked, so it was set Not Active in 📋 Domains {state.notActiveAt ? relativeTime(state.notActiveAt) : ""}.</p>
+      )}
+      {state.errors.map((e, i) => (
+        <p key={i} className="text-warning">
+          {e}
+        </p>
+      ))}
+    </div>
   );
 }

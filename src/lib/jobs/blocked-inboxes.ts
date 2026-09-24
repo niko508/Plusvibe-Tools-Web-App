@@ -6,17 +6,30 @@ import path from "path";
 import { onShutdownFlush } from "@/lib/jobs/shutdown";
 import { appendRows, batchUpdateCells, columnLetter, envSpreadsheetId, isSheetWritingConfigured, quoteTab, readTab } from "@/lib/google-sheets";
 import { DEFAULT_SHEET_TAB, COL_DOMAIN, COL_STATUS, COL_TENANT_EMAIL, COL_TENANT_SOURCE } from "@/lib/jobs/azure-warmup-types";
-import { COL_DOMAIN_HOST, GOOGLE_CANCEL_TAB, findDomainRow, headerIndex, matchWorkspaceByClient, planGoogleTabWrites } from "@/lib/blocked-domains/sheet-plan";
+import {
+  BLOCKED_STATUS,
+  CANCEL_TAB,
+  COL_DOMAIN_HOST,
+  GOOGLE_CANCEL_TAB,
+  TENANT_QUEUE,
+  findDomainRow,
+  headerIndex,
+  matchWorkspaceByClient,
+  planGoogleTabWrites,
+  planQueueTabWrites,
+} from "@/lib/blocked-domains/sheet-plan";
 import { deleteInbox, fetchInboxStats, listInboxes, listWorkspaces, quarantineInboxes, type Inbox } from "@/lib/blocked-domains/api";
 import { loadSettings } from "@/lib/blocked-domains/settings";
 import { lookupRegistrar } from "@/lib/blocked-domains/registrar";
-import { JUDGE_WINDOW_DAYS, describeRule, describeTier, judgeInbox } from "@/lib/blocked-inboxes/rules";
+import { JUDGE_WINDOW_DAYS, describeRule, describeTier, judgeInbox, ratesOf } from "@/lib/blocked-inboxes/rules";
+import { isLastOnDomain, planCancellation, shouldCancel } from "@/lib/blocked-inboxes/domain-endings";
 import { bucketOf } from "@/lib/plusvibe-providers";
 import { daysAgo, toApiDate } from "@/lib/format";
 import {
   MAX_INBOX_ERRORS,
   MAX_INBOX_HISTORY,
   type BlockedInboxJob,
+  type InboxDomainState,
 } from "@/lib/jobs/blocked-inboxes-types";
 
 // Server-side manager for the inbox-level Blocked Domains automation.
@@ -32,6 +45,8 @@ import {
 
 const JOBS_BASE = process.env.JOBS_DIR || path.join(process.cwd(), ".jobs-data");
 const RECORDS_DIR = path.join(JOBS_BASE, "blocked-inboxes", "records");
+/** What has been done to each domain: the Microsoft deletion count, Not Active, cancellation. */
+const DOMAINS_FILE = path.join(JOBS_BASE, "blocked-inboxes", "domains.json");
 
 /**
  * How long a judgement stands. Clay fires on every bounce row, and one inbox
@@ -49,16 +64,19 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // module (the start-up hook and the API routes are bundled apart).
 interface SharedState {
   records: Map<string, BlockedInboxJob>;
+  domains: Map<string, InboxDomainState>;
   loaded: boolean;
   inboxCache: Map<string, { at: number; inboxes: Inbox[] }>;
   sheetCache?: { at: number; grid: string[][] };
 }
 const shared: SharedState = ((globalThis as { __pvBlockedInboxes?: SharedState }).__pvBlockedInboxes ??= {
   records: new Map(),
+  domains: new Map(),
   loaded: false,
   inboxCache: new Map(),
 });
 const records = shared.records;
+const domains = shared.domains;
 
 function serverApiKey(): string | null {
   return process.env.PLUSVIBE_API_KEY?.trim() || null;
@@ -118,6 +136,50 @@ async function loadOnce() {
   } catch {
     // nothing to load
   }
+  try {
+    const list = JSON.parse(await fs.readFile(DOMAINS_FILE, "utf8")) as InboxDomainState[];
+    for (const d of list) {
+      d.cancelling = false; // a cancellation cut off by a restart is not still running
+      d.errors = Array.isArray(d.errors) ? d.errors : [];
+      domains.set(d.domain, d);
+    }
+  } catch {
+    // First start with domain records: the Microsoft deletions made before
+    // they were kept still count towards each domain's cancellation.
+    for (const r of records.values()) {
+      if (r.provider !== "microsoft" || r.status !== "deleted" || r.cancelledWithDomain) continue;
+      const d = domainState(r.domain);
+      d.deletedByRules += 1;
+      d.provider = "microsoft";
+      d.workspaceId = d.workspaceId ?? r.workspaceId;
+      d.workspaceName = d.workspaceName ?? r.workspaceName;
+    }
+    await persistDomains();
+  }
+}
+
+function domainState(domain: string): InboxDomainState {
+  let d = domains.get(domain);
+  if (!d) {
+    d = { domain, deletedByRules: 0, errors: [], updatedAt: Date.now() };
+    domains.set(domain, d);
+  }
+  return d;
+}
+
+async function persistDomains() {
+  try {
+    await fs.mkdir(path.dirname(DOMAINS_FILE), { recursive: true });
+    const tmp = `${DOMAINS_FILE}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify([...domains.values()]), "utf8");
+    await fs.rename(tmp, DOMAINS_FILE);
+  } catch {
+    // best-effort, like the records
+  }
+}
+
+function domainError(d: InboxDomainState, text: string) {
+  if (d.errors.length < MAX_INBOX_ERRORS) d.errors.push(text);
 }
 
 function msg(err: unknown): string {
@@ -355,8 +417,12 @@ async function runInbox(id: string) {
     }
     await persist(id);
 
-    // A Google inbox is its own seat, so it goes on the cancel list.
-    if (rec.provider === "google") await listOnGoogleCancel(rec);
+    // A Google inbox is its own seat, so it goes on the cancel list — and
+    // when it was the last one on its domain, the domain is finished too.
+    if (rec.provider === "google") {
+      await listOnGoogleCancel(rec);
+      await endGoogleDomainIfLast(apiKey, rec);
+    }
 
     // 5. Delete — now, or when someone confirms.
     if (settings.autoDelete) {
@@ -429,6 +495,256 @@ async function runDelete(id: string) {
   }
   rec.updatedAt = Date.now();
   await persist(id);
+
+  // Every Microsoft inbox the rules delete counts towards its domain's
+  // cancellation. The cancellation's own deletions don't: by then the domain
+  // is already cancelled.
+  if (rec.status === "deleted" && rec.provider === "microsoft" && !rec.cancelledWithDomain) {
+    const d = domainState(rec.domain);
+    d.deletedByRules += 1;
+    d.provider = "microsoft";
+    d.workspaceId = rec.workspaceId;
+    d.workspaceName = rec.workspaceName ?? d.workspaceName;
+    d.updatedAt = Date.now();
+    await persistDomains();
+    const settings = await loadSettings();
+    if (shouldCancel(d, settings.cancelAfterDeleted)) void cancelMicrosoftDomain(rec.domain);
+  }
+}
+
+// --- Domain endings -----------------------------------------------------------
+
+/** Emails on a domain this automation has already blocked (stopped or deleted). */
+function blockedOn(domain: string, except?: string): string[] {
+  return [...records.values()].filter((r) => r.domain === domain && r.blockedAt !== undefined && r.email !== except).map((r) => r.email);
+}
+
+/**
+ * Google: once the inbox just blocked is the last one standing on its domain,
+ * the domain goes Not Active in 📋 Domains.
+ */
+async function endGoogleDomainIfLast(apiKey: string, rec: BlockedInboxJob) {
+  if (!rec.workspaceId) return;
+  try {
+    const onDomain = (await workspaceInboxes(apiKey, rec.workspaceId, true))
+      .map((i) => i.email.trim().toLowerCase())
+      .filter((e) => e.endsWith(`@${rec.domain}`));
+    if (!isLastOnDomain(onDomain, rec.email, blockedOn(rec.domain, rec.email))) return;
+    rec.lastOnDomain = true;
+    const d = domainState(rec.domain);
+    d.provider = "google";
+    d.workspaceId = rec.workspaceId;
+    d.workspaceName = rec.workspaceName ?? d.workspaceName;
+    const r = await setDomainNotActive(rec.domain);
+    if (r.error) {
+      domainError(d, r.error);
+      pushError(rec, `This was the last inbox on ${rec.domain}, but it could not be set Not Active: ${r.error}`);
+    } else {
+      d.notActiveAt = Date.now();
+      d.notActiveReason = "last-google-inbox";
+      d.previousStatus = r.previousStatus;
+    }
+    d.updatedAt = Date.now();
+    await persistDomains();
+    await persist(rec.id);
+  } catch (err) {
+    pushError(rec, `Could not check whether this was the last inbox on ${rec.domain}: ${msg(err)}`);
+  }
+}
+
+/** The domain's row in 📋 Domains, set to Not Active. Reports the tenant it names. */
+async function setDomainNotActive(
+  domain: string
+): Promise<{ error?: string; previousStatus?: string; tenantEmail?: string; tenantSource?: string }> {
+  const sheetId = envSpreadsheetId();
+  if (!sheetId || !isSheetWritingConfigured()) return { error: "the sheet isn't set up for writing" };
+  const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
+  shared.sheetCache = { at: Date.now(), grid };
+  const header = grid[0] ?? [];
+  const iStatus = headerIndex(header, COL_STATUS);
+  const hit = findDomainRow(grid, domain, {
+    domain: headerIndex(header, COL_DOMAIN),
+    status: iStatus,
+    tenantEmail: headerIndex(header, COL_TENANT_EMAIL),
+    tenantSource: headerIndex(header, COL_TENANT_SOURCE),
+    client: headerIndex(header, "Client"),
+    domainHost: headerIndex(header, COL_DOMAIN_HOST),
+  });
+  if (!hit.row) return { error: `${domain} isn't in the "${DEFAULT_SHEET_TAB}" tab` };
+  if (iStatus < 0) return { error: `the "${DEFAULT_SHEET_TAB}" tab has no ${COL_STATUS} column` };
+  await batchUpdateCells(sheetId, [
+    { range: `${quoteTab(DEFAULT_SHEET_TAB)}!${columnLetter(iStatus)}${hit.row.rowNumber}`, value: BLOCKED_STATUS },
+  ]);
+  return {
+    previousStatus: hit.row.currentStatus,
+    tenantEmail: hit.row.tenantEmail || undefined,
+    tenantSource: hit.row.tenantSource || undefined,
+  };
+}
+
+/** The domain and its tenant onto 🚯 Tenants to Cancel, once. */
+async function queueTenant(domain: string, tenant: string, source: string): Promise<{ queued: boolean; already: boolean; error?: string }> {
+  const sheetId = envSpreadsheetId();
+  if (!sheetId || !isSheetWritingConfigured()) return { queued: false, already: false, error: "the sheet isn't set up for writing" };
+  const grid = await readTab(sheetId, CANCEL_TAB);
+  const plan = planQueueTabWrites(grid, [{ key: tenant, source, domain }], TENANT_QUEUE);
+  if (plan.problem) return { queued: false, already: false, error: plan.problem };
+  if (plan.already.length > 0) return { queued: false, already: true };
+  if (plan.updates.length > 0) {
+    await batchUpdateCells(
+      sheetId,
+      plan.updates.map((u) => ({ range: `${quoteTab(CANCEL_TAB)}!${columnLetter(u.column)}${u.row}`, value: u.value }))
+    );
+  }
+  if (plan.append.length > 0) await appendRows(sheetId, CANCEL_TAB, plan.append);
+  return { queued: true, already: false };
+}
+
+/**
+ * Microsoft: the domain has lost more than its share of inboxes to the rules,
+ * so it is cancelled the way the old automation cancelled a domain. The
+ * inboxes still getting replies stay; every other one is stopped — at once —
+ * and deleted, now or once confirmed; the domain goes Not Active and its
+ * tenant onto 🚯 Tenants to Cancel.
+ */
+export async function cancelMicrosoftDomain(domain: string): Promise<void> {
+  await loadOnce();
+  const d = domainState(domain);
+  if (d.cancelling || d.cancelledAt !== undefined) return;
+  d.cancelling = true;
+  d.updatedAt = Date.now();
+  await persistDomains();
+  const apiKey = serverApiKey();
+  try {
+    if (!apiKey) throw new Error("PLUSVIBE_API_KEY is not set on the server");
+    if (!d.workspaceId) throw new Error("no workspace is known for this domain");
+    const settings = await loadSettings();
+
+    // 1. Every Microsoft inbox still on the domain that isn't already blocked,
+    //    and its last 14 days. A Google stray isn't on the tenant, so it stays.
+    const blocked = new Set(blockedOn(domain));
+    const inboxes = (await workspaceInboxes(apiKey, d.workspaceId, true)).filter(
+      (i) =>
+        i.email.trim().toLowerCase().endsWith(`@${domain}`) &&
+        !blocked.has(i.email.trim().toLowerCase()) &&
+        bucketOf(i.provider) === "microsoft"
+    );
+    const window = { start: toApiDate(daysAgo(JUDGE_WINDOW_DAYS - 1)), end: toApiDate(new Date()) };
+    const { rows } = inboxes.length > 0 ? await fetchInboxStats(apiKey, d.workspaceId, inboxes, window) : { rows: [] };
+    const figuresOf = (i: Inbox) => {
+      const r = rows.find((x) => x.id === i.id || x.email === i.email.trim().toLowerCase());
+      return r ? { sent: r.sent, bounces: r.bounces ?? 0, contacted: r.contacted, replies: r.replies, oooReplies: r.oooReplies } : null;
+    };
+    const plan = planCancellation(
+      inboxes.map((i) => ({ inbox: i, email: i.email.trim().toLowerCase(), figures: figuresOf(i) })),
+      settings.cancelKeepReplyRate
+    );
+    d.keptInboxes = plan.keep.map((k) => ({ email: k.email, oooReplyRate: k.oooReplyRate }));
+    d.cancelledInboxes = plan.cancel.map((c) => c.email);
+
+    // 2. The rest are blocked with the domain: a record each — the inbox's own,
+    //    if it was judged before — and stopped together.
+    const now = Date.now();
+    const jobs: BlockedInboxJob[] = plan.cancel.map((c) => {
+      const prior = [...records.values()].filter((r) => r.email === c.email).sort((a, b) => b.createdAt - a.createdAt)[0];
+      const history =
+        prior?.verdict && prior.figures && prior.rates && prior.judgedAt
+          ? [
+              { at: prior.judgedAt, verdict: prior.verdict, sent: prior.figures.sent, bounceRate: prior.rates.bounceRate, oooReplyRate: prior.rates.oooReplyRate },
+              ...(prior.history ?? []),
+            ].slice(0, MAX_INBOX_HISTORY)
+          : prior?.history;
+      const job: BlockedInboxJob = {
+        id: prior?.id ?? randomUUID(),
+        email: c.email,
+        domain,
+        status: "working",
+        createdAt: prior?.createdAt ?? now,
+        updatedAt: now,
+        judgedAt: now,
+        source: prior?.source ?? "domain-cancel",
+        bounceReason: prior?.bounceReason,
+        duplicateHits: prior?.duplicateHits ?? 0,
+        ...(history ? { history } : {}),
+        workspaceId: d.workspaceId,
+        workspaceName: d.workspaceName,
+        accountId: c.inbox.id,
+        provider: "microsoft",
+        providerRaw: c.inbox.provider,
+        window,
+        ...(c.figures ? { figures: c.figures, rates: ratesOf(c.figures) } : {}),
+        verdict: "block",
+        tier: "domain cancelled",
+        rule: `kept only at an OOO reply rate of ${settings.cancelKeepReplyRate}% or more`,
+        reasons: [
+          `${domain} was cancelled after ${d.deletedByRules} of its inboxes were deleted, and this one's OOO reply rate ${
+            c.oooReplyRate === null ? "could not be read" : `is ${c.oooReplyRate}%, under the ${settings.cancelKeepReplyRate}% keep bar`
+          }`,
+        ],
+        blockedAt: now,
+        cancelledWithDomain: true,
+        errors: [],
+      };
+      records.set(job.id, job);
+      return job;
+    });
+    if (jobs.length > 0) {
+      try {
+        const q = await quarantineInboxes(apiKey, d.workspaceId, jobs.map((j) => j.accountId!));
+        for (const j of jobs) {
+          j.sendingStopped = q.sendingStopped;
+          j.warmupStopped = q.warmupStopped;
+          for (const e of q.errors) pushError(j, `Could not stop ${e}`);
+        }
+      } catch (err) {
+        for (const j of jobs) pushError(j, `Could not stop sending and warmup: ${msg(err)}`);
+      }
+      for (const j of jobs) {
+        j.status = "awaiting_confirmation";
+        await persist(j.id);
+      }
+    }
+
+    // 3. The domain: Not Active, and its tenant queued to cancel.
+    try {
+      const r = await setDomainNotActive(domain);
+      if (r.error) domainError(d, `Could not set ${domain} Not Active: ${r.error}`);
+      else {
+        d.notActiveAt = Date.now();
+        d.notActiveReason = "microsoft-cancelled";
+        d.previousStatus = r.previousStatus;
+      }
+      if (r.tenantEmail) {
+        d.tenantEmail = r.tenantEmail;
+        const t = await queueTenant(domain, r.tenantEmail, r.tenantSource ?? "");
+        d.tenantQueued = t.queued;
+        d.tenantAlreadyQueued = t.already;
+        if (t.error) domainError(d, `Could not queue the tenant on "${CANCEL_TAB}": ${t.error}`);
+      } else if (!r.error) {
+        domainError(d, `${domain} has no ${COL_TENANT_EMAIL} in the sheet, so no tenant was queued to cancel.`);
+      }
+    } catch (err) {
+      domainError(d, `Sheet update failed: ${msg(err)}`);
+    }
+    d.cancelledAt = Date.now();
+    d.cancelling = false;
+    d.updatedAt = Date.now();
+    await persistDomains();
+
+    // 4. Delete them — now, or when someone confirms, like any blocked inbox.
+    if (settings.autoDelete) {
+      for (const j of jobs) {
+        j.autoDeleted = true;
+        j.confirmedAt = Date.now();
+        await runDelete(j.id);
+      }
+    }
+  } catch (err) {
+    d.cancelling = false;
+    domainError(d, `Could not cancel ${domain}: ${msg(err)}`);
+    d.updatedAt = Date.now();
+    await persistDomains();
+  }
 }
 
 // --- Control ---------------------------------------------------------------
@@ -436,6 +752,11 @@ async function runDelete(id: string) {
 export async function listInboxJobs(): Promise<BlockedInboxJob[]> {
   await loadOnce();
   return [...records.values()].sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export async function listInboxDomains(): Promise<InboxDomainState[]> {
+  await loadOnce();
+  return [...domains.values()].sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 /** Deletes a blocked inbox someone has confirmed. */

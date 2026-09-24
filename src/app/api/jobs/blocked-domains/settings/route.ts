@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
-import { MAX_RECHECK_DAYS, loadSettings, saveSettings } from "@/lib/blocked-domains/settings";
+import { MAX_CANCEL_AFTER, MAX_RECHECK_DAYS, loadSettings, saveSettings } from "@/lib/blocked-domains/settings";
 import { applyRecheckInterval } from "@/lib/jobs/blocked-domains";
 import { validateRules } from "@/lib/blocked-inboxes/rules";
 
@@ -21,6 +21,8 @@ export async function PUT(request: Request) {
       recheck?: unknown;
       recheckDays?: unknown;
       inboxRules?: unknown;
+      cancelAfterDeleted?: unknown;
+      cancelKeepReplyRate?: unknown;
     };
     const patch: Parameters<typeof saveSettings>[0] = {};
 
@@ -66,6 +68,20 @@ export async function PUT(request: Request) {
       const { rules, problems } = validateRules(body.inboxRules);
       if (!rules) return NextResponse.json({ error: problems.join(" "), problems }, { status: 400 });
       patch.inboxRules = rules;
+    }
+    if (body.cancelAfterDeleted !== undefined) {
+      const n = typeof body.cancelAfterDeleted === "number" ? body.cancelAfterDeleted : Number(body.cancelAfterDeleted);
+      if (!Number.isInteger(n) || n < 0 || n > MAX_CANCEL_AFTER) {
+        return NextResponse.json({ error: `The deletion count must be a whole number from 0 to ${MAX_CANCEL_AFTER}.` }, { status: 400 });
+      }
+      patch.cancelAfterDeleted = n;
+    }
+    if (body.cancelKeepReplyRate !== undefined) {
+      const n = typeof body.cancelKeepReplyRate === "number" ? body.cancelKeepReplyRate : Number(body.cancelKeepReplyRate);
+      if (!Number.isFinite(n) || n < 0 || n > 100) {
+        return NextResponse.json({ error: "The keep bar must be a percentage from 0 to 100." }, { status: 400 });
+      }
+      patch.cancelKeepReplyRate = n;
     }
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: "Nothing to change." }, { status: 400 });

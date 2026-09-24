@@ -209,7 +209,9 @@ export function BlockedDomainsTool() {
           confirmingAll={confirmingAll}
         />
       )}
-      {section === "domains" && <BlockedDomainsList jobs={inboxJobs} />}
+      {section === "domains" && (
+        <BlockedDomainsList jobs={inboxJobs} states={view?.inboxDomains ?? []} cancelAfter={view?.settings.cancelAfterDeleted ?? 13} />
+      )}
       {section === "stats" && <StatsView inboxJobs={inboxJobs} domainJobs={domainJobs} />}
       {section === "settings" && <SettingsView view={view} onChanged={refresh} onError={setError} />}
 

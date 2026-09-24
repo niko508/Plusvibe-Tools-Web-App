@@ -102,6 +102,8 @@ export function InboxCard({
               : job.googleCancel?.error
                 ? ` Not listed on 🛑 Google Inboxes to Cancel: ${job.googleCancel.error}`
                 : "")}
+          {job.lastOnDomain && ` It was the last inbox on ${job.domain}, so the domain was set Not Active.`}
+          {job.cancelledWithDomain && ` Stopped when ${job.domain} was cancelled.`}
           {job.status === "deleted" && ` Deleted${job.autoDeleted ? " automatically" : ""}.`}
           {job.status === "awaiting_confirmation" && " The deletion waits for you."}
           {job.status === "dismissed" && " You chose to keep it; it stays stopped."}

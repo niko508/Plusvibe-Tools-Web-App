@@ -8,9 +8,17 @@
 //     listed on 🛑 Google Inboxes to Cancel
 //   4 deleted — at once with Auto-delete on, or when someone confirms
 //
-// Nothing is done at the domain level any more: no domain-wide warmup pause,
-// no Not Active in the Domains tab, nothing queued on 🚯 Tenants to Cancel.
-// A domain appears in Blocked Domains because one of its inboxes was blocked.
+// Two things are done at domain level, each once a domain has earned it:
+//
+//   Google     the domain's last inbox is blocked → 📋 Domains status Not Active
+//   Microsoft  more than N of its inboxes deleted by the rules (N on Settings,
+//              13 by default) → the domain is cancelled the way the old
+//              automation cancelled one: inboxes still getting replies are
+//              kept, every other inbox is stopped and deleted, the domain goes
+//              Not Active and its tenant onto 🚯 Tenants to Cancel.
+//
+// What each domain has had done is kept in InboxDomainState, the deletion
+// count among it.
 
 import type { InboxFigures, InboxRates, InboxVerdict } from "@/lib/blocked-inboxes/rules";
 import type { ProviderBucket } from "@/lib/plusvibe-providers";
@@ -98,6 +106,11 @@ export interface BlockedInboxJob {
   deletedAt?: number;
   dismissedAt?: number;
 
+  /** Set when this inbox was blocked because its domain was cancelled. */
+  cancelledWithDomain?: boolean;
+  /** Google: this was the domain's last inbox, so the domain went Not Active. */
+  lastOnDomain?: boolean;
+
   /** Google only: its row on 🛑 Google Inboxes to Cancel. */
   googleCancel?: { listed: boolean; alreadyThere?: boolean; error?: string };
 
@@ -115,6 +128,32 @@ export interface BlockedInboxJob {
 /** Whether a run ended with the inbox blocked. */
 export function isBlocked(job: Pick<BlockedInboxJob, "verdict" | "blockedAt">): boolean {
   return job.verdict === "block" || job.blockedAt !== undefined;
+}
+
+/** What has been done to one domain, across all its inbox runs. */
+export interface InboxDomainState {
+  domain: string;
+  provider?: ProviderBucket;
+  workspaceId?: string;
+  workspaceName?: string;
+  /** Microsoft inboxes on it the rules have deleted — what the cancellation counts. */
+  deletedByRules: number;
+  /** Set to Not Active in 📋 Domains, and why. */
+  notActiveAt?: number;
+  notActiveReason?: "last-google-inbox" | "microsoft-cancelled";
+  previousStatus?: string;
+  /** Microsoft: cancelled — the old write-off, run once. */
+  cancelledAt?: number;
+  cancelling?: boolean;
+  /** Inboxes kept at cancellation because they are still getting replies. */
+  keptInboxes?: { email: string; oooReplyRate: number }[];
+  /** Inboxes the cancellation stopped (and deletes). */
+  cancelledInboxes?: string[];
+  tenantEmail?: string;
+  tenantQueued?: boolean;
+  tenantAlreadyQueued?: boolean;
+  errors: string[];
+  updatedAt: number;
 }
 
 export interface BlockedInboxesView {

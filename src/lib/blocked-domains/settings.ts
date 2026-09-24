@@ -60,10 +60,34 @@ export interface BlockedDomainSettings {
   recheckDays: number;
   /** The tiers each sender inbox is judged on, per provider. */
   inboxRules: InboxRules;
+  /**
+   * A Microsoft domain is cancelled once MORE than this many of its inboxes
+   * have been deleted by the rules.
+   */
+  cancelAfterDeleted: number;
+  /**
+   * At cancellation, an inbox is kept when its OOO reply rate over the last
+   * 14 days is at least this, in percent.
+   */
+  cancelKeepReplyRate: number;
   updatedAt: number;
 }
 
 export { DEFAULT_RECHECK_DAYS, MAX_RECHECK_DAYS, normalizeRecheckDays };
+
+export const DEFAULT_CANCEL_AFTER = 13;
+export const DEFAULT_CANCEL_KEEP_RATE = 1;
+export const MAX_CANCEL_AFTER = 500;
+
+export function normalizeCancelAfter(v: unknown): number {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isInteger(n) && n >= 0 && n <= MAX_CANCEL_AFTER ? n : DEFAULT_CANCEL_AFTER;
+}
+
+export function normalizeKeepRate(v: unknown): number {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) && n >= 0 && n <= 100 ? n : DEFAULT_CANCEL_KEEP_RATE;
+}
 
 export const DEFAULT_SETTINGS: BlockedDomainSettings = {
   autoDelete: false,
@@ -73,6 +97,8 @@ export const DEFAULT_SETTINGS: BlockedDomainSettings = {
   recheck: true,
   recheckDays: DEFAULT_RECHECK_DAYS,
   inboxRules: DEFAULT_RULES,
+  cancelAfterDeleted: DEFAULT_CANCEL_AFTER,
+  cancelKeepReplyRate: DEFAULT_CANCEL_KEEP_RATE,
   updatedAt: 0,
 };
 
@@ -98,6 +124,8 @@ export async function loadSettings(): Promise<BlockedDomainSettings> {
       // A file with no rules, or rules that don't read, judges on the
       // defaults rather than on nothing.
       inboxRules: parsed.inboxRules === undefined ? DEFAULT_RULES : normalizeRules(parsed.inboxRules),
+      cancelAfterDeleted: normalizeCancelAfter(parsed.cancelAfterDeleted ?? DEFAULT_CANCEL_AFTER),
+      cancelKeepReplyRate: normalizeKeepRate(parsed.cancelKeepReplyRate ?? DEFAULT_CANCEL_KEEP_RATE),
       updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
     };
   } catch {
@@ -116,6 +144,8 @@ export async function saveSettings(
       | "recheck"
       | "recheckDays"
       | "inboxRules"
+      | "cancelAfterDeleted"
+      | "cancelKeepReplyRate"
     >
   >
 ): Promise<BlockedDomainSettings> {
@@ -136,6 +166,10 @@ export async function saveSettings(
     recheckDays:
       patch.recheckDays === undefined ? current.recheckDays : normalizeRecheckDays(patch.recheckDays),
     inboxRules: patch.inboxRules === undefined ? current.inboxRules : normalizeRules(patch.inboxRules),
+    cancelAfterDeleted:
+      patch.cancelAfterDeleted === undefined ? current.cancelAfterDeleted : normalizeCancelAfter(patch.cancelAfterDeleted),
+    cancelKeepReplyRate:
+      patch.cancelKeepReplyRate === undefined ? current.cancelKeepReplyRate : normalizeKeepRate(patch.cancelKeepReplyRate),
     updatedAt: Date.now(),
   };
   await fs.mkdir(STORE_DIR, { recursive: true });

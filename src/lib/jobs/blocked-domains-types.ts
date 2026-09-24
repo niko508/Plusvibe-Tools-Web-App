@@ -43,7 +43,7 @@ import type {
   InboxAssessment,
 } from "@/lib/blocked-domains/performance";
 import type { ProviderCounts } from "@/lib/plusvibe-providers";
-import type { BlockedInboxJob } from "@/lib/jobs/blocked-inboxes-types";
+import type { BlockedInboxJob, InboxDomainState } from "@/lib/jobs/blocked-inboxes-types";
 import type { InboxRules } from "@/lib/blocked-inboxes/rules";
 
 export type { DomainPerformance, DomainVerdict, InboxAssessment, ProviderCounts };
@@ -345,6 +345,8 @@ export interface BlockedDomainsView {
   jobs: BlockedDomainJob[];
   /** One per sender inbox Clay sent. Absent on responses from an older build. */
   inboxJobs?: BlockedInboxJob[];
+  /** What has been done to each domain by the inbox-level automation. */
+  inboxDomains?: InboxDomainState[];
   /** A "Re-judge all" in progress, or the last one. */
   rejudgeAll?: { running: boolean; total: number; done: number; startedAt: number };
   settings: {
@@ -356,6 +358,10 @@ export interface BlockedDomainsView {
     recheckDays: number;
     /** The tiers sender inboxes are judged on. Absent from an older build. */
     inboxRules?: InboxRules;
+    /** A Microsoft domain is cancelled after more than this many deletions. */
+    cancelAfterDeleted?: number;
+    /** At cancellation, inboxes at or above this OOO reply rate are kept. */
+    cancelKeepReplyRate?: number;
   };
   /** Whether the webhook can actually run unattended. */
   readiness: {

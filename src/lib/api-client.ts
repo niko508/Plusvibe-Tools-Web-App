@@ -1342,6 +1342,8 @@ export function setBlockedDomainSettings(
     recheck?: boolean;
     recheckDays?: number;
     inboxRules?: InboxRules;
+    cancelAfterDeleted?: number;
+    cancelKeepReplyRate?: number;
   },
   signal?: AbortSignal
 ) {

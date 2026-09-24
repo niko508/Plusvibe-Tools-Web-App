@@ -198,6 +198,8 @@ export function SettingsView({
         </div>
       </section>
 
+      <DomainEndings view={view} onChanged={onChanged} onError={onError} />
+
       <div className="grid gap-5 lg:grid-cols-2">
         {/* Full automation */}
         <section className="pv-card p-4 sm:p-6">
@@ -206,7 +208,8 @@ export function SettingsView({
             {view?.settings.autoDelete
               ? "A blocked inbox is stopped and deleted straight away, with no confirmation."
               : "A blocked inbox is stopped straight away — sending and warmup off — and its deletion waits for you on Home."}{" "}
-            Nothing is done to a domain as a whole. A blocked Google inbox is listed on 🛑 Google Inboxes to Cancel.
+            A blocked Google inbox is listed on 🛑 Google Inboxes to Cancel. The same goes for the inboxes a domain
+            cancellation stops.
           </p>
           <button
             type="button"
@@ -297,6 +300,157 @@ export function SettingsView({
         )}
       </section>
     </div>
+  );
+}
+
+// Kept in step with lib/blocked-domains/settings (server-only, so not imported).
+const DEFAULT_CANCEL_AFTER = 13;
+const DEFAULT_CANCEL_KEEP_RATE = 1;
+
+/** When a domain as a whole is finished: Google's last inbox, Microsoft's Nth deletion. */
+function DomainEndings({
+  view,
+  onChanged,
+  onError,
+}: {
+  view: BlockedDomainsView | null;
+  onChanged: () => Promise<void> | void;
+  onError: (message: string) => void;
+}) {
+  const savedAfter = view?.settings.cancelAfterDeleted ?? DEFAULT_CANCEL_AFTER;
+  const savedKeep = view?.settings.cancelKeepReplyRate ?? DEFAULT_CANCEL_KEEP_RATE;
+  const [after, setAfter] = useState(String(savedAfter));
+  const [keep, setKeep] = useState(String(savedKeep));
+  const [touched, setTouched] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedNote, setSavedNote] = useState(false);
+
+  useEffect(() => {
+    if (!touched) {
+      setAfter(String(savedAfter));
+      setKeep(String(savedKeep));
+    }
+  }, [savedAfter, savedKeep, touched]);
+
+  const afterN = Number(after);
+  const keepN = Number(keep);
+  const problems = [
+    !(after.trim() && Number.isInteger(afterN) && afterN >= 0 && afterN <= 500) && "The deletion count must be a whole number from 0 to 500.",
+    !(keep.trim() && Number.isFinite(keepN) && keepN >= 0 && keepN <= 100) && "The reply rate must be a percentage from 0 to 100.",
+  ].filter(Boolean as unknown as (v: unknown) => v is string);
+  const dirty = problems.length === 0 && (afterN !== savedAfter || keepN !== savedKeep);
+  const isDefault = afterN === DEFAULT_CANCEL_AFTER && keepN === DEFAULT_CANCEL_KEEP_RATE;
+
+  async function save() {
+    setSaving(true);
+    try {
+      await setBlockedDomainSettings({ cancelAfterDeleted: afterN, cancelKeepReplyRate: keepN });
+      setTouched(false);
+      setSavedNote(true);
+      await onChanged();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Could not save the domain settings.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="pv-card p-4 sm:p-6" data-domain-endings>
+      <h2 className="text-base font-semibold">When a whole domain is finished</h2>
+      <div className="mt-3 grid gap-4 lg:grid-cols-2">
+        <div>
+          <h3 className="text-sm font-semibold">Google</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            When a blocked inbox is the <strong>last one on its domain</strong> — every other inbox on it already blocked
+            here — the domain’s status in 📋 Domains is set to <strong>Not Active</strong>. The inbox itself goes onto 🛑
+            Google Inboxes to Cancel as usual.
+          </p>
+        </div>
+        <div>
+          <h3 className="text-sm font-semibold">Microsoft (Azure)</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Every Microsoft inbox the rules delete is counted against its domain. Once the count goes past the number
+            below, the domain is cancelled the way the old automation did it: inboxes still getting replies are kept,
+            every other inbox is stopped and deleted (or waits for you, with Auto-delete off), the domain goes{" "}
+            <strong>Not Active</strong>, and the domain and its tenant email are added to 🚯 Tenants to Cancel. Once per
+            domain.
+          </p>
+          <div className="mt-3 space-y-2 text-xs">
+            <label className="flex flex-wrap items-center gap-2">
+              Cancel after more than
+              <input
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={500}
+                step={1}
+                className="pv-input w-20 py-1 text-xs tabular-nums"
+                value={after}
+                aria-label="Cancel a Microsoft domain after more than this many deleted inboxes"
+                data-cancel-after
+                onChange={(e) => {
+                  setTouched(true);
+                  setSavedNote(false);
+                  setAfter(e.target.value);
+                }}
+              />
+              inboxes deleted
+            </label>
+            <label className="flex flex-wrap items-center gap-2">
+              Keep an inbox when its OOO reply rate is at least
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                max={100}
+                step={0.1}
+                className="pv-input w-20 py-1 text-xs tabular-nums"
+                value={keep}
+                aria-label="Keep an inbox at cancellation when its OOO reply rate is at least this"
+                data-cancel-keep
+                onChange={(e) => {
+                  setTouched(true);
+                  setSavedNote(false);
+                  setKeep(e.target.value);
+                }}
+              />
+              % over the last {JUDGE_WINDOW_DAYS} days
+            </label>
+          </div>
+        </div>
+      </div>
+      {problems.length > 0 && (
+        <ul className="mt-4 space-y-1 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+          {problems.map((p) => (
+            <li key={p} className="flex gap-2">
+              <AlertIcon size={14} className="mt-0.5 shrink-0" /> {p}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <button type="button" className="pv-btn-primary disabled:opacity-50" data-save-endings disabled={!dirty || saving} onClick={save}>
+          {saving ? <Spinner size={14} /> : null} Save
+        </button>
+        <button
+          type="button"
+          className="pv-btn-ghost disabled:opacity-50"
+          disabled={isDefault || saving}
+          onClick={() => {
+            setTouched(true);
+            setSavedNote(false);
+            setAfter(String(DEFAULT_CANCEL_AFTER));
+            setKeep(String(DEFAULT_CANCEL_KEEP_RATE));
+          }}
+        >
+          Reset to defaults
+        </button>
+        <span className="text-xs text-muted-foreground" data-endings-state>
+          {savedNote ? "Saved." : dirty ? "Unsaved changes." : problems.length ? "" : "Saved."}
+        </span>
+      </div>
+    </section>
   );
 }
 
