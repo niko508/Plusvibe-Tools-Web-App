@@ -27,6 +27,8 @@ const HEADER = "x-webhook-secret";
 function describeExisting(job: BlockedInboxJob): string {
   const when = `Already handled ${job.email}`;
   switch (job.status) {
+    case "queued":
+      return `${when} — in line to be checked. Nothing to do.`;
     case "working":
     case "deleting":
       return `${when} — still in progress. Nothing to do.`;

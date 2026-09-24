@@ -22,6 +22,11 @@ export async function register() {
     const blocked = await import("@/lib/jobs/blocked-domains");
     await blocked.bootScheduler();
 
+    // Blocked Domains, inbox by inbox: inboxes a deploy cut off, or left in
+    // line, are checked without waiting for the next Clay hit.
+    const blockedInboxes = await import("@/lib/jobs/blocked-inboxes");
+    void blockedInboxes.bootResume().catch(() => undefined);
+
     // Inbox Rotation: a group switch falls at midnight, with nobody watching.
     const rotation = await import("@/lib/inbox-rotation/runner");
     rotation.bootScheduler();

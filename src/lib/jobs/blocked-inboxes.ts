@@ -4,7 +4,16 @@ import { randomUUID } from "crypto";
 import { promises as fs, mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import { onShutdownFlush } from "@/lib/jobs/shutdown";
-import { appendRows, batchUpdateCells, columnLetter, envSpreadsheetId, isSheetWritingConfigured, quoteTab, readTab } from "@/lib/google-sheets";
+import {
+  GoogleSheetsError,
+  appendRows,
+  batchUpdateCells,
+  columnLetter,
+  envSpreadsheetId,
+  isSheetWritingConfigured,
+  quoteTab,
+  readTab,
+} from "@/lib/google-sheets";
 import { DEFAULT_SHEET_TAB, COL_DOMAIN, COL_STATUS, COL_TENANT_EMAIL, COL_TENANT_SOURCE } from "@/lib/jobs/azure-warmup-types";
 import {
   BLOCKED_STATUS,
@@ -19,6 +28,7 @@ import {
   planQueueTabWrites,
 } from "@/lib/blocked-domains/sheet-plan";
 import { deleteInbox, fetchInboxStats, listInboxes, listWorkspaces, quarantineInboxes, type Inbox } from "@/lib/blocked-domains/api";
+import type { Workspace } from "@/lib/plusvibe-types";
 import { loadSettings } from "@/lib/blocked-domains/settings";
 import { lookupRegistrar } from "@/lib/blocked-domains/registrar";
 import { JUDGE_WINDOW_DAYS, describeRule, describeTier, judgeInbox, ratesOf } from "@/lib/blocked-inboxes/rules";
@@ -57,6 +67,18 @@ const DOMAINS_FILE = path.join(JOBS_BASE, "blocked-inboxes", "domains.json");
 const REJUDGE_AFTER_MS = 24 * 60 * 60 * 1000;
 /** Workspace listings and the Domains tab are reused this long across hits. */
 const CACHE_MS = 10 * 60 * 1000;
+/**
+ * How recent a listing must be to decide that a Google inbox is its domain's
+ * last. Recent enough to see inboxes added since; not so recent that every
+ * blocked Google inbox reads its whole workspace again.
+ */
+const FRESH_MS = 2 * 60 * 1000;
+/**
+ * How many inboxes are checked at once; the rest wait in line. Clay can send
+ * hundreds in one go, and every Plusvibe call shares one small rate budget:
+ * started all together, they only slow each other down until none finishes.
+ */
+const MAX_RUNS = 3;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -65,15 +87,29 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 interface SharedState {
   records: Map<string, BlockedInboxJob>;
   domains: Map<string, InboxDomainState>;
-  loaded: boolean;
+  /** The log's first read from disk; everyone waits on the same one. */
+  loading?: Promise<void>;
   inboxCache: Map<string, { at: number; inboxes: Inbox[] }>;
   sheetCache?: { at: number; grid: string[][] };
+  workspaces?: { at: number; list: Workspace[] };
+  /** Reads under way, so a burst shares one instead of each starting its own. */
+  inflight: Map<string, Promise<unknown>>;
+  /** Inboxes waiting their turn, and how many are being checked now. */
+  queue: { id: string; kind: "run" | "delete" }[];
+  active: number;
+  /** Sheet calls go one at a time: they read a tab, then write where it was blank. */
+  sheetChain: Promise<void>;
+  /** Registrar per domain: one lookup serves all of a domain's inboxes. */
+  registrars?: Map<string, Promise<string | null>>;
 }
 const shared: SharedState = ((globalThis as { __pvBlockedInboxes?: SharedState }).__pvBlockedInboxes ??= {
   records: new Map(),
   domains: new Map(),
-  loaded: false,
   inboxCache: new Map(),
+  inflight: new Map(),
+  queue: [],
+  active: 0,
+  sheetChain: Promise.resolve(),
 });
 const records = shared.records;
 const domains = shared.domains;
@@ -116,19 +152,40 @@ onShutdownFlush(() => {
   }
 });
 
-async function loadOnce() {
-  if (shared.loaded) return;
-  shared.loaded = true;
+/**
+ * A run a restart cut off carries on by itself. Nothing irreversible happens
+ * before an inbox is blocked, so one cut off before that is simply checked
+ * again. One cut off after it is already stopped: it waits for its deletion
+ * as usual — and if that deletion had been confirmed, it is carried out.
+ */
+function resumeAfterRestart(rec: BlockedInboxJob): "run" | "delete" | null {
+  const cutOff = rec.status === "queued" || rec.status === "working" || rec.status === "deleting" || rec.status === "interrupted";
+  if (!cutOff) return null;
+  if (rec.blockedAt === undefined) {
+    rec.status = "queued";
+    return "run";
+  }
+  rec.status = "awaiting_confirmation";
+  return rec.confirmedAt !== undefined ? "delete" : null;
+}
+
+function loadOnce(): Promise<void> {
+  return (shared.loading ??= load());
+}
+
+async function load() {
+  const resume: { rec: BlockedInboxJob; kind: "run" | "delete" }[] = [];
   try {
     await fs.mkdir(RECORDS_DIR, { recursive: true });
     for (const f of await fs.readdir(RECORDS_DIR)) {
       if (!f.endsWith(".json")) continue;
       try {
         const rec = JSON.parse(await fs.readFile(path.join(RECORDS_DIR, f), "utf8")) as BlockedInboxJob;
-        if (rec.status === "working" || rec.status === "deleting") rec.status = "interrupted";
         rec.errors = Array.isArray(rec.errors) ? rec.errors : [];
         rec.duplicateHits = rec.duplicateHits ?? 0;
         records.set(rec.id, rec);
+        const kind = resumeAfterRestart(rec);
+        if (kind) resume.push({ rec, kind });
       } catch {
         // skip a corrupt record
       }
@@ -156,6 +213,70 @@ async function loadOnce() {
     }
     await persistDomains();
   }
+  // Oldest first, as they arrived.
+  for (const { rec, kind } of resume.sort((a, b) => a.rec.createdAt - b.rec.createdAt)) enqueue(rec.id, kind);
+}
+
+/** Loads the log at boot, so runs a deploy cut off carry on with nobody looking. */
+export async function bootResume(): Promise<void> {
+  await loadOnce();
+}
+
+// --- The line --------------------------------------------------------------
+
+function enqueue(id: string, kind: "run" | "delete") {
+  if (shared.queue.some((q) => q.id === id)) return;
+  shared.queue.push({ id, kind });
+  pump();
+}
+
+function pump() {
+  while (shared.active < MAX_RUNS && shared.queue.length > 0) {
+    const next = shared.queue.shift()!;
+    shared.active += 1;
+    const task = next.kind === "run" ? runInbox(next.id) : runDelete(next.id);
+    void task
+      .catch(() => undefined)
+      .finally(() => {
+        shared.active -= 1;
+        pump();
+      });
+  }
+}
+
+/** One read at a time per key: callers arriving while it runs get the same answer. */
+function once<T>(key: string, make: () => Promise<T>): Promise<T> {
+  const running = shared.inflight.get(key) as Promise<T> | undefined;
+  if (running) return running;
+  const p = make().finally(() => shared.inflight.delete(key));
+  shared.inflight.set(key, p);
+  return p;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Every sheet call, one after another, and tried again when Google says to
+ * slow down. One at a time because the cancel tabs are filled by reading them
+ * and writing to the first blank row: two at once would pick the same row.
+ */
+function withSheet<T>(fn: () => Promise<T>): Promise<T> {
+  const run = shared.sheetChain.then(async () => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        const busy = err instanceof GoogleSheetsError && (err.status === 429 || err.status >= 500);
+        if (!busy || attempt >= 5) throw err;
+        await sleep(2000 * 2 ** attempt);
+      }
+    }
+  });
+  shared.sheetChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
 }
 
 function domainState(domain: string): InboxDomainState {
@@ -205,7 +326,7 @@ export type InboxIntakeResult =
 
 /** Whether a new hit for an inbox is only counted, rather than run. */
 function standsAsIs(rec: BlockedInboxJob, now: number): boolean {
-  if (rec.status === "working" || rec.status === "deleting") return true;
+  if (rec.status === "queued" || rec.status === "working" || rec.status === "deleting") return true;
   if (rec.blockedAt !== undefined) return true;
   return now - (rec.judgedAt ?? rec.createdAt) < REJUDGE_AFTER_MS;
 }
@@ -236,7 +357,7 @@ export async function intakeInbox(args: { email: unknown; bounceReason?: string;
         ...(rec.history ?? []),
       ].slice(0, MAX_INBOX_HISTORY);
     }
-    rec.status = "working";
+    rec.status = "queued";
     rec.errors = [];
     rec.overruled = undefined;
     rec.reasons = undefined;
@@ -247,7 +368,7 @@ export async function intakeInbox(args: { email: unknown; bounceReason?: string;
       id: randomUUID(),
       email,
       domain: email.slice(email.lastIndexOf("@") + 1),
-      status: "working",
+      status: "queued",
       createdAt: now,
       updatedAt: now,
       source: args.source || "clay",
@@ -258,7 +379,7 @@ export async function intakeInbox(args: { email: unknown; bounceReason?: string;
     records.set(rec.id, rec);
   }
   await persist(rec.id);
-  void runInbox(rec.id);
+  enqueue(rec.id, "run");
   return { outcome: "accepted", job: rec };
 }
 
@@ -269,27 +390,66 @@ async function domainsGrid(): Promise<string[][] | null> {
   if (!sheetId) return null;
   const c = shared.sheetCache;
   if (c && Date.now() - c.at < CACHE_MS) return c.grid;
-  const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
-  shared.sheetCache = { at: Date.now(), grid };
-  return grid;
+  return once("sheet:domains", () =>
+    withSheet(async () => {
+      const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
+      shared.sheetCache = { at: Date.now(), grid };
+      return grid;
+    })
+  );
 }
 
-async function workspaceInboxes(apiKey: string, workspaceId: string, fresh = false): Promise<Inbox[]> {
+async function workspaceList(apiKey: string): Promise<Workspace[]> {
+  const c = shared.workspaces;
+  if (c && Date.now() - c.at < CACHE_MS) return c.list;
+  return once("workspaces", async () => {
+    const list = await listWorkspaces(apiKey);
+    shared.workspaces = { at: Date.now(), list };
+    return list;
+  });
+}
+
+/**
+ * A workspace's inboxes, as read at `readSince` or later: the cached listing
+ * when it is that recent, a read already under way when that started late
+ * enough, and otherwise a new read.
+ */
+async function workspaceInboxes(apiKey: string, workspaceId: string, readSince = Date.now() - CACHE_MS): Promise<Inbox[]> {
   const c = shared.inboxCache.get(workspaceId);
-  if (!fresh && c && Date.now() - c.at < CACHE_MS) return c.inboxes;
-  const inboxes = await listInboxes(apiKey, workspaceId);
-  shared.inboxCache.set(workspaceId, { at: Date.now(), inboxes });
-  return inboxes;
+  if (c && c.at >= readSince) return c.inboxes;
+  const key = `inboxes:${workspaceId}`;
+  const running = shared.inflight.get(key) as (Promise<Inbox[]> & { startedAt?: number }) | undefined;
+  if (running && (running.startedAt ?? 0) >= readSince) return running;
+  const startedAt = Date.now();
+  const p: Promise<Inbox[]> & { startedAt?: number } = listInboxes(apiKey, workspaceId).then((inboxes) => {
+    shared.inboxCache.set(workspaceId, { at: startedAt, inboxes });
+    return inboxes;
+  });
+  p.startedAt = startedAt;
+  shared.inflight.set(key, p);
+  void p.finally(() => {
+    if (shared.inflight.get(key) === p) shared.inflight.delete(key);
+  }).catch(() => undefined);
+  return p;
 }
 
 /**
  * The inbox, and the workspace it is in. The Domains sheet's Client column
  * points at the workspace when it can; otherwise every workspace is looked
- * through. Workspace listings are reused for a few minutes, since one bad
- * domain sends many of its inboxes through here in a burst.
+ * through. Workspace listings are shared and reused for a few minutes, since
+ * Clay sends inboxes in bursts — sometimes hundreds at once.
+ *
+ * `arrivedAt` is when the hit came in. An inbox missing from a listing read
+ * before then may be newer than the listing, so that workspace is read again;
+ * one missing from a listing read after it is simply not there. That keeps a
+ * burst of already-deleted inboxes to one fresh read, not one each.
  */
-async function locate(apiKey: string, rec: BlockedInboxJob): Promise<{ workspaceId: string; workspaceName: string; inbox: Inbox } | null> {
-  const workspaces = await listWorkspaces(apiKey);
+async function locate(
+  apiKey: string,
+  rec: BlockedInboxJob,
+  arrivedAt: number
+): Promise<{ workspaceId: string; workspaceName: string; inbox: Inbox } | null> {
+  const workspaces = await workspaceList(apiKey);
   let hinted: string | null = null;
   try {
     const grid = await domainsGrid();
@@ -317,33 +477,39 @@ async function locate(apiKey: string, rec: BlockedInboxJob): Promise<{ workspace
   const order = hinted ? [hinted, ...workspaces.map((w) => w._id).filter((id) => id !== hinted)] : workspaces.map((w) => w._id);
   const find = (inboxes: Inbox[]) => inboxes.find((i) => i.email.trim().toLowerCase() === rec.email);
   const nameOf = (wsId: string) => workspaces.find((w) => w._id === wsId)?.name ?? "";
-  // Workspaces read from Plusvibe during this lookup, rather than reused.
-  const readNow = new Set<string>();
-  const listing = async (wsId: string, fresh: boolean) => {
-    const cached = shared.inboxCache.get(wsId);
-    const inboxes = await workspaceInboxes(apiKey, wsId, fresh);
-    if (fresh || !cached || Date.now() - cached.at >= CACHE_MS) readNow.add(wsId);
-    return inboxes;
-  };
   for (const wsId of order) {
-    const hit = find(await listing(wsId, false));
+    const hit = find(await workspaceInboxes(apiKey, wsId));
     if (hit) return { workspaceId: wsId, workspaceName: nameOf(wsId), inbox: hit };
   }
-  // Not in any listing — but a listing reused from the cache may predate the
-  // inbox, so those workspaces are read again, fresh, before giving up.
+  // Not in any listing — but a listing read before the hit arrived may
+  // predate the inbox, so those workspaces are read again before giving up.
   for (const wsId of order) {
-    if (readNow.has(wsId)) continue;
-    const hit = find(await listing(wsId, true));
+    if ((shared.inboxCache.get(wsId)?.at ?? 0) >= arrivedAt) continue;
+    const hit = find(await workspaceInboxes(apiKey, wsId, arrivedAt));
     if (hit) return { workspaceId: wsId, workspaceName: nameOf(wsId), inbox: hit };
   }
   return null;
+}
+
+function registrarOf(domain: string): Promise<string | null> {
+  const cache = (shared.registrars ??= new Map());
+  let p = cache.get(domain);
+  if (!p) {
+    p = lookupRegistrar(domain);
+    cache.set(domain, p);
+  }
+  return p;
 }
 
 // --- The run -----------------------------------------------------------------
 
 async function runInbox(id: string) {
   const rec = records.get(id);
-  if (!rec) return;
+  // Removed while it waited, or already handled some other way.
+  if (!rec || rec.status !== "queued") return;
+  const arrivedAt = rec.updatedAt;
+  rec.status = "working";
+  rec.updatedAt = Date.now();
   const apiKey = serverApiKey();
   if (!apiKey) {
     rec.status = "error";
@@ -354,7 +520,7 @@ async function runInbox(id: string) {
 
   try {
     // 1. Find it.
-    const found = await locate(apiKey, rec);
+    const found = await locate(apiKey, rec, arrivedAt);
     if (!found) {
       rec.status = "not_found";
       rec.judgedAt = Date.now();
@@ -368,7 +534,7 @@ async function runInbox(id: string) {
     rec.accountId = found.inbox.id;
     rec.providerRaw = found.inbox.provider;
     rec.provider = bucketOf(found.inbox.provider);
-    if (!rec.domainHost && !rec.registrar) rec.registrar = (await lookupRegistrar(rec.domain)) ?? undefined;
+    if (!rec.domainHost && !rec.registrar) rec.registrar = (await registrarOf(rec.domain)) ?? undefined;
     await persist(id);
 
     // 2. Its last 14 days.
@@ -452,21 +618,23 @@ async function listOnGoogleCancel(rec: BlockedInboxJob) {
     return;
   }
   try {
-    const grid = await readTab(sheetId, GOOGLE_CANCEL_TAB);
-    const plan = planGoogleTabWrites(grid, [rec.email], rec.tenantSource ?? "");
-    if (plan.problem) {
-      rec.googleCancel = { listed: false, error: plan.problem };
-      pushError(rec, plan.problem);
-      return;
-    }
-    if (plan.updates.length > 0) {
-      await batchUpdateCells(
-        sheetId,
-        plan.updates.map((u) => ({ range: `${quoteTab(GOOGLE_CANCEL_TAB)}!${columnLetter(u.column)}${u.row}`, value: u.value }))
-      );
-    }
-    if (plan.append.length > 0) await appendRows(sheetId, GOOGLE_CANCEL_TAB, plan.append);
-    rec.googleCancel = { listed: true, alreadyThere: plan.already.length > 0 && plan.queued.length === 0 && plan.moved.length === 0 };
+    await withSheet(async () => {
+      const grid = await readTab(sheetId, GOOGLE_CANCEL_TAB);
+      const plan = planGoogleTabWrites(grid, [rec.email], rec.tenantSource ?? "");
+      if (plan.problem) {
+        rec.googleCancel = { listed: false, error: plan.problem };
+        pushError(rec, plan.problem);
+        return;
+      }
+      if (plan.updates.length > 0) {
+        await batchUpdateCells(
+          sheetId,
+          plan.updates.map((u) => ({ range: `${quoteTab(GOOGLE_CANCEL_TAB)}!${columnLetter(u.column)}${u.row}`, value: u.value }))
+        );
+      }
+      if (plan.append.length > 0) await appendRows(sheetId, GOOGLE_CANCEL_TAB, plan.append);
+      rec.googleCancel = { listed: true, alreadyThere: plan.already.length > 0 && plan.queued.length === 0 && plan.moved.length === 0 };
+    });
   } catch (err) {
     rec.googleCancel = { listed: false, error: msg(err) };
     pushError(rec, `Could not list ${rec.email} on "${GOOGLE_CANCEL_TAB}": ${msg(err)}`);
@@ -488,7 +656,10 @@ async function runDelete(id: string) {
     await deleteInbox(apiKey, rec.workspaceId, rec.email);
     rec.deletedAt = Date.now();
     rec.status = "deleted";
-    shared.inboxCache.delete(rec.workspaceId);
+    // Out of the cached listing too — rather than dropping the listing, which
+    // would have the next inbox read the whole workspace again.
+    const c = shared.inboxCache.get(rec.workspaceId);
+    if (c) c.inboxes = c.inboxes.filter((i) => i.email.trim().toLowerCase() !== rec.email);
   } catch (err) {
     rec.status = "awaiting_confirmation";
     pushError(rec, `Could not delete ${rec.email}: ${msg(err)}. It is still stopped; try again.`);
@@ -526,7 +697,7 @@ function blockedOn(domain: string, except?: string): string[] {
 async function endGoogleDomainIfLast(apiKey: string, rec: BlockedInboxJob) {
   if (!rec.workspaceId) return;
   try {
-    const onDomain = (await workspaceInboxes(apiKey, rec.workspaceId, true))
+    const onDomain = (await workspaceInboxes(apiKey, rec.workspaceId, Date.now() - FRESH_MS))
       .map((i) => i.email.trim().toLowerCase())
       .filter((e) => e.endsWith(`@${rec.domain}`));
     if (!isLastOnDomain(onDomain, rec.email, blockedOn(rec.domain, rec.email))) return;
@@ -558,6 +729,13 @@ async function setDomainNotActive(
 ): Promise<{ error?: string; previousStatus?: string; tenantEmail?: string; tenantSource?: string }> {
   const sheetId = envSpreadsheetId();
   if (!sheetId || !isSheetWritingConfigured()) return { error: "the sheet isn't set up for writing" };
+  return withSheet(() => writeNotActive(sheetId, domain));
+}
+
+async function writeNotActive(
+  sheetId: string,
+  domain: string
+): Promise<{ error?: string; previousStatus?: string; tenantEmail?: string; tenantSource?: string }> {
   const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
   shared.sheetCache = { at: Date.now(), grid };
   const header = grid[0] ?? [];
@@ -586,6 +764,10 @@ async function setDomainNotActive(
 async function queueTenant(domain: string, tenant: string, source: string): Promise<{ queued: boolean; already: boolean; error?: string }> {
   const sheetId = envSpreadsheetId();
   if (!sheetId || !isSheetWritingConfigured()) return { queued: false, already: false, error: "the sheet isn't set up for writing" };
+  return withSheet(() => writeTenant(sheetId, domain, tenant, source));
+}
+
+async function writeTenant(sheetId: string, domain: string, tenant: string, source: string): Promise<{ queued: boolean; already: boolean; error?: string }> {
   const grid = await readTab(sheetId, CANCEL_TAB);
   const plan = planQueueTabWrites(grid, [{ key: tenant, source, domain }], TENANT_QUEUE);
   if (plan.problem) return { queued: false, already: false, error: plan.problem };
@@ -623,7 +805,7 @@ export async function cancelMicrosoftDomain(domain: string): Promise<void> {
     // 1. Every Microsoft inbox still on the domain that isn't already blocked,
     //    and its last 14 days. A Google stray isn't on the tenant, so it stays.
     const blocked = new Set(blockedOn(domain));
-    const inboxes = (await workspaceInboxes(apiKey, d.workspaceId, true)).filter(
+    const inboxes = (await workspaceInboxes(apiKey, d.workspaceId, Date.now())).filter(
       (i) =>
         i.email.trim().toLowerCase().endsWith(`@${domain}`) &&
         !blocked.has(i.email.trim().toLowerCase()) &&
@@ -798,6 +980,7 @@ export async function removeInboxJob(id: string): Promise<boolean> {
   const rec = records.get(id);
   if (!rec || rec.status === "working" || rec.status === "deleting") return false;
   records.delete(id);
+  shared.queue = shared.queue.filter((q) => q.id !== id);
   try {
     await fs.unlink(fileFor(id));
   } catch {

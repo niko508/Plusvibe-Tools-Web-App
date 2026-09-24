@@ -75,7 +75,7 @@ export function BlockedDomainsTool() {
   useEffect(() => {
     if (pollRef.current) clearTimeout(pollRef.current);
     if (!view) return;
-    const busy = (s: string) => s === "working" || s === "deleting";
+    const busy = (s: string) => s === "queued" || s === "working" || s === "deleting";
     const active = view.jobs.some((j) => busy(j.status)) || (view.inboxJobs ?? []).some((j) => busy(j.status));
     pollRef.current = setTimeout(() => void refresh(), active ? POLL_ACTIVE_MS : POLL_IDLE_MS);
     return () => {
@@ -124,7 +124,10 @@ export function BlockedDomainsTool() {
     deleted: inboxJobs.filter((j) => j.status === "deleted").length,
     passed: inboxJobs.filter((j) => j.status === "passed").length,
   };
-  const recent = inboxJobs.filter((j) => j.status !== "awaiting_confirmation");
+  // Inboxes waiting their turn are counted, not listed: Clay can send hundreds at once.
+  const inLine = inboxJobs.filter((j) => j.status === "queued").length;
+  const checkingNow = inboxJobs.filter((j) => j.status === "working").length;
+  const recent = inboxJobs.filter((j) => j.status !== "awaiting_confirmation" && j.status !== "queued");
 
   // The domain-level runs from before the move to inboxes. Kept: some still
   // have stopped inboxes waiting to be deleted.
@@ -236,6 +239,17 @@ export function BlockedDomainsTool() {
               <Stat label="Blocked" value={stats.blocked} tone={stats.blocked > 0 ? "danger" : undefined} />
               <Stat label="Deleted" value={stats.deleted} />
               <Stat label="Passed" value={stats.passed} />
+            </div>
+          )}
+
+          {inLine > 0 && (
+            <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm" data-in-line>
+              <Spinner size={14} />
+              <span>
+                <strong className="tabular-nums">{formatNumber(inLine)}</strong> {inLine === 1 ? "inbox" : "inboxes"} in line to be checked
+                {checkingNow > 0 ? `, ${formatNumber(checkingNow)} being checked now` : ""}. They are taken a few at a time, so Plusvibe&apos;s
+                rate limit isn&apos;t swamped.
+              </span>
             </div>
           )}
 

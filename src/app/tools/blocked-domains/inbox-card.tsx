@@ -11,6 +11,7 @@ import { Spinner } from "@/components/ui";
 import { AlertIcon, TrashIcon } from "@/components/icons";
 
 export const INBOX_STATUS: Record<BlockedInboxStatus, { label: string; className: string }> = {
+  queued: { label: "In line", className: "bg-muted text-muted-foreground" },
   working: { label: "Checking", className: "bg-accent/10 text-accent" },
   passed: { label: "Passed", className: "bg-success/10 text-success" },
   untouched: { label: "Left alone", className: "bg-muted text-muted-foreground" },

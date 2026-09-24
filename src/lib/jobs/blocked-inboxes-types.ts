@@ -29,6 +29,8 @@ export const MAX_INBOX_ERRORS = 20;
 export const MAX_INBOX_HISTORY = 10;
 
 export type BlockedInboxStatus =
+  /** Waiting its turn: a few inboxes are checked at a time. */
+  | "queued"
   /** Being found, read and judged. */
   | "working"
   /** Within its tier: nothing done. */
