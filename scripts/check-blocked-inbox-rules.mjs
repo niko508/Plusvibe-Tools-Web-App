@@ -16,7 +16,7 @@ const eq = (label, got, want) => {
   }
 };
 
-const { judgeInbox, ratesOf, tierFor, describeTier, describeRule } = await importTs("@/lib/blocked-inboxes/rules");
+const { judgeInbox, ratesOf, tierFor, describeTier, describeRule, validateRules, normalizeRules, DEFAULT_RULES } = await importTs("@/lib/blocked-inboxes/rules");
 
 // An inbox that sent `sent`, with `bounces` bounced, `contacted` unique leads,
 // `replies` human replies and `ooo` out-of-office replies.
@@ -77,6 +77,34 @@ eq("rules read the way they were given", [
   describeRule(tierFor("microsoft", 46)),
   describeRule(tierFor("google", 101)),
 ], ["bounce > 10% or OOO reply rate < 1.5%", "bounce > 5% or OOO reply rate < 2% · human reply rate > 1% overrules"]);
+
+console.log("--- rules edited on the Settings tab");
+{
+  // As the form sends them: numbers as text, empty boxes left out.
+  const form = {
+    microsoft: [{ min: "0", maxBounceRate: "80" }, { min: "20", maxBounceRate: "40" }, { min: "60", maxBounceRate: "8", minOooReplyRate: "1" }],
+    google: [{ min: "0", maxBounceRate: "75" }, { min: "40", maxBounceRate: "10", minOooReplyRate: "2", humanReplyOverrule: "1.5" }],
+  };
+  const { rules, problems } = validateRules(form);
+  eq("a sound set is accepted", problems, []);
+  eq("…each tier running to one below the next", rules.microsoft.map((t) => [t.min, t.max]), [[0, 19], [20, 59], [60, null]]);
+  eq("…with an empty box meaning not checked", [rules.microsoft[0].minOooReplyRate, rules.google[1].humanReplyOverrule], [undefined, 1.5]);
+  eq("judging uses them", [judgeInbox("microsoft", f(30, 13), rules).verdict, judgeInbox("microsoft", f(30, 12), rules).verdict], ["block", "pass"]);
+  eq("…where the defaults would say otherwise", [judgeInbox("microsoft", f(30, 8), rules).verdict, judgeInbox("microsoft", f(30, 8)).verdict], ["pass", "block"]);
+  eq("…the overrule too", judgeInbox("google", f(100, 20, 100, 2), rules).verdict, "pass");
+  eq("…and the tier reads back", [describeTier(rules.microsoft[1]), describeRule(rules.google[1])], ["20–59 sends", "bounce > 10% or OOO reply rate < 2% · human reply rate > 1.5% overrules"]);
+}
+eq("the first tier always starts at 0, whatever was typed", validateRules({ microsoft: [{ min: "5", maxBounceRate: 50 }], google: [{ min: 0, maxBounceRate: 50 }] }).rules.microsoft[0].min, 0);
+eq("tiers out of order are refused, named",
+  validateRules({ microsoft: [{ min: 0, maxBounceRate: 50 }, { min: 30, maxBounceRate: 20 }, { min: 30, maxBounceRate: 10 }], google: [{ min: 0, maxBounceRate: 50 }] }).problems,
+  ["Microsoft tier 3: must start above 30 sends, where the tier before it starts."]);
+eq("…so is a percentage over 100, or not a number",
+  validateRules({ microsoft: [{ min: 0, maxBounceRate: 150 }], google: [{ min: 0, maxBounceRate: "x" }] }).problems,
+  ["Microsoft tier 1: the bounce rate must be a percentage from 0 to 100.", "Google tier 1: the bounce rate must be a percentage from 0 to 100."]);
+eq("…and a provider with no tiers", validateRules({ microsoft: [], google: [{ min: 0, maxBounceRate: 50 }] }).problems, ["Microsoft: add at least one tier."]);
+eq("nothing is saved while anything is wrong", validateRules({ microsoft: [], google: [] }).rules, null);
+eq("the defaults validate as they are", JSON.stringify(validateRules(DEFAULT_RULES).rules), JSON.stringify(DEFAULT_RULES));
+eq("a stored set that doesn't read falls back to the defaults, whole", JSON.stringify(normalizeRules({ microsoft: "junk" })), JSON.stringify(DEFAULT_RULES));
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

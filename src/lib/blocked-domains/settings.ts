@@ -7,6 +7,7 @@ import {
   DEFAULT_MIN_REPLY_RATE_OOO,
   normalizeThreshold,
 } from "@/lib/blocked-domains/performance";
+import { DEFAULT_RULES, normalizeRules, type InboxRules } from "@/lib/blocked-inboxes/rules";
 import {
   DEFAULT_RECHECK_DAYS,
   MAX_RECHECK_DAYS,
@@ -57,6 +58,8 @@ export interface BlockedDomainSettings {
   recheck: boolean;
   /** How often the repeat check runs, in days. */
   recheckDays: number;
+  /** The tiers each sender inbox is judged on, per provider. */
+  inboxRules: InboxRules;
   updatedAt: number;
 }
 
@@ -69,6 +72,7 @@ export const DEFAULT_SETTINGS: BlockedDomainSettings = {
   minDomainReplyRateOoo: DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO,
   recheck: true,
   recheckDays: DEFAULT_RECHECK_DAYS,
+  inboxRules: DEFAULT_RULES,
   updatedAt: 0,
 };
 
@@ -91,6 +95,9 @@ export async function loadSettings(): Promise<BlockedDomainSettings> {
       ),
       recheck: parsed.recheck !== false,
       recheckDays: normalizeRecheckDays(parsed.recheckDays),
+      // A file with no rules, or rules that don't read, judges on the
+      // defaults rather than on nothing.
+      inboxRules: parsed.inboxRules === undefined ? DEFAULT_RULES : normalizeRules(parsed.inboxRules),
       updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
     };
   } catch {
@@ -108,6 +115,7 @@ export async function saveSettings(
       | "minDomainReplyRateOoo"
       | "recheck"
       | "recheckDays"
+      | "inboxRules"
     >
   >
 ): Promise<BlockedDomainSettings> {
@@ -127,6 +135,7 @@ export async function saveSettings(
     recheck: patch.recheck === undefined ? current.recheck : patch.recheck === true,
     recheckDays:
       patch.recheckDays === undefined ? current.recheckDays : normalizeRecheckDays(patch.recheckDays),
+    inboxRules: patch.inboxRules === undefined ? current.inboxRules : normalizeRules(patch.inboxRules),
     updatedAt: Date.now(),
   };
   await fs.mkdir(STORE_DIR, { recursive: true });

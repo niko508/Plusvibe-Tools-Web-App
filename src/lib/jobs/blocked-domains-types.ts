@@ -44,6 +44,7 @@ import type {
 } from "@/lib/blocked-domains/performance";
 import type { ProviderCounts } from "@/lib/plusvibe-providers";
 import type { BlockedInboxJob } from "@/lib/jobs/blocked-inboxes-types";
+import type { InboxRules } from "@/lib/blocked-inboxes/rules";
 
 export type { DomainPerformance, DomainVerdict, InboxAssessment, ProviderCounts };
 
@@ -353,6 +354,8 @@ export interface BlockedDomainsView {
     minDomainReplyRateOoo: number;
     recheck: boolean;
     recheckDays: number;
+    /** The tiers sender inboxes are judged on. Absent from an older build. */
+    inboxRules?: InboxRules;
   };
   /** Whether the webhook can actually run unattended. */
   readiness: {

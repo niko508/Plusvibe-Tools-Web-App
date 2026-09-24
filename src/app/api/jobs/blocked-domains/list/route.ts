@@ -29,6 +29,7 @@ export async function GET(request: Request) {
         minDomainReplyRateOoo: settings.minDomainReplyRateOoo,
         recheck: settings.recheck,
         recheckDays: settings.recheckDays,
+        inboxRules: settings.inboxRules,
       },
       readiness: {
         serverKey: serverApiKey() !== null,

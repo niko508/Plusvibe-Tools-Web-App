@@ -49,6 +49,7 @@ import type {
   AzureStartPayload,
 } from "@/lib/jobs/azure-warmup-types";
 import type { WarmupSettings as AzureWarmupSettings } from "@/lib/azure-warmup/warmup-settings";
+import type { InboxRules } from "@/lib/blocked-inboxes/rules";
 import type {
   FirstCampaignJob,
   FirstCampaignStartPayload,
@@ -1340,6 +1341,7 @@ export function setBlockedDomainSettings(
     minDomainReplyRateOoo?: number;
     recheck?: boolean;
     recheckDays?: number;
+    inboxRules?: InboxRules;
   },
   signal?: AbortSignal
 ) {

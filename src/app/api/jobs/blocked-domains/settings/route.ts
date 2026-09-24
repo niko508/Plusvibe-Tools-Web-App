@@ -3,6 +3,7 @@ import { resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { MAX_RECHECK_DAYS, loadSettings, saveSettings } from "@/lib/blocked-domains/settings";
 import { applyRecheckInterval } from "@/lib/jobs/blocked-domains";
+import { validateRules } from "@/lib/blocked-inboxes/rules";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,7 @@ export async function PUT(request: Request) {
       minDomainReplyRateOoo?: unknown;
       recheck?: unknown;
       recheckDays?: unknown;
+      inboxRules?: unknown;
     };
     const patch: Parameters<typeof saveSettings>[0] = {};
 
@@ -57,6 +59,13 @@ export async function PUT(request: Request) {
         );
       }
       patch[key] = n;
+    }
+    if (body.inboxRules !== undefined) {
+      // The rules decide which inboxes are deleted, so anything off is refused
+      // whole, with every problem named, rather than half-saved.
+      const { rules, problems } = validateRules(body.inboxRules);
+      if (!rules) return NextResponse.json({ error: problems.join(" "), problems }, { status: 400 });
+      patch.inboxRules = rules;
     }
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: "Nothing to change." }, { status: 400 });

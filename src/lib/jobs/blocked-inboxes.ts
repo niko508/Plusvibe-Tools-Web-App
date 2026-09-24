@@ -326,8 +326,9 @@ async function runInbox(id: string) {
     }
     rec.figures = { sent: row.sent, bounces: row.bounces ?? 0, contacted: row.contacted, replies: row.replies, oooReplies: row.oooReplies };
 
-    // 3. Judge it.
-    const j = judgeInbox(rec.provider, rec.figures);
+    // 3. Judge it, on the rules as saved on the Settings tab.
+    const settings = await loadSettings();
+    const j = judgeInbox(rec.provider, rec.figures, settings.inboxRules);
     rec.rates = j.rates;
     rec.verdict = j.verdict;
     rec.tier = j.tier ? describeTier(j.tier) : undefined;
@@ -358,7 +359,6 @@ async function runInbox(id: string) {
     if (rec.provider === "google") await listOnGoogleCancel(rec);
 
     // 5. Delete — now, or when someone confirms.
-    const settings = await loadSettings();
     if (settings.autoDelete) {
       rec.autoDeleted = true;
       rec.confirmedAt = Date.now();

@@ -3,11 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BlockedDomainsView } from "@/lib/jobs/blocked-domains-types";
 import { isBlocked } from "@/lib/jobs/blocked-inboxes-types";
-import { GOOGLE_TIERS, MICROSOFT_TIERS, JUDGE_WINDOW_DAYS, describeRule, describeTier, type Tier } from "@/lib/blocked-inboxes/rules";
 import { blockedDomains } from "@/lib/blocked-inboxes/domains";
 import {
   fetchBlockedDomains,
-  setBlockedDomainSettings,
   confirmBlockedDomain,
   dismissBlockedDomain,
   rearmBlockedDomain,
@@ -23,14 +21,14 @@ import {
 import { useApiKey } from "@/lib/use-api-key";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { EmptyState, Spinner } from "@/components/ui";
-import { AlertIcon, CheckIcon, ChevronDownIcon, CopyIcon, FireIcon, GaugeIcon } from "@/components/icons";
-import { copyToClipboard } from "@/lib/clipboard";
+import { AlertIcon, ChevronDownIcon, FireIcon } from "@/components/icons";
 import { formatNumber } from "@/lib/format";
 import { needsYou, stoppedCount } from "@/lib/blocked-domains/triage";
 import { JobCard } from "./job-card";
 import { InboxCard } from "./inbox-card";
 import { BlockedDomainsList, BlockedInboxesView } from "./blocked-lists";
 import { StatsView } from "./stats-view";
+import { SettingsView } from "./settings-view";
 
 /** Polled while anything is in flight; slower otherwise, since Clay drives it. */
 const POLL_ACTIVE_MS = 2000;
@@ -38,12 +36,13 @@ const POLL_IDLE_MS = 20000;
 /** Recent runs shown on Home before "more". */
 const RECENT = 15;
 
-type Section = "home" | "inboxes" | "domains" | "stats";
+type Section = "home" | "inboxes" | "domains" | "stats" | "settings";
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "home", label: "Home" },
   { id: "inboxes", label: "Blocked Inboxes" },
   { id: "domains", label: "Blocked Domains" },
   { id: "stats", label: "Stats" },
+  { id: "settings", label: "Settings" },
 ];
 
 export function BlockedDomainsTool() {
@@ -53,12 +52,8 @@ export function BlockedDomainsTool() {
   const [view, setView] = useState<BlockedDomainsView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [savingToggle, setSavingToggle] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [recentShown, setRecentShown] = useState(RECENT);
   const [oldOpen, setOldOpen] = useState(false);
-  const [checkEmail, setCheckEmail] = useState("");
-  const [checking, setChecking] = useState(false);
   const [confirmingAll, setConfirmingAll] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -101,34 +96,6 @@ export function BlockedDomainsTool() {
     }
   }
 
-  async function toggleAutoDelete() {
-    setSavingToggle(true);
-    setError(null);
-    try {
-      await setBlockedDomainSettings({ autoDelete: !view?.settings.autoDelete });
-    } catch (err) {
-      setError(errMessage(err));
-    } finally {
-      setSavingToggle(false);
-      await refresh();
-    }
-  }
-
-  async function checkInbox() {
-    if (!checkEmail.trim()) return;
-    setChecking(true);
-    setError(null);
-    try {
-      await blockedInboxAction({ action: "check", email: checkEmail.trim() });
-      setCheckEmail("");
-    } catch (err) {
-      setError(errMessage(err));
-    } finally {
-      setChecking(false);
-      await refresh();
-    }
-  }
-
   async function confirmAll() {
     setConfirmingAll(true);
     setError(null);
@@ -139,14 +106,6 @@ export function BlockedDomainsTool() {
     } finally {
       setConfirmingAll(false);
       await refresh();
-    }
-  }
-
-  async function handleCopyUrl() {
-    const url = typeof window !== "undefined" ? `${window.location.origin}/api/hooks/blocked-domain` : "";
-    if (await copyToClipboard(url)) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
     }
   }
 
@@ -198,19 +157,6 @@ export function BlockedDomainsTool() {
       onRemove={(id) => withBusy(id, () => blockedInboxAction({ action: "remove", jobId: id }))}
     />
   );
-
-  const readiness = view?.readiness;
-  const notReady = readiness
-    ? [
-        !readiness.webhookSecret && "BLOCKED_DOMAIN_WEBHOOK_SECRET — until this is set the webhook rejects every call",
-        !readiness.serverKey && "PLUSVIBE_API_KEY — without it the webhook has no key to find or delete inboxes",
-        !readiness.spreadsheet && "SPREADSHEET_ID — without it the Domains and Google Inboxes to Cancel tabs are left alone",
-        !readiness.sheetWriting && "GOOGLE_SERVICE_ACCOUNT_JSON — without it the sheet can be read but not written",
-        readiness.jobStorage?.onVolume === false &&
-          "JOBS_DIR — points at the container's own disk, so every deploy wipes the log; mount a volume in Railway and set JOBS_DIR to a path inside it",
-      ].filter(Boolean as unknown as (v: unknown) => v is string)
-    : [];
-  const storage = readiness?.jobStorage;
 
   const badge = (id: Section) =>
     id === "home" ? stats.waiting : id === "inboxes" ? stats.blocked : id === "domains" ? domainCount : 0;
@@ -265,113 +211,22 @@ export function BlockedDomainsTool() {
       )}
       {section === "domains" && <BlockedDomainsList jobs={inboxJobs} />}
       {section === "stats" && <StatsView inboxJobs={inboxJobs} domainJobs={domainJobs} />}
+      {section === "settings" && <SettingsView view={view} onChanged={refresh} onError={setError} />}
 
       {section === "home" && (
         <>
-          <div className="pv-card p-4 sm:p-5">
-            <div className="flex flex-wrap items-start justify-between gap-6">
-              <div className="min-w-[260px] flex-1 space-y-4">
-                <div>
-                  <h2 className="text-sm font-semibold">Clay webhook</h2>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    POST the <strong>sender inbox</strong> that bounced to this URL, with the header{" "}
-                    <span className="font-mono">x-webhook-secret</span> and a body of{" "}
-                    <span className="font-mono">{'{ "email": "sender@domain.com" }'}</span>. That inbox — only that inbox —
-                    is read over its last {JUDGE_WINDOW_DAYS} days and judged on the rules. Repeat bounces are counted,
-                    not re-run: a blocked inbox is never judged again, and one that passed is judged again on its first
-                    bounce 24 hours later.
-                  </p>
-                  <div className="mt-2 flex items-center gap-2">
-                    <code className="flex-1 truncate rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-xs">
-                      {typeof window !== "undefined" ? `${window.location.origin}/api/hooks/blocked-domain` : "/api/hooks/blocked-domain"}
-                    </code>
-                    <button type="button" className="pv-btn-ghost" onClick={handleCopyUrl} aria-label="Copy the webhook URL">
-                      {copied ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
-                    </button>
-                  </div>
-                </div>
-                <div>
-                  <h2 className="text-sm font-semibold">Check an inbox now</h2>
-                  <p className="mt-1 text-xs text-muted-foreground">Runs one inbox exactly as if Clay had sent it.</p>
-                  <div className="mt-2 flex max-w-md items-center gap-2">
-                    <input
-                      className="pv-input"
-                      placeholder="sender@domain.com"
-                      value={checkEmail}
-                      aria-label="Inbox to check"
-                      data-check-email
-                      onChange={(e) => setCheckEmail(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void checkInbox();
-                      }}
-                    />
-                    <button type="button" className="pv-btn-primary disabled:opacity-50" data-check disabled={checking || !checkEmail.trim()} onClick={checkInbox}>
-                      {checking ? <Spinner size={14} /> : <GaugeIcon size={14} />} Check
-                    </button>
-                  </div>
-                </div>
-                <div>
-                  <h2 className="text-sm font-semibold">Full automation</h2>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {view?.settings.autoDelete
-                      ? "A blocked inbox is stopped and deleted straight away, with no confirmation."
-                      : "A blocked inbox is stopped straight away — sending and warmup off — and its deletion waits for you here."}{" "}
-                    Nothing is done to a domain as a whole: no domain-wide warmup pause, no Not Active in the Domains tab,
-                    nothing on 🚯 Tenants to Cancel. A blocked Google inbox is listed on 🛑 Google Inboxes to Cancel.
-                  </p>
-                  <button
-                    type="button"
-                    disabled={savingToggle || !view}
-                    onClick={toggleAutoDelete}
-                    data-auto-delete={String(!!view?.settings.autoDelete)}
-                    className={`mt-2 flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
-                      view?.settings.autoDelete ? "border-danger/40 bg-danger/10 text-danger" : "border-border hover:text-foreground"
-                    }`}
-                  >
-                    {savingToggle ? <Spinner size={12} /> : <FireIcon size={13} />}
-                    {view?.settings.autoDelete ? "Auto-delete is ON" : "Auto-delete is OFF"}
-                  </button>
-                </div>
-              </div>
-
-              <div className="min-w-[280px] flex-1" data-rules>
-                <h2 className="text-sm font-semibold">The rules</h2>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Last {JUDGE_WINDOW_DAYS} days of the one inbox. Bounce rate is over everything sent; reply rates are over
-                  unique leads contacted, and the OOO reply rate counts out-of-office replies too. An inbox that is neither
-                  Microsoft nor Google is left alone.
-                </p>
-                <RulesTable title="Microsoft (Azure)" tiers={MICROSOFT_TIERS} />
-                <RulesTable title="Google" tiers={GOOGLE_TIERS} />
-              </div>
-            </div>
-
-            {notReady.length > 0 && (
-              <div className="mt-4 rounded-xl border border-warning/30 bg-warning/5 p-3">
-                <p className="text-xs font-medium text-warning">Not ready to run unattended — set these on Railway:</p>
-                <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
-                  {notReady.map((n) => (
-                    <li key={n}>
-                      <span className="font-mono">{n.split(" — ")[0]}</span>
-                      {" — "}
-                      {n.split(" — ")[1]}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+          {view?.readiness &&
+            (!view.readiness.webhookSecret || !view.readiness.serverKey || !view.readiness.spreadsheet || !view.readiness.sheetWriting) && (
+              <button
+                type="button"
+                className="flex w-full items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-left text-sm text-warning"
+                onClick={() => setSection("settings")}
+                data-not-ready
+              >
+                <AlertIcon size={16} className="mt-0.5 shrink-0" />
+                <span>The automation isn&apos;t fully set up on the server — see Settings.</span>
+              </button>
             )}
-            {storage && (
-              <p className={`mt-3 text-xs ${storage.onVolume === false ? "text-warning" : "text-muted-foreground"}`}>
-                Job records: <span className="font-mono">{storage.dir}</span>
-                {storage.onVolume === true
-                  ? ` — on a volume${storage.mountPoint ? ` mounted at ${storage.mountPoint}` : ""}, kept across deploys.`
-                  : storage.onVolume === false
-                    ? " — on the container's own disk, wiped on every deploy."
-                    : " — could not tell whether this survives a deploy."}
-              </p>
-            )}
-          </div>
-
           {stats.checked > 0 && (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-5" data-home-stats>
               <Stat label="Inboxes checked" value={stats.checked} />
@@ -407,7 +262,7 @@ export function BlockedDomainsTool() {
           ) : (
             waiting.length === 0 && (
               <EmptyState icon={<FireIcon />} title="No inboxes yet">
-                Nothing has come through from Clay since the automation moved to inboxes. Point the Clay column at the
+                Nothing has come through from Clay since the automation moved to inboxes. The webhook details are on Settings; point the Clay column at the
                 sender inbox and every bounce lands here.
               </EmptyState>
             )
@@ -442,24 +297,6 @@ export function BlockedDomainsTool() {
           )}
         </>
       )}
-    </div>
-  );
-}
-
-function RulesTable({ title, tiers }: { title: string; tiers: Tier[] }) {
-  return (
-    <div className="mt-3">
-      <div className="text-xs font-medium">{title}</div>
-      <table className="mt-1 w-full text-xs">
-        <tbody>
-          {tiers.map((t) => (
-            <tr key={t.min} className="border-t border-border">
-              <td className="py-1.5 pr-3 text-muted-foreground">{describeTier(t)}</td>
-              <td className="py-1.5">blocked when {describeRule(t)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   );
 }
