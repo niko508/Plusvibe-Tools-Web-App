@@ -674,7 +674,14 @@ function JobCard({
 
       {/* The warmup this run applies — its own copy, taken when it started. */}
       <p className="mt-2 text-xs text-muted-foreground" data-run-warmup>
-        Warmup: {describeWarmup(job.warmup ?? DEFAULT_WARMUP_SETTINGS)}
+        {/* A run from before a setting existed applied the defaults of its
+            day — which set no signature. */}
+        Warmup:{" "}
+        {describeWarmup(
+          job.warmup?.signature !== undefined
+            ? job.warmup
+            : { ...DEFAULT_WARMUP_SETTINGS, ...(job.warmup ?? {}), signature: "", warmupSignature: false }
+        )}
         {job.warmup ? "" : " (the defaults — this run started before settings existed)"}
       </p>
 

@@ -34,6 +34,14 @@ export interface WarmupSettings {
   fromTime: string;
   toTime: string;
   days: WeekDay[];
+  /**
+   * The inbox's email signature. {{sender_first_name}} and
+   * {{sender_last_name}} are filled per inbox by Plusvibe. Empty leaves each
+   * inbox's own signature alone.
+   */
+  signature: string;
+  /** Include the signature in warmup emails. */
+  warmupSignature: boolean;
 }
 
 export const DEFAULT_WARMUP_SETTINGS: WarmupSettings = {
@@ -48,7 +56,11 @@ export const DEFAULT_WARMUP_SETTINGS: WarmupSettings = {
   fromTime: "00:00",
   toTime: "23:59",
   days: [...WEEK_DAYS],
+  signature: "{{sender_first_name}}",
+  warmupSignature: true,
 };
+
+export const MAX_SIGNATURE_LENGTH = 5000;
 
 /** The limits the form and the server both hold to. */
 export const WARMUP_LIMITS = {
@@ -120,6 +132,11 @@ export function validateWarmupSettings(input: unknown): { settings: WarmupSettin
   const days = WEEK_DAYS.filter((d) => rawDays.includes(d));
   if (days.length === 0) problems.push("Pick at least one day.");
 
+  const signature = typeof src.signature === "string" ? src.signature.trim() : "";
+  if (src.signature !== undefined && typeof src.signature !== "string") problems.push("The signature must be text.");
+  if (signature.length > MAX_SIGNATURE_LENGTH) problems.push(`The signature can be at most ${MAX_SIGNATURE_LENGTH} characters.`);
+  const warmupSignature = flag("warmupSignature", "Warmup signature");
+
   if (problems.length > 0) return { settings: null, problems };
   return {
     settings: {
@@ -135,6 +152,8 @@ export function validateWarmupSettings(input: unknown): { settings: WarmupSettin
       fromTime,
       toTime,
       days,
+      signature,
+      warmupSignature,
     },
     problems: [],
   };
@@ -156,9 +175,30 @@ export function normalizeWarmupSettings(input: unknown): WarmupSettings {
   return validateWarmupSettings(merged).settings ?? { ...DEFAULT_WARMUP_SETTINGS };
 }
 
-/** The body fields /account/bulk-update takes for these settings. */
-export function toPlusvibeWarmup(s: WarmupSettings) {
+/** A signature as Plusvibe stores it: HTML, so a typed line break becomes <br>. */
+export function signatureHtml(signature: string): string {
+  return signature
+    .trim()
+    .split(/\r?\n/)
+    .join("<br>");
+}
+
+/**
+ * The body fields /account/bulk-update takes for these settings.
+ *
+ * `withSignature: false` leaves both signature fields out, for runs that
+ * started before the signature was a setting: they never touched it, and
+ * a run keeps doing what it started doing.
+ */
+export function toPlusvibeWarmup(s: WarmupSettings, { withSignature = true }: { withSignature?: boolean } = {}) {
+  const signature = withSignature
+    ? {
+        ...(s.signature.trim() ? { signature: signatureHtml(s.signature) } : {}),
+        warmup_signature: s.warmupSignature ? "yes" : "no",
+      }
+    : {};
   return {
+    ...signature,
     warmup_max_daily_limit: s.maxDailyLimit,
     bulk_warmup_is_slow_rampup: s.slowRampup ? "yes" : "no",
     warmup_initial_daily_limit: s.initialDailyLimit,
@@ -184,5 +224,10 @@ export function describeWarmup(s: WarmupSettings): string {
   const weekdays = s.days.length === 5 && WEEK_DAYS.slice(0, 5).every((d) => s.days.includes(d));
   const when = everyDay ? "every day" : weekdays ? "weekdays" : s.days.map((d) => d.slice(0, 3)).join(", ");
   const hours = s.fromTime === "00:00" && s.toTime === "23:59" ? "all day" : `${s.fromTime}–${s.toTime}`;
-  return `${ramp}${vary} · ${s.replyRatePct}% replies · ${when}, ${hours} (${s.timezone})`;
+  const sig = s.signature.trim()
+    ? ` · signature ${s.signature.trim().length > 40 ? "set" : `“${s.signature.trim()}”`}${s.warmupSignature ? ", in warmup emails" : ""}`
+    : s.warmupSignature
+      ? " · each inbox's own signature, in warmup emails"
+      : "";
+  return `${ramp}${vary} · ${s.replyRatePct}% replies · ${when}, ${hours} (${s.timezone})${sig}`;
 }

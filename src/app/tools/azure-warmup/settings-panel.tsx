@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getAzureWarmupSettings, saveAzureWarmupSettings } from "@/lib/api-client";
 import {
   DEFAULT_WARMUP_SETTINGS,
+  MAX_SIGNATURE_LENGTH,
   WARMUP_LIMITS,
   WEEK_DAYS,
   describeWarmup,
@@ -130,7 +131,7 @@ export function WarmupSettingsPanel({ onSaved }: { onSaved?: (s: WarmupSettings)
       <span className="mt-1 block text-xs text-muted-foreground">{hint}</span>
     </label>
   );
-  const toggle = (key: "slowRampup" | "randomize", label: string, hint: string) => (
+  const toggle = (key: "slowRampup" | "randomize" | "warmupSignature", label: string, hint: string) => (
     <div>
       <button
         type="button"
@@ -175,6 +176,27 @@ export function WarmupSettingsPanel({ onSaved }: { onSaved?: (s: WarmupSettings)
           </div>
           {num("replyRatePct", "Reply rate", "Share of warmup emails that get a reply.", L.replyRatePct.min, L.replyRatePct.max, "%")}
         </div>
+      </section>
+
+      <section className="space-y-3">
+        <h3 className="text-sm font-semibold">Signature</h3>
+        <label className="block">
+          <span className="mb-1.5 block text-sm font-medium">Email signature</span>
+          <textarea
+            className="pv-input min-h-[88px] font-mono text-sm"
+            value={draft.signature}
+            maxLength={MAX_SIGNATURE_LENGTH}
+            aria-label="Email signature"
+            data-setting="signature"
+            placeholder="Leave empty to keep each inbox's own signature"
+            onChange={(e) => set("signature", e.target.value)}
+          />
+          <span className="mt-1 block text-xs text-muted-foreground">
+            Set on every inbox the run starts. {"{{sender_first_name}}"} and {"{{sender_last_name}}"} are filled in per inbox by
+            Plusvibe; spintax works too. A new line becomes a line break. Empty leaves each inbox&apos;s signature as it is.
+          </span>
+        </label>
+        {toggle("warmupSignature", "Warmup signature", "Include the signature in warm-up emails.")}
       </section>
 
       <section className="space-y-3">

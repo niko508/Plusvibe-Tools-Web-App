@@ -715,7 +715,13 @@ async function runCheck(rec: StoredJob, apiKey: string, doneSet: Set<string>) {
       await plusvibePut<unknown>({
         apiKey,
         path: "/account/bulk-update",
-        body: { workspace_id: rec.workspaceId, ids, ...toPlusvibeWarmup(normalizeWarmupSettings(rec.warmup)) },
+        body: {
+          workspace_id: rec.workspaceId,
+          ids,
+          // A run started before the signature was a setting never touched
+          // it, and keeps not touching it.
+          ...toPlusvibeWarmup(normalizeWarmupSettings(rec.warmup), { withSignature: rec.warmup?.signature !== undefined }),
+        },
       });
       await acquireSlot();
       await plusvibePatch<unknown>({
