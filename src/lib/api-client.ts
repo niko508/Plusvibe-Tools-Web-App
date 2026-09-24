@@ -48,6 +48,7 @@ import type {
   AzureWarmupJob,
   AzureStartPayload,
 } from "@/lib/jobs/azure-warmup-types";
+import type { WarmupSettings as AzureWarmupSettings } from "@/lib/azure-warmup/warmup-settings";
 import type {
   FirstCampaignJob,
   FirstCampaignStartPayload,
@@ -566,6 +567,21 @@ export function deleteMoveLeadsJob(jobId: string, signal?: AbortSignal) {
     body: { jobId },
     signal,
   });
+}
+
+export interface AzureWarmupSettingsResponse {
+  settings: AzureWarmupSettings;
+  /** 0 until someone has saved; the defaults are in use until then. */
+  updatedAt: number;
+  defaults: AzureWarmupSettings;
+}
+
+export function getAzureWarmupSettings(signal?: AbortSignal) {
+  return request<AzureWarmupSettingsResponse>("/api/jobs/azure-warmup/settings", { signal });
+}
+
+export function saveAzureWarmupSettings(settings: AzureWarmupSettings) {
+  return request<AzureWarmupSettingsResponse>("/api/jobs/azure-warmup/settings", { method: "PUT", body: settings });
 }
 
 export function deleteAzureWarmupJob(jobId: string, signal?: AbortSignal) {

@@ -25,6 +25,8 @@ import type {
   AzureUploadRow,
   AzureWarmupJob,
 } from "@/lib/jobs/azure-warmup-types";
+import { loadWarmupSettings } from "@/lib/azure-warmup/settings-store";
+import { normalizeWarmupSettings, toPlusvibeWarmup } from "@/lib/azure-warmup/warmup-settings";
 import {
   CHECK_INTERVAL_MS,
   COL_DOMAIN,
@@ -61,32 +63,8 @@ const ACCOUNTS_PAGE = 100;
 const ACCOUNTS_MAX_PAGES = 400; // 40k inboxes
 const BULK_CHUNK = 100; // inboxes per warmup update call
 
-// The warmup config applied to every inbox this tool starts.
-const WARMUP_SETTINGS = {
-  warmup_max_daily_limit: 18,
-  bulk_warmup_is_slow_rampup: "yes",
-  warmup_initial_daily_limit: 2,
-  warmup_pace_increment: 3,
-  warmup_randomize: "yes",
-  warmup_randomize_num: 10,
-  warmup_reply_rate: 0.46, // the API uses 0-1, so 46% is 0.46
-  // The window is all-day/all-week, so the timezone only sets what Plusvibe
-  // shows on the inbox rather than restricting when warmup sends.
-  warmup_schedule: {
-    tz: "Asia/Singapore",
-    from_time: "00:00",
-    to_time: "23:59",
-    days: [
-      "Monday",
-      "Tuesday",
-      "Wednesday",
-      "Thursday",
-      "Friday",
-      "Saturday",
-      "Sunday",
-    ],
-  },
-} as const;
+// The warmup config each inbox gets is the run's own copy of the Settings tab
+// (see lib/azure-warmup/warmup-settings), taken when the run started.
 
 interface JobMeta {
   fingerprint: string;
@@ -258,8 +236,13 @@ export async function createJob(
     a.domain.localeCompare(b.domain)
   );
 
+  // A copy of the saved settings: every inbox of this batch warms the same
+  // way, even if the settings are changed while the run is still going.
+  const { settings: warmup } = await loadWarmupSettings();
+
   const rec: StoredJob = {
     id,
+    warmup,
     label: `${domains.length} domains · ${rows.length} inboxes`,
     status: payload.delayMinutes > 0 ? "waiting" : "running",
     phase: payload.delayMinutes > 0 ? "waiting" : "sheet",
@@ -732,7 +715,7 @@ async function runCheck(rec: StoredJob, apiKey: string, doneSet: Set<string>) {
       await plusvibePut<unknown>({
         apiKey,
         path: "/account/bulk-update",
-        body: { workspace_id: rec.workspaceId, ids, ...WARMUP_SETTINGS },
+        body: { workspace_id: rec.workspaceId, ids, ...toPlusvibeWarmup(normalizeWarmupSettings(rec.warmup)) },
       });
       await acquireSlot();
       await plusvibePatch<unknown>({

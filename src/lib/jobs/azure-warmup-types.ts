@@ -1,6 +1,8 @@
 // Shared types for "Azure Start Warmup" background jobs. Used by the client
 // tool, the API routes and the server manager — no server-only imports.
 
+import type { WarmupSettings } from "@/lib/azure-warmup/warmup-settings";
+
 export type AzureJobStatus =
   | "waiting" // delay hasn't elapsed yet
   | "running"
@@ -68,6 +70,12 @@ export interface AzureWarmupJob {
   lastCheckAt?: number;
   nextCheckAt?: number;
   errors: string[];
+  /**
+   * The warmup settings this run applies, copied from the Settings tab when it
+   * started. Absent on runs from before settings existed, which applied the
+   * defaults.
+   */
+  warmup?: WarmupSettings;
 }
 
 export interface AzureUploadRow {

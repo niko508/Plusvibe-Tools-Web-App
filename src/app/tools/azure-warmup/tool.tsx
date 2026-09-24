@@ -20,6 +20,7 @@ import {
   abortAzureWarmup,
   resumeAzureWarmup,
   deleteAzureWarmupJob,
+  getAzureWarmupSettings,
   ApiClientError,
 } from "@/lib/api-client";
 import { useApiKey } from "@/lib/use-api-key";
@@ -37,9 +38,15 @@ import {
   DownloadIcon,
 } from "@/components/icons";
 import { parseUpload, type ParsedUpload } from "./parse";
+import { WarmupSettingsPanel } from "./settings-panel";
+import { DEFAULT_WARMUP_SETTINGS, describeWarmup, type WarmupSettings } from "@/lib/azure-warmup/warmup-settings";
 
 export function AzureWarmupTool() {
   const { hasKey, ready } = useApiKey();
+
+  const [section, setSection] = useState<"run" | "settings">("run");
+  // What the next run will apply, shown beside the Start button.
+  const [warmup, setWarmup] = useState<WarmupSettings | null>(null);
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspacesLoading, setWorkspacesLoading] = useState(false);
@@ -103,6 +110,13 @@ export function AzureWarmupTool() {
   useEffect(() => {
     if (ready && hasKey) void loadWorkspaces();
   }, [ready, hasKey, loadWorkspaces]);
+
+  useEffect(() => {
+    if (!(ready && hasKey)) return;
+    getAzureWarmupSettings()
+      .then((r) => setWarmup(r.settings))
+      .catch(() => setWarmup(null));
+  }, [ready, hasKey]);
 
   useEffect(() => {
     if (!toast) return;
@@ -190,8 +204,41 @@ export function AzureWarmupTool() {
   if (!ready) return <div className="pv-card h-40 animate-pulse" />;
   if (!hasKey) return <ConnectPrompt onConnected={loadWorkspaces} />;
 
+  const tabs = (
+    <nav role="tablist" aria-label="Azure Start Warmup sections" className="flex flex-wrap items-center gap-2">
+      {(
+        [
+          ["run", "Start warmup"],
+          ["settings", "Warmup settings"],
+        ] as const
+      ).map(([id, label]) => (
+        <button
+          key={id}
+          type="button"
+          role="tab"
+          aria-selected={section === id}
+          data-section={id}
+          onClick={() => setSection(id)}
+          className={`pv-chip ${section === id ? "pv-chip-active" : "hover:text-foreground"}`}
+        >
+          {label}
+        </button>
+      ))}
+    </nav>
+  );
+
+  if (section === "settings") {
+    return (
+      <div className="space-y-5">
+        {tabs}
+        <WarmupSettingsPanel onSaved={setWarmup} />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
+      {tabs}
       {sheetWriting && !sheetWriting.configured && (
         <div className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
           <AlertIcon size={16} className="mt-0.5 shrink-0" />
@@ -424,6 +471,14 @@ export function AzureWarmupTool() {
             days — runs on the server, safe to close the tab.
           </span>
         </div>
+        {warmup && (
+          <p className="text-xs text-muted-foreground" data-warmup-summary>
+            Warmup: {describeWarmup(warmup)} ·{" "}
+            <button type="button" className="underline hover:text-foreground" onClick={() => setSection("settings")}>
+              change
+            </button>
+          </p>
+        )}
       </div>
 
       {/* Jobs */}
@@ -616,6 +671,12 @@ function JobCard({
           or waited on.
         </p>
       )}
+
+      {/* The warmup this run applies — its own copy, taken when it started. */}
+      <p className="mt-2 text-xs text-muted-foreground" data-run-warmup>
+        Warmup: {describeWarmup(job.warmup ?? DEFAULT_WARMUP_SETTINGS)}
+        {job.warmup ? "" : " (the defaults — this run started before settings existed)"}
+      </p>
 
       {/* Sheet result */}
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
