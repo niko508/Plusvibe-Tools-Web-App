@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveApiKey } from "@/lib/plusvibe-server";
+import { requireAccountKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { deleteStoppedInboxes } from "@/lib/jobs/blocked-domains";
 
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 // waiting on a deletion. Never the sending ones, never the sheet.
 export async function POST(request: Request) {
   try {
-    resolveApiKey(request);
+    await requireAccountKey(request);
     const body = (await request.json()) as { jobId?: string };
     if (!body.jobId) {
       return NextResponse.json({ error: "jobId is required" }, { status: 400 });

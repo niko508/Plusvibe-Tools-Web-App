@@ -2,8 +2,9 @@ import "server-only";
 
 // Server-side Plusvibe API client. This module is the ONLY place that talks to
 // the Plusvibe API, so the `x-api-key` never reaches the browser bundle. The
-// key is resolved per request: a caller-supplied key (forwarded from the UI)
-// takes precedence, falling back to the PLUSVIBE_API_KEY env var when set.
+// key is the caller's own, forwarded from the UI. PLUSVIBE_API_KEY on the
+// server is for the unattended automations only: a request that brings no key
+// of its own is refused, never run on the server's.
 
 // Overridable so the unattended automations can be exercised end to end
 // against a stand-in API. Unset in production, which is the real endpoint.
@@ -26,8 +27,9 @@ export class PlusvibeError extends Error {
 }
 
 export function resolveApiKey(request: Request): string {
-  const fromHeader = request.headers.get(CLIENT_KEY_HEADER)?.trim();
-  const key = fromHeader || process.env.PLUSVIBE_API_KEY?.trim();
+  // No falling back to the server's key: the app is on a public URL, and that
+  // would hand the whole Plusvibe account to anyone who found it.
+  const key = request.headers.get(CLIENT_KEY_HEADER)?.trim();
   if (!key) {
     throw new PlusvibeError(
       "No Plusvibe API key provided. Add your key in the app settings.",
@@ -36,6 +38,49 @@ export function resolveApiKey(request: Request): string {
   }
   return key;
 }
+
+const VERIFY_OK_MS = 10 * 60 * 1000;
+const VERIFY_NO_MS = 60 * 1000;
+const verified: Map<string, { ok: boolean; at: number }> = ((globalThis as { __pvVerifiedKeys?: Map<string, { ok: boolean; at: number }> }).__pvVerifiedKeys ??=
+  new Map());
+
+async function workspaceIdsOf(apiKey: string): Promise<Set<string>> {
+  const data = await plusvibeGet<{ workspaces?: { _id?: string }[] }>({ apiKey, path: "/authenticate", retries: 1 });
+  return new Set((data.workspaces ?? []).map((w) => w?._id).filter((id): id is string => !!id));
+}
+
+/**
+ * For routes that act with the server's own key — the shared logs of the
+ * unattended automations. Having some key in the header isn't enough there,
+ * since any string would do: the key has to be the server's, or one Plusvibe
+ * accepts that sees at least one of the same workspaces. Checked answers are
+ * remembered for a few minutes, so the page's polling costs nothing.
+ */
+export async function requireAccountKey(request: Request): Promise<string> {
+  const key = resolveApiKey(request);
+  const serverKey = process.env.PLUSVIBE_API_KEY?.trim();
+  if (!serverKey || key === serverKey) return key;
+  const hit = verified.get(key);
+  if (hit && Date.now() - hit.at < (hit.ok ? VERIFY_OK_MS : VERIFY_NO_MS)) {
+    if (hit.ok) return key;
+    throw new PlusvibeError("This Plusvibe API key isn't for this account.", 403);
+  }
+  let ok = false;
+  try {
+    const [mine, server] = await Promise.all([workspaceIdsOf(key), workspaceIdsOf(serverKey)]);
+    ok = [...mine].some((id) => server.has(id));
+  } catch (err) {
+    // Plusvibe refusing the key is an answer; Plusvibe being down is not.
+    if (!(err instanceof PlusvibeError && (err.status === 401 || err.status === 403))) throw err;
+  }
+  verified.set(key, { ok, at: Date.now() });
+  if (verified.size > 100) verified.delete(verified.keys().next().value as string);
+  if (!ok) throw new PlusvibeError("This Plusvibe API key isn't for this account.", 403);
+  return key;
+}
+
+/** How long one Plusvibe request may take before it counts as failed (and is retried). */
+const REQUEST_TIMEOUT_MS = 90_000;
 
 interface RequestOptions {
   apiKey: string;
@@ -86,11 +131,14 @@ async function plusvibeRequest<T>({
   while (true) {
     let res: Response;
     try {
+      // A request Plusvibe never answers would otherwise hold its caller —
+      // and, in the automations, a whole run — forever.
+      const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
       res = await fetch(url, {
         method,
         headers,
         body: payload,
-        signal,
+        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         cache: "no-store",
       });
     } catch (err) {

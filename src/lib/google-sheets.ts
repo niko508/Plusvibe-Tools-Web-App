@@ -124,6 +124,7 @@ async function getAccessToken(): Promise<string> {
       assertion,
     }),
     cache: "no-store",
+    signal: AbortSignal.timeout(30_000),
   });
   const body = (await res.json().catch(() => ({}))) as {
     access_token?: string;
@@ -157,6 +158,9 @@ async function sheetsFetch<T>(
     },
     body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
     cache: "no-store",
+    // Sheet calls run one after another in the automations: one that never
+    // came back would stop every one behind it.
+    signal: AbortSignal.timeout(60_000),
   });
   const text = await res.text();
   let parsed: unknown = undefined;

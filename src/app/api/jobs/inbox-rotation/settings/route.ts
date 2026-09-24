@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveApiKey } from "@/lib/plusvibe-server";
+import { requireAccountKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { loadSettings, saveSettings, SettingsProblem } from "@/lib/inbox-rotation/store";
 
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 //   (five cycles and the maintaining period). Profiles left out are kept.
 export async function GET(request: Request) {
   try {
-    resolveApiKey(request);
+    await requireAccountKey(request);
     return NextResponse.json({ settings: await loadSettings() });
   } catch (err) {
     return errorResponse(err);
@@ -20,7 +20,7 @@ export async function GET(request: Request) {
 
 export async function PUT(request: Request) {
   try {
-    resolveApiKey(request);
+    await requireAccountKey(request);
     const body = (await request.json()) as { profiles?: unknown };
     if (!body.profiles || typeof body.profiles !== "object") {
       return NextResponse.json({ error: "Send the profiles to save." }, { status: 400 });

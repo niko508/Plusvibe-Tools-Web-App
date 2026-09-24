@@ -115,6 +115,13 @@ export interface BlockedInboxJob {
   /** Google: this was the domain's last inbox, so the domain went Not Active. */
   lastOnDomain?: boolean;
 
+  /**
+   * Removed from Home. The record stays: a blocked inbox is still listed on
+   * Blocked Inboxes, Blocked Domains, Tenant Blocks and in the stats. One that
+   * wasn't blocked is judged afresh on its next bounce.
+   */
+  hiddenAt?: number;
+
   /** Google only: its row on 🛑 Google Inboxes to Cancel. */
   googleCancel?: { listed: boolean; alreadyThere?: boolean; error?: string };
 
@@ -155,6 +162,8 @@ export interface InboxDomainState {
   cancelRequestedAt?: number;
   /** Tenant Block: the inbox Clay sent it with, and later hits for the same domain. */
   tenantBlockEmail?: string;
+  /** "clay", or "manual" from the Settings tab. */
+  tenantBlockSource?: string;
   tenantBlockHits?: number;
   /** Cancelled — the old write-off, run once. */
   cancelledAt?: number;

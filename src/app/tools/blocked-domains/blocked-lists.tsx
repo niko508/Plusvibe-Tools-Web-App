@@ -19,7 +19,6 @@ export function BlockedInboxesView({
   busyId,
   onConfirm,
   onDismiss,
-  onRemove,
   onConfirmAll,
   confirmingAll,
 }: {
@@ -27,7 +26,6 @@ export function BlockedInboxesView({
   busyId: string | null;
   onConfirm: (id: string) => void;
   onDismiss: (id: string) => void;
-  onRemove: (id: string) => void;
   onConfirmAll: () => void;
   confirmingAll: boolean;
 }) {
@@ -114,7 +112,6 @@ export function BlockedInboxesView({
                       busy={busyId === j.id}
                       onConfirm={onConfirm}
                       onDismiss={onDismiss}
-                      onRemove={onRemove}
                     />
                   }
                 />
@@ -300,7 +297,7 @@ function FragmentRow({ cells, detail, open, onToggle }: { cells: ReactNode; deta
 }
 
 /** The domain-level side of a domain: its cancellation, or its Not Active. */
-function DomainDetail({ state }: { state: InboxDomainState | undefined }) {
+export function DomainDetail({ state }: { state: InboxDomainState | undefined }) {
   if (
     !state ||
     (state.cancelledAt === undefined && state.cancelRequestedAt === undefined && state.notActiveAt === undefined && state.errors.length === 0)

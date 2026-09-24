@@ -229,6 +229,24 @@ export async function bootResume(): Promise<void> {
 
 // --- The line --------------------------------------------------------------
 
+/** How long one run may hold its place in line. Far beyond a normal run. */
+const RUN_LIMIT_MS = 10 * 60 * 1000;
+
+async function timedOut(id: string, kind: QueueKind) {
+  if (kind === "cancel") {
+    const d = domains.get(id);
+    if (d?.cancelling) domainError(d, `Blocking ${id} has taken over ${RUN_LIMIT_MS / 60000} minutes; the line moved on without it.`);
+    await persistDomains();
+    return;
+  }
+  const rec = records.get(id);
+  if (!rec || (rec.status !== "working" && rec.status !== "deleting")) return;
+  rec.status = rec.status === "deleting" ? "awaiting_confirmation" : "error";
+  pushError(rec, `Took over ${RUN_LIMIT_MS / 60000} minutes, so it was stopped waiting on. Remove it to have the next bounce checked again.`);
+  rec.updatedAt = Date.now();
+  await persist(id);
+}
+
 function enqueue(id: string, kind: QueueKind) {
   if (shared.queue.some((q) => q.id === id)) return;
   // A whole domain goes ahead of single inboxes: there are few of them, and
@@ -243,12 +261,20 @@ function pump() {
     const next = shared.queue.shift()!;
     shared.active += 1;
     const task = next.kind === "run" ? runInbox(next.id) : next.kind === "delete" ? runDelete(next.id) : cancelDomain(next.id);
-    void task
-      .catch(() => undefined)
-      .finally(() => {
-        shared.active -= 1;
-        pump();
-      });
+    // A run that outlasts its limit gives its place up, so one that hangs
+    // can't hold the line; it is marked, and still finishes if it ever does.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const limit = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        void timedOut(next.id, next.kind);
+        resolve();
+      }, RUN_LIMIT_MS);
+    });
+    void Promise.race([task.catch(() => undefined), limit]).finally(() => {
+      if (timer) clearTimeout(timer);
+      shared.active -= 1;
+      pump();
+    });
   }
 }
 
@@ -336,6 +362,8 @@ export type InboxIntakeResult =
 function standsAsIs(rec: BlockedInboxJob, now: number): boolean {
   if (rec.status === "queued" || rec.status === "working" || rec.status === "deleting") return true;
   if (rec.blockedAt !== undefined) return true;
+  // Removed from Home: the next bounce is judged afresh.
+  if (rec.hiddenAt !== undefined) return false;
   return now - (rec.judgedAt ?? rec.createdAt) < REJUDGE_AFTER_MS;
 }
 
@@ -366,6 +394,7 @@ export async function intakeInbox(args: { email: unknown; bounceReason?: string;
       ].slice(0, MAX_INBOX_HISTORY);
     }
     rec.status = "queued";
+    rec.hiddenAt = undefined;
     rec.errors = [];
     rec.overruled = undefined;
     rec.reasons = undefined;
@@ -485,16 +514,27 @@ async function locate(
   const order = hinted ? [hinted, ...workspaces.map((w) => w._id).filter((id) => id !== hinted)] : workspaces.map((w) => w._id);
   const find = (inboxes: Inbox[]) => inboxes.find((i) => i.email.trim().toLowerCase() === rec.email);
   const nameOf = (wsId: string) => workspaces.find((w) => w._id === wsId)?.name ?? "";
-  for (const wsId of order) {
-    const hit = find(await workspaceInboxes(apiKey, wsId));
-    if (hit) return { workspaceId: wsId, workspaceName: nameOf(wsId), inbox: hit };
+  // The workspace the sheet points at first; failing that, the rest all at
+  // once. Each page waits on Plusvibe's answer, so reading them side by side
+  // (still inside the shared rate limit) is several times faster than one
+  // after another.
+  const search = async (ids: string[], readSince?: number) => {
+    const lists = await Promise.all(ids.map((wsId) => workspaceInboxes(apiKey, wsId, readSince)));
+    const i = lists.findIndex((l) => !!find(l));
+    return i < 0 ? null : { workspaceId: ids[i], workspaceName: nameOf(ids[i]), inbox: find(lists[i])! };
+  };
+  if (hinted) {
+    const hit = await search([hinted]);
+    if (hit) return hit;
   }
+  const hit = await search(order.filter((id) => id !== hinted));
+  if (hit) return hit;
   // Not in any listing — but a listing read before the hit arrived may
   // predate the inbox, so those workspaces are read again before giving up.
-  for (const wsId of order) {
-    if ((shared.inboxCache.get(wsId)?.at ?? 0) >= arrivedAt) continue;
-    const hit = find(await workspaceInboxes(apiKey, wsId, arrivedAt));
-    if (hit) return { workspaceId: wsId, workspaceName: nameOf(wsId), inbox: hit };
+  const stale = order.filter((wsId) => (shared.inboxCache.get(wsId)?.at ?? 0) < arrivedAt);
+  if (stale.length > 0) {
+    const again = await search(stale, arrivedAt);
+    if (again) return again;
   }
   return null;
 }
@@ -825,6 +865,7 @@ export async function intakeTenantBlock(args: { email?: unknown; domain?: unknow
   d.cancelReason = "tenant-block";
   d.cancelRequestedAt = Date.now();
   d.tenantBlockEmail = email ?? undefined;
+  d.tenantBlockSource = args.source || "clay";
   d.tenantBlockHits = 0;
   d.updatedAt = Date.now();
   await persistDomains();
@@ -835,12 +876,14 @@ export async function intakeTenantBlock(args: { email?: unknown; domain?: unknow
 /** Every workspace holding inboxes on the domain, read at `readSince` or later. */
 async function inboxesOnDomain(apiKey: string, domain: string, readSince: number): Promise<{ workspaceId: string; workspaceName: string; inboxes: Inbox[] }[]> {
   const workspaces = await workspaceList(apiKey);
-  const out: { workspaceId: string; workspaceName: string; inboxes: Inbox[] }[] = [];
-  for (const w of workspaces) {
-    const inboxes = (await workspaceInboxes(apiKey, w._id, readSince)).filter((i) => i.email.trim().toLowerCase().endsWith(`@${domain}`));
-    if (inboxes.length > 0) out.push({ workspaceId: w._id, workspaceName: w.name ?? "", inboxes });
-  }
-  return out;
+  const lists = await Promise.all(workspaces.map((w) => workspaceInboxes(apiKey, w._id, readSince)));
+  return workspaces
+    .map((w, i) => ({
+      workspaceId: w._id,
+      workspaceName: w.name ?? "",
+      inboxes: lists[i].filter((x) => x.email.trim().toLowerCase().endsWith(`@${domain}`)),
+    }))
+    .filter((p) => p.inboxes.length > 0);
 }
 
 /**
@@ -1082,17 +1125,29 @@ export async function dismissInbox(id: string): Promise<boolean> {
   return true;
 }
 
-/** Forgets a run, so the next hit for that inbox is judged afresh. */
+/**
+ * Takes a run off Home. The record is kept — a blocked inbox stays on Blocked
+ * Inboxes, Blocked Domains, Tenant Blocks and in the stats — and one that
+ * wasn't blocked is judged afresh on its next bounce. Only an inbox still in
+ * line is dropped outright: nothing has been done to it.
+ */
 export async function removeInboxJob(id: string): Promise<boolean> {
   await loadOnce();
   const rec = records.get(id);
-  if (!rec || rec.status === "working" || rec.status === "deleting") return false;
-  records.delete(id);
-  shared.queue = shared.queue.filter((q) => q.id !== id);
-  try {
-    await fs.unlink(fileFor(id));
-  } catch {
-    // already gone
+  // Mid-run, or blocked and waiting on a decision: delete it or keep it stopped.
+  if (!rec || rec.status === "working" || rec.status === "deleting" || rec.status === "awaiting_confirmation") return false;
+  if (rec.status === "queued") {
+    records.delete(id);
+    shared.queue = shared.queue.filter((q) => q.id !== id);
+    try {
+      await fs.unlink(fileFor(id));
+    } catch {
+      // already gone
+    }
+    return true;
   }
+  rec.hiddenAt = Date.now();
+  rec.updatedAt = Date.now();
+  await persist(id);
   return true;
 }

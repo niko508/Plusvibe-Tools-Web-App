@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveApiKey } from "@/lib/plusvibe-server";
+import { requireAccountKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { rejudgeAll, rejudgeJob } from "@/lib/jobs/blocked-domains";
 
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 // in the background. Neither changes anything in Plusvibe or the sheet.
 export async function POST(request: Request) {
   try {
-    resolveApiKey(request);
+    await requireAccountKey(request);
     const body = (await request.json()) as { jobId?: string; all?: boolean };
     if (body.all) {
       return NextResponse.json(await rejudgeAll());

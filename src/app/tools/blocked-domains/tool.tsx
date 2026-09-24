@@ -29,6 +29,7 @@ import { InboxCard } from "./inbox-card";
 import { BlockedDomainsList, BlockedInboxesView } from "./blocked-lists";
 import { StatsView } from "./stats-view";
 import { SettingsView } from "./settings-view";
+import { TenantBlocksView, isTenantBlock } from "./tenant-blocks";
 
 /** Polled while anything is in flight; slower otherwise, since Clay drives it. */
 const POLL_ACTIVE_MS = 2000;
@@ -36,11 +37,12 @@ const POLL_IDLE_MS = 20000;
 /** Recent runs shown on Home before "more". */
 const RECENT = 15;
 
-type Section = "home" | "inboxes" | "domains" | "stats" | "settings";
+type Section = "home" | "inboxes" | "domains" | "tenants" | "stats" | "settings";
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "home", label: "Home" },
   { id: "inboxes", label: "Blocked Inboxes" },
   { id: "domains", label: "Blocked Domains" },
+  { id: "tenants", label: "Tenant Blocks" },
   { id: "stats", label: "Stats" },
   { id: "settings", label: "Settings" },
 ];
@@ -131,7 +133,7 @@ export function BlockedDomainsTool() {
   const inLine = inboxJobs.filter((j) => j.status === "queued").length;
   const checkingNow = inboxJobs.filter((j) => j.status === "working").length;
   const domainsInLine = (view?.inboxDomains ?? []).filter((d) => d.cancelRequestedAt !== undefined && d.cancelledAt === undefined).length;
-  const recent = inboxJobs.filter((j) => j.status !== "awaiting_confirmation" && j.status !== "queued");
+  const recent = inboxJobs.filter((j) => j.status !== "awaiting_confirmation" && j.status !== "queued" && j.hiddenAt === undefined);
 
   // The domain-level runs from before the move to inboxes. Kept: some still
   // have stopped inboxes waiting to be deleted.
@@ -166,7 +168,15 @@ export function BlockedDomainsTool() {
   );
 
   const badge = (id: Section) =>
-    id === "home" ? stats.waiting : id === "inboxes" ? stats.blocked : id === "domains" ? domainCount : 0;
+    id === "home"
+      ? stats.waiting
+      : id === "inboxes"
+        ? stats.blocked
+        : id === "domains"
+          ? domainCount
+          : id === "tenants"
+            ? (view?.inboxDomains ?? []).filter(isTenantBlock).length
+            : 0;
 
   return (
     <div className="space-y-5">
@@ -211,13 +221,15 @@ export function BlockedDomainsTool() {
           busyId={busyId}
           onConfirm={(id) => withBusy(id, () => blockedInboxAction({ action: "confirm", jobId: id }))}
           onDismiss={(id) => withBusy(id, () => blockedInboxAction({ action: "dismiss", jobId: id }))}
-          onRemove={(id) => withBusy(id, () => blockedInboxAction({ action: "remove", jobId: id }))}
           onConfirmAll={confirmAll}
           confirmingAll={confirmingAll}
         />
       )}
       {section === "domains" && (
         <BlockedDomainsList jobs={inboxJobs} states={view?.inboxDomains ?? []} cancelAfter={view?.settings.cancelAfterDeleted ?? 13} />
+      )}
+      {section === "tenants" && (
+        <TenantBlocksView states={view?.inboxDomains ?? []} jobs={inboxJobs} cancelAfter={view?.settings.cancelAfterDeleted ?? 13} />
       )}
       {section === "stats" && <StatsView inboxJobs={inboxJobs} domainJobs={domainJobs} />}
       {section === "settings" && <SettingsView view={view} onChanged={refresh} onError={setError} />}
@@ -251,12 +263,12 @@ export function BlockedDomainsTool() {
               type="button"
               className="flex w-full items-center gap-2 rounded-xl border border-border bg-muted/40 px-4 py-3 text-left text-sm"
               data-domains-in-line
-              onClick={() => setSection("domains")}
+              onClick={() => setSection("tenants")}
             >
               <Spinner size={14} />
               <span>
-                <strong className="tabular-nums">{formatNumber(domainsInLine)}</strong> {domainsInLine === 1 ? "domain" : "domains"} being blocked as a whole — see Blocked
-                Domains.
+                <strong className="tabular-nums">{formatNumber(domainsInLine)}</strong> {domainsInLine === 1 ? "domain" : "domains"} being blocked as a whole — see Tenant
+                Blocks.
               </span>
             </button>
           )}

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveApiKey } from "@/lib/plusvibe-server";
+import { requireAccountKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { deleteSwitch } from "@/lib/jobs/outreach-schedule";
 
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 // POST /api/jobs/outreach-switch/delete  { id }
 export async function POST(request: Request) {
   try {
-    resolveApiKey(request);
+    await requireAccountKey(request);
     const body = (await request.json()) as { id?: string };
     if (!body.id) return NextResponse.json({ error: "id is required" }, { status: 400 });
     const ok = await deleteSwitch(body.id);

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveApiKey } from "@/lib/plusvibe-server";
+import { requireAccountKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { MAX_CANCEL_AFTER, MAX_RECHECK_DAYS, loadSettings, saveSettings } from "@/lib/blocked-domains/settings";
 import { applyRecheckInterval } from "@/lib/jobs/blocked-domains";
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 // Only the fields given are changed.
 export async function PUT(request: Request) {
   try {
-    resolveApiKey(request);
+    await requireAccountKey(request);
     const body = (await request.json()) as {
       autoDelete?: unknown;
       checkPerformance?: unknown;
@@ -102,7 +102,7 @@ export async function PUT(request: Request) {
 
 export async function GET(request: Request) {
   try {
-    resolveApiKey(request);
+    await requireAccountKey(request);
     return NextResponse.json({ settings: await loadSettings() });
   } catch (err) {
     return errorResponse(err);

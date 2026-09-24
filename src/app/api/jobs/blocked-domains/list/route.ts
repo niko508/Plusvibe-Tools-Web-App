@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveApiKey } from "@/lib/plusvibe-server";
+import { requireAccountKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { listJobs, rejudgeAllStatus, serverApiKey } from "@/lib/jobs/blocked-domains";
 import { listInboxDomains, listInboxJobs } from "@/lib/jobs/blocked-inboxes";
@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
 // with no user attached — so a valid key is what gates reading it.
 export async function GET(request: Request) {
   try {
-    resolveApiKey(request);
+    await requireAccountKey(request);
     const [jobs, inboxJobs, inboxDomains, settings] = await Promise.all([listJobs(), listInboxJobs(), listInboxDomains(), loadSettings()]);
     const view: BlockedDomainsView = {
       jobs,

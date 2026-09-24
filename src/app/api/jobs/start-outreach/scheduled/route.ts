@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveApiKey } from "@/lib/plusvibe-server";
+import { requireAccountKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { listSwitches } from "@/lib/jobs/outreach-schedule";
 
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 // rather than to whoever happens to be looking.
 export async function GET(request: Request) {
   try {
-    resolveApiKey(request);
+    await requireAccountKey(request);
     return NextResponse.json({ switches: await listSwitches() });
   } catch (err) {
     return errorResponse(err);

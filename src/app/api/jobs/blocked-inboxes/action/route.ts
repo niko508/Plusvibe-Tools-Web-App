@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveApiKey } from "@/lib/plusvibe-server";
+import { requireAccountKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import {
   confirmAllInboxes,
@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic";
 // what gates it; the work itself runs with the server's own key.
 export async function POST(request: Request) {
   try {
-    resolveApiKey(request);
+    await requireAccountKey(request);
     const body = (await request.json().catch(() => ({}))) as { action?: string; jobId?: string; email?: string; domain?: string };
     switch (body.action) {
       case "confirm":

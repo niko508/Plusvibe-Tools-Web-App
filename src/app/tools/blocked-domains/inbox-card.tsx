@@ -35,7 +35,8 @@ export function InboxCard({
   busy: boolean;
   onConfirm: (id: string) => void;
   onDismiss: (id: string) => void;
-  onRemove: (id: string) => void;
+  /** Absent where there is no Home to remove it from. */
+  onRemove?: (id: string) => void;
 }) {
   const status = INBOX_STATUS[job.status] ?? INBOX_STATUS.error;
   const platform = platformKey(job.domainHost, job.registrar);
@@ -144,16 +145,24 @@ export function InboxCard({
               </button>
             </>
           )}
-          <button
-            type="button"
-            className="pv-btn-ghost disabled:opacity-50"
-            data-remove
-            disabled={busy}
-            onClick={() => onRemove(job.id)}
-            title="Forget this run, so the next bounce from this inbox is judged afresh"
-          >
-            Remove
-          </button>
+          {onRemove && job.status !== "awaiting_confirmation" && (
+            <button
+              type="button"
+              className="pv-btn-ghost disabled:opacity-50"
+              data-remove
+              disabled={busy}
+              onClick={() => onRemove(job.id)}
+              title={
+                job.blockedAt !== undefined
+                  ? "Take it off Home. It stays on Blocked Inboxes and Blocked Domains."
+                  : job.status === "queued"
+                    ? "Take it out of line; it won't be checked."
+                    : "Take it off Home; the next bounce from this inbox is judged afresh."
+              }
+            >
+              {job.status === "queued" ? "Take out of line" : "Remove from Home"}
+            </button>
+          )}
         </div>
       )}
     </div>

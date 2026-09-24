@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveApiKey } from "@/lib/plusvibe-server";
+import { requireAccountKey, resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { isGroup, isStage, isYmd, type ProfileKey } from "@/lib/inbox-rotation/settings";
 import { todayIn, type Position } from "@/lib/inbox-rotation/schedule";
@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
 //   Body: { id }
 export async function GET(request: Request) {
   try {
-    resolveApiKey(request);
+    await requireAccountKey(request);
     const today = todayIn();
     const out = [];
     for (const rec of await loadRotations()) {
@@ -70,7 +70,7 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    resolveApiKey(request);
+    await requireAccountKey(request);
     const body = (await request.json().catch(() => ({}))) as { id?: unknown };
     const id = String(body.id ?? "").trim();
     if (!id) return NextResponse.json({ error: "Which rotation?" }, { status: 400 });
