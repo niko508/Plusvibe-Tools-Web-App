@@ -111,9 +111,9 @@ export const TOOLS: Tool[] = [
   {
     slug: "blocked-domains",
     name: "Blocked Domains (Automation)",
-    tagline: "Kill a blocked sending domain the moment Clay spots it",
+    tagline: "Judge a bouncing sender inbox on its own 14 days",
     description:
-      "Clay calls this app when a bounce reason shows one of your sending domains is blocked. Its inboxes stop sending and warming immediately, then wait for you to confirm the deletion — after which the domain goes Not Active in the Domains sheet and its tenant is queued for cancellation.",
+      "Clay sends the sender inbox it saw bouncing. That inbox's last 14 days are judged on bounce and reply-rate tiers for Microsoft and Google; a blocked inbox stops sending and warming at once and is deleted — straight away or once you confirm. Blocked inboxes and their domains are listed, with stats by ending and platform.",
     status: "active",
     color: "orange",
     Icon: FireIcon,

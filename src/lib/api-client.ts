@@ -1436,6 +1436,19 @@ export function rearmBlockedDomain(jobId: string, signal?: AbortSignal) {
   });
 }
 
+export type BlockedInboxAction =
+  | { action: "confirm" | "dismiss" | "remove"; jobId: string }
+  | { action: "confirm-all" }
+  | { action: "check"; email: string };
+
+/** Acts on the inbox-level log: delete, keep, forget, delete all waiting, or check one inbox. */
+export function blockedInboxAction(body: BlockedInboxAction) {
+  return request<{ ok: boolean; deleting?: number; outcome?: string; jobId?: string }>("/api/jobs/blocked-inboxes/action", {
+    method: "POST",
+    body,
+  });
+}
+
 export function deleteBlockedDomainJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/blocked-domains/delete", {
     method: "POST",

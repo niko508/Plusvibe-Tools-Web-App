@@ -28,15 +28,15 @@ eq("the inbox bar defaults to 1%", DEFAULT_MIN_REPLY_RATE_OOO, 1);
 eq("the domain bar defaults to 1.5%", DEFAULT_MIN_DOMAIN_REPLY_RATE_OOO, 1.5);
 eq("a bulk row, numbers under header", readStatsRow({
   email_acc_id: "i1", email: "A@Acme.com",
-  header: { total_sent_count: 94, total_unique_contacted_count: 80, total_reply_count: 6, total_ooo_reply_count: 2, reply_rate: 6.4, reply_rate_with_ooo: 8.8 },
-}), { id: "i1", email: "a@acme.com", sent: 94, contacted: 80, replies: 6, oooReplies: 2, replyRate: 6.4, replyRateOoo: 8.8 });
+  header: { total_sent_count: 94, total_unique_contacted_count: 80, total_reply_count: 6, total_ooo_reply_count: 2, total_bounce_count: 3, reply_rate: 6.4, reply_rate_with_ooo: 8.8 },
+}), { id: "i1", email: "a@acme.com", sent: 94, contacted: 80, replies: 6, oooReplies: 2, bounces: 3, replyRate: 6.4, replyRateOoo: 8.8 });
 eq("contacted falls back through the API's three spellings", [
   readStatsRow({ id: "c1", email: "c1@x.com", header: { total_new_lead_contacted_count: 40, total_contacted_count: 99 } }).contacted,
   readStatsRow({ id: "c2", email: "c2@x.com", header: { total_contacted_count: 99 } }).contacted,
 ], [40, 99]);
 eq("a flat row, numbers at the top", readStatsRow({ id: "i2", email: "b@acme.com", total_sent_count: 10, reply_rate: 0, reply_rate_with_ooo: 0.5 }).replyRateOoo, 0.5);
 eq("_id is accepted too", readStatsRow({ _id: "i3", email: "c@acme.com", header: {} }).id, "i3");
-eq("missing numbers read as zero, not NaN", readStatsRow({ id: "i4", email: "d@acme.com", header: {} }), { id: "i4", email: "d@acme.com", sent: 0, contacted: 0, replies: 0, oooReplies: 0, replyRate: 0, replyRateOoo: 0 });
+eq("missing numbers read as zero, not NaN", readStatsRow({ id: "i4", email: "d@acme.com", header: {} }), { id: "i4", email: "d@acme.com", sent: 0, contacted: 0, replies: 0, oooReplies: 0, bounces: 0, replyRate: 0, replyRateOoo: 0 });
 eq("numbers sent as strings are read", readStatsRow({ id: "i5", email: "e@acme.com", header: { total_sent_count: "40", reply_rate_with_ooo: "2.5" } }).replyRateOoo, 2.5);
 eq("a row with no id and no email is not a row", readStatsRow({ header: { reply_rate: 5 } }), null);
 

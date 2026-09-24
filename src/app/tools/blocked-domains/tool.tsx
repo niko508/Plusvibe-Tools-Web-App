@@ -1,54 +1,48 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type {
-  BlockedDomainJob,
-  BlockedDomainsView,
-} from "@/lib/jobs/blocked-domains-types";
+import type { BlockedDomainsView } from "@/lib/jobs/blocked-domains-types";
+import { isBlocked } from "@/lib/jobs/blocked-inboxes-types";
+import { GOOGLE_TIERS, MICROSOFT_TIERS, JUDGE_WINDOW_DAYS, describeRule, describeTier, type Tier } from "@/lib/blocked-inboxes/rules";
+import { blockedDomains } from "@/lib/blocked-inboxes/domains";
 import {
   fetchBlockedDomains,
   setBlockedDomainSettings,
   confirmBlockedDomain,
   dismissBlockedDomain,
   rearmBlockedDomain,
-  recheckBlockedDomain,
   rejudgeBlockedDomain,
   restoreBlockedDomainInboxes,
   undoBlockedDomainWriteOff,
   deleteStoppedBlockedDomainInboxes,
   listBlockedDomainGoogleInboxes,
   deleteBlockedDomainJob,
+  blockedInboxAction,
   ApiClientError,
 } from "@/lib/api-client";
 import { useApiKey } from "@/lib/use-api-key";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { EmptyState, Spinner } from "@/components/ui";
-import {
-  AlertIcon,
-  CheckIcon,
-  ChevronDownIcon,
-  ClockIcon,
-  CopyIcon,
-  FireIcon,
-  GaugeIcon,
-} from "@/components/icons";
+import { AlertIcon, CheckIcon, ChevronDownIcon, CopyIcon, FireIcon, GaugeIcon } from "@/components/icons";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatNumber } from "@/lib/format";
 import { needsYou, stoppedCount } from "@/lib/blocked-domains/triage";
 import { JobCard } from "./job-card";
-import { ScheduledView, watchedJobs } from "./scheduled-view";
+import { InboxCard } from "./inbox-card";
+import { BlockedDomainsList, BlockedInboxesView } from "./blocked-lists";
 import { StatsView } from "./stats-view";
 
 /** Polled while anything is in flight; slower otherwise, since Clay drives it. */
 const POLL_ACTIVE_MS = 2000;
 const POLL_IDLE_MS = 20000;
+/** Recent runs shown on Home before "more". */
+const RECENT = 15;
 
-// The three sections of the page. Home is the setup and the log, as it always
-// was; the other two are different cuts of the same records.
-type Section = "home" | "scheduled" | "stats";
+type Section = "home" | "inboxes" | "domains" | "stats";
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "home", label: "Home" },
-  { id: "scheduled", label: "Scheduled" },
+  { id: "inboxes", label: "Blocked Inboxes" },
+  { id: "domains", label: "Blocked Domains" },
   { id: "stats", label: "Stats" },
 ];
 
@@ -56,29 +50,16 @@ export function BlockedDomainsTool() {
   const { hasKey, ready } = useApiKey();
 
   const [section, setSection] = useState<Section>("home");
-  const [historyOpen, setHistoryOpen] = useState(false);
   const [view, setView] = useState<BlockedDomainsView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [savingToggle, setSavingToggle] = useState(false);
-  /** Said after the gap between checks changes, so the effect is visible. */
-  const [rescheduled, setRescheduled] = useState<{ count: number; days: number } | null>(null);
-  /**
-   * What is being typed into the gap box, until it is committed. Saving on
-   * every keystroke meant typing "21" first saved "2", and each save now
-   * reschedules every watched domain, so the value is taken on blur or Enter.
-   */
-  const [daysDraft, setDaysDraft] = useState<string | null>(null);
-
-  function commitDays() {
-    if (daysDraft === null) return;
-    const n = Number(daysDraft);
-    setDaysDraft(null);
-    if (!Number.isInteger(n) || n < 1 || n > 90) return;
-    if (n === view?.settings.recheckDays) return;
-    void saveSettings({ recheckDays: n });
-  }
   const [copied, setCopied] = useState(false);
+  const [recentShown, setRecentShown] = useState(RECENT);
+  const [oldOpen, setOldOpen] = useState(false);
+  const [checkEmail, setCheckEmail] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [confirmingAll, setConfirmingAll] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
@@ -87,9 +68,7 @@ export function BlockedDomainsTool() {
     } catch (err) {
       // A failed poll isn't worth a banner — the automation runs server-side
       // regardless of whether this page can reach it.
-      if (err instanceof ApiClientError && err.status === 401) {
-        setError(err.message);
-      }
+      if (err instanceof ApiClientError && err.status === 401) setError(err.message);
     }
   }, []);
 
@@ -101,13 +80,9 @@ export function BlockedDomainsTool() {
   useEffect(() => {
     if (pollRef.current) clearTimeout(pollRef.current);
     if (!view) return;
-    const active =
-      view.jobs.some((j) => j.status === "working" || j.status === "deleting") ||
-      view.rejudgeAll?.running === true;
-    pollRef.current = setTimeout(
-      () => void refresh(),
-      active ? POLL_ACTIVE_MS : POLL_IDLE_MS
-    );
+    const busy = (s: string) => s === "working" || s === "deleting";
+    const active = view.jobs.some((j) => busy(j.status)) || (view.inboxJobs ?? []).some((j) => busy(j.status));
+    pollRef.current = setTimeout(() => void refresh(), active ? POLL_ACTIVE_MS : POLL_IDLE_MS);
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current);
     };
@@ -126,26 +101,11 @@ export function BlockedDomainsTool() {
     }
   }
 
-  async function handleToggle(next: boolean) {
-    await saveSettings({ autoDelete: next });
-  }
-
-  async function saveSettings(patch: {
-    autoDelete?: boolean;
-    checkPerformance?: boolean;
-    minReplyRateOoo?: number;
-    minDomainReplyRateOoo?: number;
-    recheck?: boolean;
-    recheckDays?: number;
-  }) {
+  async function toggleAutoDelete() {
     setSavingToggle(true);
     setError(null);
     try {
-      const res = await setBlockedDomainSettings(patch);
-      if (patch.recheckDays !== undefined) {
-        setRescheduled({ count: res.rescheduled ?? 0, days: res.settings.recheckDays });
-        setTimeout(() => setRescheduled(null), 8000);
-      }
+      await setBlockedDomainSettings({ autoDelete: !view?.settings.autoDelete });
     } catch (err) {
       setError(errMessage(err));
     } finally {
@@ -154,11 +114,36 @@ export function BlockedDomainsTool() {
     }
   }
 
+  async function checkInbox() {
+    if (!checkEmail.trim()) return;
+    setChecking(true);
+    setError(null);
+    try {
+      await blockedInboxAction({ action: "check", email: checkEmail.trim() });
+      setCheckEmail("");
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setChecking(false);
+      await refresh();
+    }
+  }
+
+  async function confirmAll() {
+    setConfirmingAll(true);
+    setError(null);
+    try {
+      await blockedInboxAction({ action: "confirm-all" });
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setConfirmingAll(false);
+      await refresh();
+    }
+  }
+
   async function handleCopyUrl() {
-    const url =
-      typeof window !== "undefined"
-        ? `${window.location.origin}/api/hooks/blocked-domain`
-        : "";
+    const url = typeof window !== "undefined" ? `${window.location.origin}/api/hooks/blocked-domain` : "";
     if (await copyToClipboard(url)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
@@ -168,358 +153,97 @@ export function BlockedDomainsTool() {
   if (!ready) return <div className="pv-card h-40 animate-pulse" />;
   if (!hasKey) return <ConnectPrompt onConnected={refresh} />;
 
-  const jobs = view?.jobs ?? [];
-  // A domain stays at the top of the page until someone deals with its stopped
-  // inboxes — deleting them, or choosing to keep them. Then it drops into
-  // History, and comes back up only when a later check stops something new.
-  const fresh = jobs.filter(needsYou);
-  const rest = jobs.filter((j) => !needsYou(j));
-  const freshStopped = fresh.reduce((n, j) => n + stoppedCount(j), 0);
-  // Every run is kept, so the log doubles as the record of which domains have
-  // been dealt with. These counts are what makes that scannable.
+  const inboxJobs = view?.inboxJobs ?? [];
+  const domainJobs = view?.jobs ?? [];
+  const blocked = inboxJobs.filter(isBlocked);
+  const waiting = inboxJobs.filter((j) => j.status === "awaiting_confirmation");
+  const domainCount = blockedDomains(inboxJobs).length;
   const stats = {
-    total: jobs.length,
-    waiting: fresh.length,
-    deleted: jobs.filter((j) => j.inboxesDeleted > 0).length,
-    // Domains nothing was done to: still performing, or someone declined the
-    // deletion.
-    kept: jobs.filter((j) => j.status === "dismissed" || j.status === "kept").length,
-    failed: jobs.filter(
-      (j) =>
-        (j.status === "error" || j.status === "interrupted") &&
-        j.inboxesDeleted === 0
-    ).length,
-    inboxes: jobs.reduce((n, j) => n + j.inboxesDeleted, 0),
+    checked: inboxJobs.length,
+    waiting: waiting.length,
+    blocked: blocked.length,
+    deleted: inboxJobs.filter((j) => j.status === "deleted").length,
+    passed: inboxJobs.filter((j) => j.status === "passed").length,
   };
+  const recent = inboxJobs.filter((j) => j.status !== "awaiting_confirmation");
+
+  // The domain-level runs from before the move to inboxes. Kept: some still
+  // have stopped inboxes waiting to be deleted.
+  const oldWaiting = domainJobs.filter(needsYou);
+  const oldRest = domainJobs.filter((j) => !needsYou(j));
+  const oldStopped = oldWaiting.reduce((n, j) => n + stoppedCount(j), 0);
+  const oldCard = (job: (typeof domainJobs)[number]) => (
+    <JobCard
+      key={job.id}
+      job={job}
+      busy={busyId === job.id}
+      onConfirm={(id) => withBusy(id, () => confirmBlockedDomain(id))}
+      onDismiss={(id) => withBusy(id, () => dismissBlockedDomain(id))}
+      onRearm={(id) => withBusy(id, () => rearmBlockedDomain(id))}
+      onRemove={(id) => withBusy(id, () => deleteBlockedDomainJob(id))}
+      onRejudge={(id) => withBusy(id, () => rejudgeBlockedDomain({ jobId: id }))}
+      onRestore={(id, dailyLimit) => withBusy(id, () => restoreBlockedDomainInboxes(id, dailyLimit))}
+      onUndoWriteOff={(id) => withBusy(id, () => undoBlockedDomainWriteOff(id))}
+      onDeleteStopped={(id) => withBusy(id, () => deleteStoppedBlockedDomainInboxes(id))}
+      onListGoogle={(id) => withBusy(id, () => listBlockedDomainGoogleInboxes(id))}
+    />
+  );
+  const inboxCard = (job: (typeof inboxJobs)[number]) => (
+    <InboxCard
+      key={job.id}
+      job={job}
+      busy={busyId === job.id}
+      onConfirm={(id) => withBusy(id, () => blockedInboxAction({ action: "confirm", jobId: id }))}
+      onDismiss={(id) => withBusy(id, () => blockedInboxAction({ action: "dismiss", jobId: id }))}
+      onRemove={(id) => withBusy(id, () => blockedInboxAction({ action: "remove", jobId: id }))}
+    />
+  );
+
   const readiness = view?.readiness;
   const notReady = readiness
     ? [
-        !readiness.webhookSecret &&
-          "BLOCKED_DOMAIN_WEBHOOK_SECRET — until this is set the webhook rejects every call",
-        !readiness.serverKey &&
-          "PLUSVIBE_API_KEY — without it the webhook has no key to find or delete inboxes",
-        !readiness.spreadsheet &&
-          "SPREADSHEET_ID — without it the Domains and Tenants to Cancel tabs are left alone",
-        !readiness.sheetWriting &&
-          "GOOGLE_SERVICE_ACCOUNT_JSON — without it the sheet can be read but not written",
+        !readiness.webhookSecret && "BLOCKED_DOMAIN_WEBHOOK_SECRET — until this is set the webhook rejects every call",
+        !readiness.serverKey && "PLUSVIBE_API_KEY — without it the webhook has no key to find or delete inboxes",
+        !readiness.spreadsheet && "SPREADSHEET_ID — without it the Domains and Google Inboxes to Cancel tabs are left alone",
+        !readiness.sheetWriting && "GOOGLE_SERVICE_ACCOUNT_JSON — without it the sheet can be read but not written",
         readiness.jobStorage?.onVolume === false &&
-          "JOBS_DIR — points at the container's own disk, so every deploy wipes the log of handled domains and their schedules; mount a volume in Railway and set JOBS_DIR to a path inside it",
+          "JOBS_DIR — points at the container's own disk, so every deploy wipes the log; mount a volume in Railway and set JOBS_DIR to a path inside it",
       ].filter(Boolean as unknown as (v: unknown) => v is string)
     : [];
   const storage = readiness?.jobStorage;
 
-  const watchedCount = watchedJobs(jobs).length;
-  const recheck = (id: string, action: "now" | "on" | "off") =>
-    withBusy(id, () => recheckBlockedDomain(id, action));
-  const rejudge = (id: string) => withBusy(id, () => rejudgeBlockedDomain({ jobId: id }));
-  const restore = (id: string, dailyLimit: number) =>
-    withBusy(id, () => restoreBlockedDomainInboxes(id, dailyLimit));
-  const undo = (id: string) => withBusy(id, () => undoBlockedDomainWriteOff(id));
-  const deleteStopped = (id: string) => withBusy(id, () => deleteStoppedBlockedDomainInboxes(id));
-  const listGoogle = (id: string) => withBusy(id, () => listBlockedDomainGoogleInboxes(id));
-  const rejudgeAll = view?.rejudgeAll;
-  async function rejudgeAllNow() {
-    setError(null);
-    try {
-      await rejudgeBlockedDomain({ all: true });
-    } catch (err) {
-      setError(errMessage(err));
-    }
-    await refresh();
-  }
+  const badge = (id: Section) =>
+    id === "home" ? stats.waiting : id === "inboxes" ? stats.blocked : id === "domains" ? domainCount : 0;
 
   return (
     <div className="space-y-5">
-      {/* Menu bar */}
-      <nav
-        role="tablist"
-        aria-label="Blocked Domains sections"
-        className="flex flex-wrap items-center gap-2"
-      >
+      <nav role="tablist" aria-label="Blocked Domains sections" className="flex flex-wrap items-center gap-2">
         {SECTIONS.map((s) => {
           const current = section === s.id;
-          const badge =
-            s.id === "scheduled" ? watchedCount : s.id === "stats" ? stats.total : stats.waiting;
+          const n = badge(s.id);
           return (
             <button
               key={s.id}
               type="button"
               role="tab"
               aria-selected={current}
+              data-section={s.id}
               onClick={() => setSection(s.id)}
               className={`pv-chip ${current ? "pv-chip-active" : "hover:text-foreground"}`}
             >
               {s.label}
-              {badge > 0 && (
+              {n > 0 && (
                 <span
-                  className={`rounded-full px-1.5 text-[10px] tabular-nums ${
-                    current ? "bg-accent/15" : "bg-muted"
-                  } ${s.id === "home" ? "text-warning" : ""}`}
-                  title={
-                    s.id === "home"
-                      ? "Waiting for your confirmation"
-                      : s.id === "scheduled"
-                        ? "Domains being watched"
-                        : "Blocks counted"
-                  }
+                  className={`rounded-full px-1.5 text-[10px] tabular-nums ${current ? "bg-accent/15" : "bg-muted"} ${s.id === "home" ? "text-warning" : ""}`}
+                  title={s.id === "home" ? "Blocked inboxes waiting for you" : undefined}
                 >
-                  {formatNumber(badge)}
+                  {formatNumber(n)}
                 </span>
               )}
             </button>
           );
         })}
       </nav>
-
-      {error && section !== "home" && (
-        <div className="flex items-start gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
-          <AlertIcon size={16} className="mt-0.5 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      {section === "scheduled" && (
-        <ScheduledView
-          jobs={jobs}
-          busyId={busyId}
-          onRecheck={recheck}
-          everyDays={view?.settings.recheckDays ?? 7}
-          // Saving the gap again, unchanged, is what moves every watched
-          // domain onto it: the server restarts each clock from now.
-          onRescheduleAll={() =>
-            saveSettings({ recheckDays: view?.settings.recheckDays ?? 7 })
-          }
-          rescheduling={savingToggle}
-          rescheduled={rescheduled}
-        />
-      )}
-
-      {section === "stats" && <StatsView jobs={jobs} />}
-
-      {section === "home" && (
-        <>
-      {/* Setup + the automation toggle */}
-      <div className="pv-card p-4 sm:p-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-[260px] flex-1">
-            <h2 className="text-sm font-semibold">Clay webhook</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Add an HTTP API column in Clay with the same run condition as your{" "}
-              <span className="font-mono">Domain Blocked</span> column, POSTing
-              to this URL with the header{" "}
-              <span className="font-mono">x-webhook-secret</span> and a body of{" "}
-              <span className="font-mono">
-                {"{ \"domain\": \"...\" }"}
-              </span>
-              . A domain is only ever handled <strong>once</strong> — every
-              later bounce row for it gets an{" "}
-              <span className="font-mono">already_handled</span> reply and
-              nothing runs — so it&apos;s safe to fire on every bounce, even
-              with 50 inboxes on one domain bouncing for weeks.
-            </p>
-            <div className="mt-2 flex items-center gap-2">
-              <code className="flex-1 truncate rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-xs">
-                {typeof window !== "undefined"
-                  ? `${window.location.origin}/api/hooks/blocked-domain`
-                  : "/api/hooks/blocked-domain"}
-              </code>
-              <button
-                type="button"
-                className="pv-btn-ghost"
-                onClick={handleCopyUrl}
-              >
-                {copied ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
-              </button>
-            </div>
-          </div>
-
-          <div className="min-w-[240px]">
-            <h2 className="text-sm font-semibold">Full automation</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {view?.settings.autoDelete
-                ? "Every inbox the automation stops is deleted straight away, with no confirmation — on the first pass and on every repeat check, kept domains included. Only a domain you chose to keep is left alone."
-                : "Sending, warmup and both sheet updates happen straight away; only the deletion waits for you here."}
-            </p>
-            <button
-              type="button"
-              disabled={savingToggle || !view}
-              onClick={() => handleToggle(!view?.settings.autoDelete)}
-              className={`mt-2 flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
-                view?.settings.autoDelete
-                  ? "border-danger/40 bg-danger/10 text-danger"
-                  : "border-border hover:text-foreground"
-              }`}
-            >
-              {savingToggle ? <Spinner size={12} /> : <FireIcon size={13} />}
-              {view?.settings.autoDelete
-                ? "Auto-delete is ON"
-                : "Auto-delete is OFF"}
-            </button>
-
-            <h2 className="mt-4 text-sm font-semibold">Keep what&apos;s working</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {view?.settings.checkPerformance
-                ? "Two bars on reply rate with OOO over the last 7 days. Inboxes under theirs are stopped whatever the domain does; a domain at or above its own keeps its sheet status and its tenant, and nothing is deleted. Google Workspace domains have no tenant: their burned inboxes go onto 🛑 Google Inboxes to Cancel, and the domain is written off only once every inbox on it is burned."
-                : "Every blocked domain is cancelled and all its inboxes stopped, whatever the numbers say."}
-            </p>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                disabled={savingToggle || !view}
-                onClick={() => saveSettings({ checkPerformance: !view?.settings.checkPerformance })}
-                aria-label="Toggle the performance check"
-                className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
-                  view?.settings.checkPerformance
-                    ? "border-success/40 bg-success/10 text-success"
-                    : "border-border hover:text-foreground"
-                }`}
-              >
-                {savingToggle ? <Spinner size={12} /> : <GaugeIcon size={13} />}
-                {view?.settings.checkPerformance ? "Check is ON" : "Check is OFF"}
-              </button>
-            </div>
-            <h2 className="mt-4 text-sm font-semibold">Keep watching</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {view?.settings.recheck
-                ? `A flagged domain is assessed again every ${view.settings.recheckDays} days — the same two bars on fresh figures — until it is written off with every inbox stopped, or has no inboxes left.`
-                : "A domain is assessed once, when it is flagged, and never looked at again."}
-            </p>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                disabled={savingToggle || !view}
-                onClick={() => saveSettings({ recheck: !view?.settings.recheck })}
-                aria-label="Toggle repeat checks"
-                className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
-                  view?.settings.recheck
-                    ? "border-success/40 bg-success/10 text-success"
-                    : "border-border hover:text-foreground"
-                }`}
-              >
-                {savingToggle ? <Spinner size={12} /> : <ClockIcon size={13} />}
-                {view?.settings.recheck ? "Repeat checks are ON" : "Repeat checks are OFF"}
-              </button>
-              {view?.settings.recheck && (
-                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  every
-                  <input
-                    type="number"
-                    className="pv-input w-16 py-1 text-xs"
-                    min={1}
-                    max={90}
-                    step={1}
-                    value={daysDraft ?? String(view.settings.recheckDays)}
-                    onChange={(e) => setDaysDraft(e.target.value)}
-                    onBlur={commitDays}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                    }}
-                    aria-label="Days between repeat checks"
-                  />
-                  days
-                </label>
-              )}
-              {rescheduled && (
-                <span className="text-xs text-success" data-rescheduled>
-                  {rescheduled.count > 0
-                    ? `${formatNumber(rescheduled.count)} watched domain${rescheduled.count === 1 ? "" : "s"} moved onto ${rescheduled.days} days, keeping the time already served.`
-                    : `Saved. No watched domain needed moving.`}
-                </span>
-              )}
-            </div>
-
-            {view?.settings.checkPerformance && (
-              <div className="mt-3 space-y-1.5">
-                <Bar
-                  label="Stop an inbox under"
-                  hint="daily limit to 0 and warmup off"
-                  value={view.settings.minReplyRateOoo}
-                  ariaLabel="Reply rate with OOO bar"
-                  onSave={(n) => void saveSettings({ minReplyRateOoo: n })}
-                />
-                <Bar
-                  label="Write the domain off under"
-                  hint="Not Active in the sheet, tenant queued to cancel"
-                  value={view.settings.minDomainReplyRateOoo}
-                  ariaLabel="Domain reply rate with OOO bar"
-                  onSave={(n) => void saveSettings({ minDomainReplyRateOoo: n })}
-                />
-              </div>
-            )}
-          </div>
-        </div>
-
-        {notReady.length > 0 && (
-          <div className="mt-4 rounded-xl border border-warning/30 bg-warning/5 p-3">
-            <p className="text-xs font-medium text-warning">
-              Not ready to run unattended — set these on Railway:
-            </p>
-            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
-              {notReady.map((n) => (
-                <li key={n}>
-                  <span className="font-mono">{n.split(" — ")[0]}</span>
-                  {" — "}
-                  {n.split(" — ")[1]}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {storage && (
-          <p
-            className={`mt-3 text-xs ${storage.onVolume === false ? "text-warning" : "text-muted-foreground"}`}
-            data-job-storage={String(storage.onVolume)}
-          >
-            Job records: <span className="font-mono">{storage.dir}</span>
-            {storage.onVolume === true
-              ? ` — on a volume${storage.mountPoint ? ` mounted at ${storage.mountPoint}` : ""}, kept across deploys.`
-              : storage.onVolume === false
-                ? " — on the container's own disk, wiped on every deploy."
-                : " — could not tell whether this survives a deploy."}
-          </p>
-        )}
-      </div>
-
-      {stats.total > 0 && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-          <Stat label="Domains handled" value={stats.total} />
-          <Stat
-            label="Waiting for you"
-            value={stats.waiting}
-            tone={stats.waiting > 0 ? "warning" : undefined}
-          />
-          <Stat label="Inboxes deleted" value={stats.inboxes} />
-          <Stat label="Kept" value={stats.kept} />
-          <Stat
-            label="Failed"
-            value={stats.failed}
-            tone={stats.failed > 0 ? "danger" : undefined}
-          />
-        </div>
-      )}
-
-      {stats.total > 0 && (
-        <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-          <button
-            type="button"
-            className="pv-btn-ghost disabled:opacity-50"
-            disabled={rejudgeAll?.running}
-            onClick={rejudgeAllNow}
-            title="Read every domain again over a wider window and judge it on the current rules. Changes nothing by itself."
-          >
-            {rejudgeAll?.running ? <Spinner size={14} /> : <GaugeIcon size={14} />}
-            Re-judge all
-          </button>
-          <span data-rejudge-all={rejudgeAll?.running ? "running" : rejudgeAll ? "done" : "idle"}>
-            {rejudgeAll?.running
-              ? `Re-judging ${formatNumber(rejudgeAll.done)} of ${formatNumber(rejudgeAll.total)}…`
-              : rejudgeAll
-                ? `Every domain re-judged (${formatNumber(rejudgeAll.total)}). Each card now says what the current rules make of it.`
-                : "Reads every domain again over a window reaching back to before it was flagged, and judges it on the current rules. Changes nothing by itself; Restore and Undo write-off are on each card."}
-          </span>
-        </div>
-      )}
 
       {error && (
         <div className="flex items-start gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
@@ -528,148 +252,215 @@ export function BlockedDomainsTool() {
         </div>
       )}
 
-      {fresh.length > 0 && (
-        <div className="space-y-3" data-new-domains>
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-sm font-semibold text-warning">
-              New Blocked Domains ({fresh.length})
-            </h2>
-            <span className="text-xs text-muted-foreground">
-              Kept or written off, these still have something for you.
-              {freshStopped > 0
-                ? ` ${formatNumber(freshStopped)} stopped inbox${freshStopped === 1 ? "" : "es"} can be deleted.`
-                : ""}{" "}
-              Once you have dealt with a domain it moves to History.
-            </span>
-          </div>
-          {fresh.map((job) => (
-            <JobCard
-              key={job.id}
-              job={job}
-              busy={busyId === job.id}
-              onConfirm={(id) => withBusy(id, () => confirmBlockedDomain(id))}
-              onDismiss={(id) => withBusy(id, () => dismissBlockedDomain(id))}
-              onRearm={(id) => withBusy(id, () => rearmBlockedDomain(id))}
-              onRemove={(id) => withBusy(id, () => deleteBlockedDomainJob(id))}
-              onRecheck={recheck}
-              onRejudge={rejudge}
-              onRestore={restore}
-              onUndoWriteOff={undo}
-              onDeleteStopped={deleteStopped}
-              onListGoogle={listGoogle}
-            />
-          ))}
-        </div>
+      {section === "inboxes" && (
+        <BlockedInboxesView
+          jobs={inboxJobs}
+          busyId={busyId}
+          onConfirm={(id) => withBusy(id, () => blockedInboxAction({ action: "confirm", jobId: id }))}
+          onDismiss={(id) => withBusy(id, () => blockedInboxAction({ action: "dismiss", jobId: id }))}
+          onRemove={(id) => withBusy(id, () => blockedInboxAction({ action: "remove", jobId: id }))}
+          onConfirmAll={confirmAll}
+          confirmingAll={confirmingAll}
+        />
       )}
+      {section === "domains" && <BlockedDomainsList jobs={inboxJobs} />}
+      {section === "stats" && <StatsView inboxJobs={inboxJobs} domainJobs={domainJobs} />}
 
-      {rest.length > 0 ? (
-        <div className="space-y-3">
-          {/* Closed by default: the log grows without bound and the cards
-              are tall, so an open history pushes anything waiting for
-              confirmation off the screen. */}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <button
-              type="button"
-              className="flex items-center gap-2 text-sm font-semibold"
-              onClick={() => setHistoryOpen((v) => !v)}
-              aria-expanded={historyOpen}
-              aria-controls="blocked-domains-history"
-            >
-              <ChevronDownIcon
-                size={16}
-                className={`transition-transform ${historyOpen ? "" : "-rotate-90"}`}
-              />
-              History ({formatNumber(rest.length)})
-            </button>
-            <span className="text-xs text-muted-foreground">
-              {historyOpen
-                ? "Every run is kept. “Allow re-run” lets a domain trigger again without losing its record."
-                : "Every run is kept. Open to see them."}
-            </span>
+      {section === "home" && (
+        <>
+          <div className="pv-card p-4 sm:p-5">
+            <div className="flex flex-wrap items-start justify-between gap-6">
+              <div className="min-w-[260px] flex-1 space-y-4">
+                <div>
+                  <h2 className="text-sm font-semibold">Clay webhook</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    POST the <strong>sender inbox</strong> that bounced to this URL, with the header{" "}
+                    <span className="font-mono">x-webhook-secret</span> and a body of{" "}
+                    <span className="font-mono">{'{ "email": "sender@domain.com" }'}</span>. That inbox — only that inbox —
+                    is read over its last {JUDGE_WINDOW_DAYS} days and judged on the rules. Repeat bounces are counted,
+                    not re-run: a blocked inbox is never judged again, and one that passed is judged again on its first
+                    bounce 24 hours later.
+                  </p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <code className="flex-1 truncate rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-xs">
+                      {typeof window !== "undefined" ? `${window.location.origin}/api/hooks/blocked-domain` : "/api/hooks/blocked-domain"}
+                    </code>
+                    <button type="button" className="pv-btn-ghost" onClick={handleCopyUrl} aria-label="Copy the webhook URL">
+                      {copied ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold">Check an inbox now</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">Runs one inbox exactly as if Clay had sent it.</p>
+                  <div className="mt-2 flex max-w-md items-center gap-2">
+                    <input
+                      className="pv-input"
+                      placeholder="sender@domain.com"
+                      value={checkEmail}
+                      aria-label="Inbox to check"
+                      data-check-email
+                      onChange={(e) => setCheckEmail(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void checkInbox();
+                      }}
+                    />
+                    <button type="button" className="pv-btn-primary disabled:opacity-50" data-check disabled={checking || !checkEmail.trim()} onClick={checkInbox}>
+                      {checking ? <Spinner size={14} /> : <GaugeIcon size={14} />} Check
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold">Full automation</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {view?.settings.autoDelete
+                      ? "A blocked inbox is stopped and deleted straight away, with no confirmation."
+                      : "A blocked inbox is stopped straight away — sending and warmup off — and its deletion waits for you here."}{" "}
+                    Nothing is done to a domain as a whole: no domain-wide warmup pause, no Not Active in the Domains tab,
+                    nothing on 🚯 Tenants to Cancel. A blocked Google inbox is listed on 🛑 Google Inboxes to Cancel.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={savingToggle || !view}
+                    onClick={toggleAutoDelete}
+                    data-auto-delete={String(!!view?.settings.autoDelete)}
+                    className={`mt-2 flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
+                      view?.settings.autoDelete ? "border-danger/40 bg-danger/10 text-danger" : "border-border hover:text-foreground"
+                    }`}
+                  >
+                    {savingToggle ? <Spinner size={12} /> : <FireIcon size={13} />}
+                    {view?.settings.autoDelete ? "Auto-delete is ON" : "Auto-delete is OFF"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="min-w-[280px] flex-1" data-rules>
+                <h2 className="text-sm font-semibold">The rules</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Last {JUDGE_WINDOW_DAYS} days of the one inbox. Bounce rate is over everything sent; reply rates are over
+                  unique leads contacted, and the OOO reply rate counts out-of-office replies too. An inbox that is neither
+                  Microsoft nor Google is left alone.
+                </p>
+                <RulesTable title="Microsoft (Azure)" tiers={MICROSOFT_TIERS} />
+                <RulesTable title="Google" tiers={GOOGLE_TIERS} />
+              </div>
+            </div>
+
+            {notReady.length > 0 && (
+              <div className="mt-4 rounded-xl border border-warning/30 bg-warning/5 p-3">
+                <p className="text-xs font-medium text-warning">Not ready to run unattended — set these on Railway:</p>
+                <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
+                  {notReady.map((n) => (
+                    <li key={n}>
+                      <span className="font-mono">{n.split(" — ")[0]}</span>
+                      {" — "}
+                      {n.split(" — ")[1]}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {storage && (
+              <p className={`mt-3 text-xs ${storage.onVolume === false ? "text-warning" : "text-muted-foreground"}`}>
+                Job records: <span className="font-mono">{storage.dir}</span>
+                {storage.onVolume === true
+                  ? ` — on a volume${storage.mountPoint ? ` mounted at ${storage.mountPoint}` : ""}, kept across deploys.`
+                  : storage.onVolume === false
+                    ? " — on the container's own disk, wiped on every deploy."
+                    : " — could not tell whether this survives a deploy."}
+              </p>
+            )}
           </div>
-          {historyOpen && (
-          <div id="blocked-domains-history" className="space-y-3">
-          {rest.map((job) => (
-            <JobCard
-              key={job.id}
-              job={job}
-              busy={busyId === job.id}
-              onConfirm={(id) => withBusy(id, () => confirmBlockedDomain(id))}
-              onDismiss={(id) => withBusy(id, () => dismissBlockedDomain(id))}
-              onRearm={(id) => withBusy(id, () => rearmBlockedDomain(id))}
-              onRemove={(id) => withBusy(id, () => deleteBlockedDomainJob(id))}
-              onRecheck={recheck}
-              onRejudge={rejudge}
-              onRestore={restore}
-              onUndoWriteOff={undo}
-              onDeleteStopped={deleteStopped}
-              onListGoogle={listGoogle}
-            />
-          ))}
-          </div>
+
+          {stats.checked > 0 && (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5" data-home-stats>
+              <Stat label="Inboxes checked" value={stats.checked} />
+              <Stat label="Waiting for you" value={stats.waiting} tone={stats.waiting > 0 ? "warning" : undefined} />
+              <Stat label="Blocked" value={stats.blocked} tone={stats.blocked > 0 ? "danger" : undefined} />
+              <Stat label="Deleted" value={stats.deleted} />
+              <Stat label="Passed" value={stats.passed} />
+            </div>
           )}
-        </div>
-      ) : (
-        fresh.length === 0 && (
-          <EmptyState icon={<FireIcon />} title="No blocked domains yet">
-            Nothing has come through from Clay. When a bounce reason shows one
-            of your sending domains is blocked, it lands here.
-          </EmptyState>
-        )
-      )}
+
+          {waiting.length > 0 && (
+            <div className="space-y-3" data-waiting>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold text-warning">Blocked — waiting for you ({formatNumber(waiting.length)})</h2>
+                <button type="button" className="pv-btn-ghost text-danger disabled:opacity-50" disabled={confirmingAll} onClick={confirmAll}>
+                  {confirmingAll ? <Spinner size={14} /> : null} Delete all {formatNumber(waiting.length)}
+                </button>
+              </div>
+              {waiting.map(inboxCard)}
+            </div>
+          )}
+
+          {recent.length > 0 ? (
+            <div className="space-y-3" data-recent>
+              <h2 className="text-sm font-semibold">Recent inboxes</h2>
+              {recent.slice(0, recentShown).map(inboxCard)}
+              {recent.length > recentShown && (
+                <button type="button" className="text-xs text-muted-foreground underline" onClick={() => setRecentShown((n) => n + RECENT)}>
+                  {formatNumber(recent.length - recentShown)} more
+                </button>
+              )}
+            </div>
+          ) : (
+            waiting.length === 0 && (
+              <EmptyState icon={<FireIcon />} title="No inboxes yet">
+                Nothing has come through from Clay since the automation moved to inboxes. Point the Clay column at the
+                sender inbox and every bounce lands here.
+              </EmptyState>
+            )
+          )}
+
+          {domainJobs.length > 0 && (
+            <div className="space-y-3 border-t border-border pt-5" data-old-runs>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="flex items-center gap-1.5 text-sm font-semibold"
+                  onClick={() => setOldOpen((v) => !v)}
+                  aria-expanded={oldOpen}
+                >
+                  <ChevronDownIcon size={16} className={`transition-transform ${oldOpen ? "" : "-rotate-90"}`} />
+                  Earlier domain-level runs ({formatNumber(domainJobs.length)})
+                </button>
+                <span className="text-xs text-muted-foreground">
+                  From before the automation moved to single inboxes. Nothing new is added here and nothing is scheduled.
+                  {oldStopped > 0
+                    ? ` ${formatNumber(oldStopped)} stopped inbox${oldStopped === 1 ? "" : "es"} on ${formatNumber(oldWaiting.length)} domain${oldWaiting.length === 1 ? "" : "s"} can still be deleted.`
+                    : ""}
+                </span>
+              </div>
+              {oldOpen && (
+                <div className="space-y-3">
+                  {oldWaiting.map(oldCard)}
+                  {oldRest.map(oldCard)}
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>
   );
 }
 
-/** One editable percentage bar, with what it governs written next to it. */
-function Bar({
-  label,
-  hint,
-  value,
-  ariaLabel,
-  onSave,
-}: {
-  label: string;
-  hint: string;
-  value: number;
-  ariaLabel: string;
-  onSave: (n: number) => void;
-}) {
-  const [text, setText] = useState(String(value));
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Follow the saved value, so a save from elsewhere (or a rejected entry)
-  // shows up here.
-  useEffect(() => setText(String(value)), [value]);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-
-  function edit(next: string) {
-    setText(next);
-    if (timer.current) clearTimeout(timer.current);
-    // Only a complete number saves: "2." on the way to "2.5" would otherwise
-    // save 2 and snap the field back mid-typing.
-    if (!/^\d+(\.\d+)?$/.test(next.trim())) return;
-    const n = Number(next);
-    if (n > 100 || n === value) return;
-    timer.current = setTimeout(() => onSave(n), 600);
-  }
-
+function RulesTable({ title, tiers }: { title: string; tiers: Tier[] }) {
   return (
-    <label className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-      {label}
-      <input
-        type="number"
-        className="pv-input w-20 py-1 text-xs"
-        min={0}
-        max={100}
-        step={0.1}
-        value={text}
-        onChange={(e) => edit(e.target.value)}
-        aria-label={ariaLabel}
-      />
-      % <span className="text-muted-foreground/70">— {hint}</span>
-    </label>
+    <div className="mt-3">
+      <div className="text-xs font-medium">{title}</div>
+      <table className="mt-1 w-full text-xs">
+        <tbody>
+          {tiers.map((t) => (
+            <tr key={t.min} className="border-t border-border">
+              <td className="py-1.5 pr-3 text-muted-foreground">{describeTier(t)}</td>
+              <td className="py-1.5">blocked when {describeRule(t)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -679,27 +470,11 @@ function errMessage(err: unknown): string {
   return "Something went wrong.";
 }
 
-function Stat({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone?: "warning" | "danger";
-}) {
+function Stat({ label, value, tone }: { label: string; value: number; tone?: "warning" | "danger" }) {
   return (
     <div className="pv-card p-3">
       <div className="truncate text-[11px] text-muted-foreground">{label}</div>
-      <div
-        className={`mt-0.5 text-lg font-semibold tabular-nums ${
-          tone === "danger"
-            ? "text-danger"
-            : tone === "warning"
-              ? "text-warning"
-              : ""
-        }`}
-      >
+      <div className={`mt-0.5 text-lg font-semibold tabular-nums ${tone === "danger" ? "text-danger" : tone === "warning" ? "text-warning" : ""}`}>
         {formatNumber(value)}
       </div>
     </div>

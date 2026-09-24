@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { listJobs, rejudgeAllStatus, serverApiKey } from "@/lib/jobs/blocked-domains";
+import { listInboxJobs } from "@/lib/jobs/blocked-inboxes";
 import { loadSettings } from "@/lib/blocked-domains/settings";
 import { envSpreadsheetId, isSheetWritingConfigured } from "@/lib/google-sheets";
 import { jobStorageInfo } from "@/lib/jobs/storage";
@@ -16,9 +17,10 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   try {
     resolveApiKey(request);
-    const [jobs, settings] = await Promise.all([listJobs(), loadSettings()]);
+    const [jobs, inboxJobs, settings] = await Promise.all([listJobs(), listInboxJobs(), loadSettings()]);
     const view: BlockedDomainsView = {
       jobs,
+      inboxJobs,
       rejudgeAll: rejudgeAllStatus(),
       settings: {
         autoDelete: settings.autoDelete,

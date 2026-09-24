@@ -2,12 +2,15 @@ import "server-only";
 
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
-import { intake } from "@/lib/jobs/blocked-domains";
+import { intakeInbox } from "@/lib/jobs/blocked-inboxes";
+import type { BlockedInboxJob } from "@/lib/jobs/blocked-inboxes-types";
 
 // The Clay webhook, as a handler both route paths share.
 //
-// Called when a bounce reason shows one of our sending domains has been
-// blocked. Body: { domain, bounceReason?, source? }
+// Called when a bounce shows one of our sender inboxes may be blocked.
+// Body: { email, bounceReason?, source? } — the SENDER inbox, which is judged
+// on its own last 14 days. (It used to take a domain; a body with only a
+// domain is refused with a message saying what to send instead.)
 //
 // Authenticated with a shared secret rather than the Plusvibe key: Clay should
 // be able to trigger this one action without holding a credential that can do
@@ -20,39 +23,28 @@ import { intake } from "@/lib/jobs/blocked-domains";
 
 const HEADER = "x-webhook-secret";
 
-/**
- * Plain-English summary of what already happened to a repeated domain.
- *
- * Driven by what the run actually DID, not by its overall status. A run that
- * deleted every inbox but failed to write the sheet ends as "error", and
- * telling Clay to re-run that domain would be wrong — the inboxes are gone; it
- * is the sheet that needs a look.
- */
-function describeExisting(job: {
-  domain: string;
-  status: string;
-  inboxesDeleted: number;
-  inboxesFound: number;
-}): string {
-  const when = `Already run for ${job.domain}`;
-  if (job.status === "working" || job.status === "deleting") {
-    return `${when} — still in progress. Nothing to do.`;
+/** Plain-English summary of what already happened to a repeated inbox. */
+function describeExisting(job: BlockedInboxJob): string {
+  const when = `Already handled ${job.email}`;
+  switch (job.status) {
+    case "working":
+    case "deleting":
+      return `${when} — still in progress. Nothing to do.`;
+    case "awaiting_confirmation":
+      return `${when} — blocked and stopped, waiting for the deletion to be confirmed in the app. Nothing to do.`;
+    case "deleted":
+      return `${when} — blocked and deleted. Nothing to do.`;
+    case "dismissed":
+      return `${when} — blocked, and someone chose to keep it stopped. Nothing to do.`;
+    case "passed":
+      return `${when} — its last 14 days passed. It is judged again on the first bounce 24 hours after that.`;
+    case "untouched":
+      return `${when} — neither Microsoft nor Google, so it is left alone.`;
+    case "not_found":
+      return `${when} — not in any workspace. Checked again 24 hours after that.`;
+    default:
+      return `${when} — the last run ended as "${job.status}". Checked again 24 hours after it; remove it in the app to run it now.`;
   }
-  if (job.status === "awaiting_confirmation") {
-    return `${when} — its ${job.inboxesFound} inbox(es) are stopped and waiting for confirmation in the app. Nothing to do.`;
-  }
-  if (job.inboxesDeleted > 0) {
-    const caveat =
-      job.status === "error"
-        ? " The run reported a problem afterwards, so check the sheet."
-        : "";
-    return `${when} — ${job.inboxesDeleted} inbox(es) already deleted. Nothing to do.${caveat}`;
-  }
-  if (job.status === "dismissed") {
-    return `${when} — someone chose to keep the inboxes. Nothing to do.`;
-  }
-  // Nothing was deleted, so re-running is the sensible suggestion.
-  return `${when} — the earlier run ended as "${job.status}" without deleting anything. Remove it in the app to run again.`;
 }
 
 /** Constant-time compare, so a wrong secret can't be found a byte at a time. */
@@ -91,8 +83,22 @@ export async function handleBlockedDomainWebhook(request: Request) {
     return NextResponse.json({ error: "Body must be JSON" }, { status: 400 });
   }
 
-  const result = await intake({
-    domain: body.domain ?? body.Domain ?? body.blocked_domain,
+  const email =
+    body.email ?? body.Email ?? body.inbox ?? body.sender ?? body.sender_email ?? body.senderEmail ?? body.from_email;
+  if (email === undefined && (body.domain ?? body.Domain ?? body.blocked_domain) !== undefined) {
+    // The old body. Refused rather than guessed at: a domain says nothing
+    // about which of its inboxes bounced.
+    return NextResponse.json(
+      {
+        status: "invalid",
+        error: 'This webhook now takes the sender inbox, not the domain. Send { "email": "sender@domain.com" }.',
+      },
+      { status: 400 }
+    );
+  }
+
+  const result = await intakeInbox({
+    email,
     bounceReason:
       typeof body.bounceReason === "string"
         ? body.bounceReason
@@ -105,29 +111,24 @@ export async function handleBlockedDomainWebhook(request: Request) {
   if (result.outcome === "invalid") {
     return NextResponse.json({ status: "invalid", error: result.reason }, { status: 400 });
   }
-  // A duplicate is a success as far as Clay is concerned — a domain with 50
-  // inboxes bounces for weeks, and every one of those rows firing is expected,
-  // not an error to surface there. The message says what already happened, so
-  // the response column in Clay explains itself without opening the app.
+  // A repeat is a success as far as Clay is concerned: one inbox bounces many
+  // times, and every one of those rows firing is expected. The message says
+  // what already happened, so the response column in Clay explains itself.
   if (result.outcome === "duplicate") {
     const j = result.job;
     return NextResponse.json({
       status: "already_handled",
-      domain: j.domain,
+      email: j.email,
       jobId: j.id,
       firstSeen: new Date(j.createdAt).toISOString(),
       previousStatus: j.status,
-      inboxesDeleted: j.inboxesDeleted,
       repeatHits: j.duplicateHits,
       message: describeExisting(j),
     });
   }
   // 202: the work runs in the background, so Clay isn't held open through a
   // scan of every workspace.
-  return NextResponse.json(
-    { status: "accepted", domain: result.job.domain, jobId: result.job.id },
-    { status: 202 }
-  );
+  return NextResponse.json({ status: "accepted", email: result.job.email, jobId: result.job.id }, { status: 202 });
 }
 
 /**
@@ -145,7 +146,7 @@ export function describeBlockedDomainWebhook() {
       endpoint: "blocked-domain",
       ok: true,
       message:
-        "This is the Blocked Domains webhook. Send a POST, not a GET, with the x-webhook-secret header and a JSON body of { \"domain\": \"example.com\" }.",
+        "This is the Blocked Domains webhook. Send a POST, not a GET, with the x-webhook-secret header and a JSON body of { \"email\": \"sender@example.com\" } — the sender inbox that bounced.",
       secretConfigured: configured,
       ...(configured
         ? {}

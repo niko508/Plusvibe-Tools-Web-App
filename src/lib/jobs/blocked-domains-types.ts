@@ -43,6 +43,7 @@ import type {
   InboxAssessment,
 } from "@/lib/blocked-domains/performance";
 import type { ProviderCounts } from "@/lib/plusvibe-providers";
+import type { BlockedInboxJob } from "@/lib/jobs/blocked-inboxes-types";
 
 export type { DomainPerformance, DomainVerdict, InboxAssessment, ProviderCounts };
 
@@ -339,7 +340,10 @@ export interface BlockedDomainJob {
 }
 
 export interface BlockedDomainsView {
+  /** The domain-level runs from before the automation moved to inboxes. */
   jobs: BlockedDomainJob[];
+  /** One per sender inbox Clay sent. Absent on responses from an older build. */
+  inboxJobs?: BlockedInboxJob[];
   /** A "Re-judge all" in progress, or the last one. */
   rejudgeAll?: { running: boolean; total: number; done: number; startedAt: number };
   settings: {

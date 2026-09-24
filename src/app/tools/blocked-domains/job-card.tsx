@@ -19,7 +19,6 @@ import {
   RefreshIcon,
   SheetIcon,
 } from "@/components/icons";
-import { describeNext } from "@/lib/blocked-domains/recheck";
 import { normalizeLimit } from "@/lib/blocked-domains/rejudge";
 import { platformLabel } from "@/lib/blocked-domains/registrar";
 import { bucketOf, describeProviders, PROVIDER_LABELS } from "@/lib/plusvibe-providers";
@@ -53,7 +52,6 @@ export function JobCard({
   onDismiss,
   onRearm,
   onRemove,
-  onRecheck,
   onRejudge,
   onRestore,
   onUndoWriteOff,
@@ -66,7 +64,6 @@ export function JobCard({
   onDismiss: (id: string) => void | Promise<void>;
   onRearm: (id: string) => void | Promise<void>;
   onRemove: (id: string) => void | Promise<void>;
-  onRecheck: (id: string, action: "now" | "on" | "off") => void | Promise<void>;
   onRejudge: (id: string) => void | Promise<void>;
   onRestore: (id: string, dailyLimit: number) => void | Promise<void>;
   onUndoWriteOff: (id: string) => void | Promise<void>;
@@ -424,19 +421,13 @@ export function JobCard({
         </p>
       )}
 
-      {recheck && (
+      {/* Scheduled checks are gone; the ones that ran are still history. */}
+      {recheck && recheck.runs.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1.5">
+          <button type="button" className="flex items-center gap-1.5 underline" onClick={() => setOpen((v) => !v)}>
             <ClockIcon size={13} />
-            {recheck.enabled
-              ? `Checked again every ${recheck.everyDays} days · next ${describeNext(recheck.nextAt, Date.now())}`
-              : recheck.endedReason || "Not being checked again"}
-          </span>
-          {recheck.runs.length > 0 && (
-            <button type="button" className="underline" onClick={() => setOpen((v) => !v)}>
-              {recheck.runs.length} repeat check{recheck.runs.length === 1 ? "" : "s"} so far
-            </button>
-          )}
+            {recheck.runs.length} repeat check{recheck.runs.length === 1 ? "" : "s"} ran
+          </button>
         </div>
       )}
 
@@ -559,29 +550,6 @@ export function JobCard({
             <RefreshIcon size={16} />
             Allow re-run
           </button>
-        )}
-
-        {!active && recheck && (
-          <>
-            <button
-              type="button"
-              className="pv-btn-ghost disabled:opacity-50"
-              disabled={busy}
-              onClick={() => onRecheck(job.id, "now")}
-              title="Read the last 7 days again now, and act on what it says"
-            >
-              {busy ? <Spinner /> : <GaugeIcon size={16} />}
-              Check now
-            </button>
-            <button
-              type="button"
-              className="pv-btn-ghost disabled:opacity-50"
-              disabled={busy}
-              onClick={() => onRecheck(job.id, recheck.enabled ? "off" : "on")}
-            >
-              {recheck.enabled ? "Stop watching" : "Watch again"}
-            </button>
-          </>
         )}
 
         {/* A domain not waiting on a deletion can still have dead inboxes on

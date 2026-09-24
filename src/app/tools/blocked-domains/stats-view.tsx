@@ -1,82 +1,76 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { BlockedDomainJob } from "@/lib/jobs/blocked-domains-types";
+import type { BlockedInboxJob } from "@/lib/jobs/blocked-inboxes-types";
 import {
-  byTld,
-  byHost,
-  byHostAndTld,
+  byPlatform,
+  byPlatformAndTld,
   byProvider,
+  byTld,
   percent,
-  UNKNOWN_HOST,
-  UNKNOWN_TLD,
+  statsEntries,
+  UNKNOWN_PLATFORM,
   UNKNOWN_PROVIDER,
-  type Breakdown,
-  type BreakdownRow,
-} from "@/lib/blocked-domains/stats";
+  UNKNOWN_TLD,
+  type StatBreakdown,
+  type StatRow,
+} from "@/lib/blocked-inboxes/domains";
 import { formatNumber } from "@/lib/format";
 import { EmptyState } from "@/components/ui";
 import { GaugeIcon } from "@/components/icons";
 
-// Where the blocks come from: by the domain's ending, by the registrar it sits
-// with, and by the two together. Every record in the log is one block, so the
-// counts here are counts of blocked domains.
+// Where the blocks come from: by the domain's ending, by the platform it was
+// bought on, by mailbox provider, and by platform and ending together. A
+// domain counts once, as soon as any inbox on it is blocked; the domain-level
+// runs from before the move to inboxes count too.
 
-export function StatsView({ jobs }: { jobs: BlockedDomainJob[] }) {
-  if (jobs.length === 0) {
+export function StatsView({ inboxJobs, domainJobs }: { inboxJobs: BlockedInboxJob[]; domainJobs: BlockedDomainJob[] }) {
+  const entries = useMemo(() => statsEntries(inboxJobs, domainJobs), [inboxJobs, domainJobs]);
+  if (entries.length === 0) {
     return (
       <EmptyState icon={<GaugeIcon />} title="Nothing to count yet">
-        Once domains have come through from Clay, this breaks the blocks down
-        by ending and by domain host, so it is clear which ones keep getting
-        blocked.
+        Once inboxes have been blocked, this breaks the blocked domains down by ending and by platform, so it is clear
+        which ones keep getting blocked.
       </EmptyState>
     );
   }
 
-  const tld = byTld(jobs);
-  const host = byHost(jobs);
-  const pair = byHostAndTld(jobs);
-  const provider = byProvider(jobs);
-  const distinct = new Set(jobs.map((j) => j.domain)).size;
-  const hostsKnown = jobs.filter((j) => j.sheet?.domainHost?.trim()).length;
+  const tld = byTld(entries);
+  const platform = byPlatform(entries);
+  const pair = byPlatformAndTld(entries);
+  const provider = byProvider(entries);
+  const inboxes = entries.reduce((n, e) => n + e.blockedInboxes, 0);
+  const fromOld = entries.filter((e) => e.fromDomainRun).length;
+  const platformsKnown = entries.filter((e) => e.platform !== UNKNOWN_PLATFORM).length;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" data-stats>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Figure label="Blocks" value={formatNumber(jobs.length)} />
-        <Figure label="Distinct domains" value={formatNumber(distinct)} />
+        <Figure
+          label="Blocked domains"
+          value={formatNumber(entries.length)}
+          hint={fromOld > 0 ? `${formatNumber(fromOld)} from the old domain-level runs` : undefined}
+        />
+        <Figure label="Blocked inboxes" value={formatNumber(inboxes)} />
         <Figure label="Endings" value={formatNumber(tld.rows.length)} />
         <Figure
-          label="Hosts"
-          value={formatNumber(host.rows.filter((r) => r.key !== UNKNOWN_HOST).length)}
-          hint={
-            hostsKnown < jobs.length
-              ? `${formatNumber(jobs.length - hostsKnown)} block${jobs.length - hostsKnown === 1 ? "" : "s"} with no host in the sheet`
-              : undefined
-          }
+          label="Platforms"
+          value={formatNumber(platform.rows.filter((r) => r.key !== UNKNOWN_PLATFORM).length)}
+          hint={platformsKnown < entries.length ? `${formatNumber(entries.length - platformsKnown)} with no platform known` : undefined}
         />
       </div>
 
+      <BreakdownTable title="By ending" what="ending" breakdown={tld} intro="Which TLDs the blocked domains have. A share well above that ending's share of what you bought is the signal." />
       <BreakdownTable
-        title="By ending"
-        what="ending"
-        breakdown={tld}
-        intro="Which TLDs the blocked domains have. A share well above that ending's share of what you bought is the signal."
+        title="By platform"
+        what="platform"
+        breakdown={platform}
+        intro="Where each blocked domain was bought: the Domain Host column of the Domains sheet, or the registrar on the domain's public record when the sheet has none."
       />
+      <BreakdownTable title="By mailbox provider" what="provider" breakdown={provider} intro="Google or Microsoft, from what Plusvibe reports for the blocked inboxes." />
       <BreakdownTable
-        title="By domain host"
-        what="host"
-        breakdown={host}
-        intro="The registrar each blocked domain sits with, from the Domain Host column of the Domains sheet."
-      />
-      <BreakdownTable
-        title="By mailbox provider"
-        what="provider"
-        breakdown={provider}
-        intro="Google Workspace, Microsoft 365 or other, from what Plusvibe reports for the domain's inboxes. A domain is counted under the provider most of its inboxes were on."
-      />
-      <BreakdownTable
-        title="By host and ending"
+        title="By platform and ending"
         what="combination"
         breakdown={pair}
         intro="The two together — the exact combination that keeps producing blocks."
@@ -105,9 +99,8 @@ function BreakdownTable({
 }: {
   title: string;
   what: string;
-  breakdown: Breakdown;
+  breakdown: StatBreakdown;
   intro: string;
-  /** Show only the top N until asked for the rest. */
   collapsedAt?: number;
 }) {
   const [showAll, setShowAll] = useState(false);
@@ -127,25 +120,18 @@ function BreakdownTable({
       <p className="mt-1 text-xs text-muted-foreground">{intro}</p>
       {top && breakdown.rows.length > 1 && (
         <p className="mt-2 text-xs">
-          <span className="font-medium">{top.key}</span> leads with{" "}
-          {formatNumber(top.count)} of {formatNumber(breakdown.total)} blocks ({percent(top.share)}).
+          <span className="font-medium">{top.key}</span> leads with {formatNumber(top.domains)} of {formatNumber(breakdown.total)} blocked
+          domains ({percent(top.share)}).
         </p>
       )}
-
       <div className="mt-3 overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
             <tr className="text-left text-muted-foreground">
               <th className="pb-2 pr-3 font-medium capitalize">{what}</th>
-              <th className="pb-2 pr-3 font-medium">Share of blocks</th>
-              <th className="pb-2 pr-3 text-right font-medium">Blocks</th>
-              <th className="pb-2 pr-3 text-right font-medium" title="Not Active in the sheet, tenant queued">
-                Written off
-              </th>
-              <th className="pb-2 pr-3 text-right font-medium" title="Left sending: at or above the domain bar">
-                Kept
-              </th>
-              <th className="pb-2 pr-3 text-right font-medium">Inboxes stopped</th>
+              <th className="pb-2 pr-3 font-medium">Share of blocked domains</th>
+              <th className="pb-2 pr-3 text-right font-medium">Blocked domains</th>
+              <th className="pb-2 pr-3 text-right font-medium">Blocked inboxes</th>
               <th className="pb-2 text-right font-medium">Inboxes deleted</th>
             </tr>
           </thead>
@@ -156,13 +142,8 @@ function BreakdownTable({
           </tbody>
         </table>
       </div>
-
       {hidden > 0 && (
-        <button
-          type="button"
-          className="mt-2 text-xs text-muted-foreground underline"
-          onClick={() => setShowAll(true)}
-        >
+        <button type="button" className="mt-2 text-xs text-muted-foreground underline" onClick={() => setShowAll(true)}>
           {formatNumber(hidden)} more
         </button>
       )}
@@ -170,35 +151,22 @@ function BreakdownTable({
   );
 }
 
-function Row({ row }: { row: BreakdownRow }) {
+function Row({ row }: { row: StatRow }) {
+  const unknown = row.key.includes(UNKNOWN_PLATFORM) || row.key.includes(UNKNOWN_TLD) || row.key === UNKNOWN_PROVIDER;
   return (
     <tr className="border-t border-border">
-      <td className="py-2 pr-3 font-medium">
-        <span className={row.key.includes(UNKNOWN_HOST) || row.key.includes(UNKNOWN_TLD) || row.key === UNKNOWN_PROVIDER ? "text-muted-foreground" : ""}>
-          {row.key}
-        </span>
-        {row.domains !== row.count && (
-          <span className="ml-1.5 text-muted-foreground" title="Some domains were flagged more than once">
-            ({formatNumber(row.domains)} domain{row.domains === 1 ? "" : "s"})
-          </span>
-        )}
-      </td>
+      <td className={`py-2 pr-3 font-medium ${unknown ? "text-muted-foreground" : ""}`}>{row.key}</td>
       <td className="py-2 pr-3">
         <div className="flex items-center gap-2">
           <div className="h-2 w-full min-w-[80px] max-w-[220px] overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full rounded-full bg-accent"
-              style={{ width: `${Math.max(2, row.share * 100)}%` }}
-            />
+            <div className="h-full rounded-full bg-accent" style={{ width: `${Math.max(2, row.share * 100)}%` }} />
           </div>
           <span className="w-10 shrink-0 tabular-nums">{percent(row.share)}</span>
         </div>
       </td>
-      <td className="py-2 pr-3 text-right tabular-nums">{formatNumber(row.count)}</td>
-      <td className="py-2 pr-3 text-right tabular-nums">{formatNumber(row.writtenOff)}</td>
-      <td className="py-2 pr-3 text-right tabular-nums text-success">{formatNumber(row.kept)}</td>
-      <td className="py-2 pr-3 text-right tabular-nums">{formatNumber(row.inboxesStopped)}</td>
-      <td className="py-2 text-right tabular-nums">{formatNumber(row.inboxesDeleted)}</td>
+      <td className="py-2 pr-3 text-right tabular-nums">{formatNumber(row.domains)}</td>
+      <td className="py-2 pr-3 text-right tabular-nums">{formatNumber(row.blockedInboxes)}</td>
+      <td className="py-2 text-right tabular-nums">{formatNumber(row.deletedInboxes)}</td>
     </tr>
   );
 }

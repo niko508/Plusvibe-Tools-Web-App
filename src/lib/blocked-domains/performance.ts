@@ -51,6 +51,8 @@ export interface InboxStats {
   contacted: number;
   replies: number;
   oooReplies: number;
+  /** Bounced sends. Read for the inbox-level rules; the domain bars ignore it. */
+  bounces?: number;
   /** Percentages, as the API reports them: 7.5 means 7.5%. */
   replyRate: number;
   replyRateOoo: number;
@@ -107,6 +109,7 @@ export function readStatsRow(raw: Record<string, unknown>): InboxStats | null {
     contacted: num(contacted),
     replies: num(header.total_reply_count),
     oooReplies: num(header.total_ooo_reply_count),
+    bounces: num(header.total_bounce_count),
     replyRate: num(header.reply_rate),
     replyRateOoo: num(header.reply_rate_with_ooo),
   };

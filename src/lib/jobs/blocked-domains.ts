@@ -65,7 +65,6 @@ import {
 import {
   canRecheck,
   endOfTheLine,
-  isRecheckDue,
   nextRunAt,
   rebaseNextAt,
   startRecheck,
@@ -1154,30 +1153,32 @@ async function runSheet(rec: BlockedDomainJob) {
 // applies the same two bars to fresh figures: newly weak inboxes are stopped,
 // and a domain that has now fallen under its bar is written off.
 
-const TICK_MS = 60_000;
 /** Ids with a recheck in flight, so a slow run can't be started twice. */
 const rechecking = shared.rechecking;
+
+// Scheduled repeat checks were removed when the automation moved to single
+// inboxes: a flagged domain turned out not to say much, so re-judging whole
+// domains on a timer is gone. Nothing is scheduled any more, and at start-up
+// every schedule a domain still carried is ended, so none can fire again.
+const SCHEDULES_REMOVED = "Scheduled checks were removed.";
 
 export async function bootScheduler() {
   await loadOnce();
   if (shared.schedulerStarted) return;
   shared.schedulerStarted = true;
-  const timer = setInterval(() => void tick(), TICK_MS);
-  // Never keep the process alive just for this.
-  timer.unref?.();
-  // A check that came due while the process was down shouldn't wait a further
-  // minute — on Railway the process is replaced on every deploy.
-  void tick();
+  await retireSchedules();
   void backfillRegistrars().catch(() => undefined);
 }
 
-async function tick() {
-  const now = Date.now();
-  for (const [id, rec] of records) {
-    if (!isRecheckDue(rec, now) || !canRecheck(rec)) continue;
-    await runRecheck(id, "scheduled");
+/** Ends every repeat-check schedule on the domain log. */
+async function retireSchedules() {
+  for (const rec of records.values()) {
+    if (!rec.recheck?.enabled && rec.recheck?.nextAt === undefined) continue;
+    rec.recheck = { ...rec.recheck!, enabled: false, nextAt: undefined, endedReason: SCHEDULES_REMOVED };
+    await persist(rec.id);
   }
 }
+
 
 /**
  * Reads the domain's registrar from the sheet onto the record.
@@ -1240,36 +1241,14 @@ async function backfillRegistrars() {
   }
 }
 
-/** Arms the repeat checks for a record, if there is anything left to watch. */
+/**
+ * Once armed the repeat checks for a record. Scheduling is gone, so it now
+ * only makes sure a record carries no live schedule.
+ */
 async function scheduleRecheck(rec: BlockedDomainJob) {
-  const settings = await loadSettings();
-  // `inboxesFound` is already net of deletions — runDelete takes them off as
-  // it goes — so it is used as is. Subtracting the total deleted again, as
-  // this once did, read a domain with survivors as empty after any deletion
-  // and ended its schedule while inboxes were still sending.
-  const end = endOfTheLine({
-    inboxesFound: rec.inboxesFound,
-    keptInboxes: rec.inboxesKept ?? 0,
-    writtenOff: wasWrittenOff(rec),
-  });
-  const existing = rec.recheck;
-  if (end.reason) {
-    rec.recheck = {
-      enabled: false,
-      everyDays: existing?.everyDays ?? settings.recheckDays,
-      runs: existing?.runs ?? [],
-      endedReason: end.reason,
-    };
-    return;
-  }
-  rec.recheck = {
-    enabled: settings.recheck,
-    everyDays: settings.recheckDays,
-    nextAt: settings.recheck ? nextRunAt(Date.now(), settings.recheckDays) : undefined,
-    runs: existing?.runs ?? [],
-    endedReason: settings.recheck ? undefined : "Repeat checks are switched off.",
-  };
+  if (rec.recheck) rec.recheck = { ...rec.recheck, enabled: false, nextAt: undefined, endedReason: SCHEDULES_REMOVED };
 }
+
 
 /**
  * One repeat assessment of an already-flagged domain.
@@ -1442,6 +1421,8 @@ export async function setRecheck(id: string, enabled: boolean): Promise<boolean>
   await loadOnce();
   const rec = records.get(id);
   if (!rec) return false;
+  // Nothing can be scheduled any more.
+  if (enabled) return false;
   const settings = await loadSettings();
   const state = rec.recheck ?? startRecheck(Date.now(), settings.recheckDays, false);
   state.enabled = enabled;
