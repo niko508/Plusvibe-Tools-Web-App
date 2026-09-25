@@ -610,7 +610,7 @@ async function runInbox(id: string) {
     rec.tier = j.tier ? describeTier(j.tier) : undefined;
     rec.rule = j.tier ? describeRule(j.tier) : undefined;
     rec.reasons = j.reasons;
-    rec.overruled = j.overruled;
+    rec.overruled = j.overruled ?? j.notJudged;
     rec.judgedAt = Date.now();
     if (j.verdict !== "block") {
       rec.status = j.verdict === "untouched" ? "untouched" : "passed";

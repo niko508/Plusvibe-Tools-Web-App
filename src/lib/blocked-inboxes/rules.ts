@@ -26,7 +26,8 @@
 //
 // Those are the defaults. The tiers are edited on the tool's Settings tab and
 // stored with its other settings; validateRules is what stands between that
-// form and the rules an inbox is deleted on.
+// form and the rules an inbox is deleted on. The first tier may start above 0:
+// an inbox with fewer sends than that isn't judged at all.
 //
 // Pure module — no API — so all of it is unit-tested.
 
@@ -99,9 +100,9 @@ const asNum = (v: unknown): number | undefined =>
 
 /**
  * Checks a set of tiers from the Settings form. Each tier starts at a send
- * count (the first at 0) and runs to one below the next; its upper end is
- * worked out, never typed, so there can be no gaps or overlaps. Every problem
- * is named; nothing half-valid is ever saved.
+ * count and runs to one below the next; its upper end is worked out, never
+ * stored, so there can be no gaps or overlaps. Below the first tier nothing is
+ * judged. Every problem is named; nothing half-valid is ever saved.
  */
 export function validateRules(input: unknown): { rules: InboxRules | null; problems: string[] } {
   const src = (input ?? {}) as Record<string, unknown>;
@@ -116,7 +117,7 @@ export function validateRules(input: unknown): { rules: InboxRules | null; probl
     const tiers: Tier[] = [];
     raw.forEach((t, i) => {
       const n = i + 1;
-      const min = i === 0 ? 0 : asNum(t.min);
+      const min = asNum(t.min) ?? (i === 0 ? 0 : undefined);
       if (min === undefined || !Number.isInteger(min) || min < 0) {
         problems.push(`${label} tier ${n}: "from" must be a whole number of sends.`);
       } else if (i > 0 && tiers[i - 1] && min <= tiers[i - 1].min) {
@@ -158,6 +159,8 @@ export interface Judgement {
   reasons: string[];
   /** Set when the human reply rate kept an inbox that would otherwise be blocked. */
   overruled?: string;
+  /** Set when it sent fewer than the first tier starts at, so it wasn't judged. */
+  notJudged?: string;
 }
 
 const round = (n: number) => Math.round(n * 100) / 100;
@@ -198,6 +201,16 @@ export function describeRule(t: Tier): string {
 
 export function judgeInbox(provider: ProviderBucket, f: InboxFigures, rules: InboxRules = DEFAULT_RULES): Judgement {
   const rates = ratesOf(f);
+  const tiers = provider === "google" ? rules.google : provider === "microsoft" ? rules.microsoft : [];
+  if (tiers.length > 0 && f.sent < tiers[0].min) {
+    return {
+      verdict: "pass",
+      provider,
+      rates,
+      reasons: [],
+      notJudged: `${f.sent} send${f.sent === 1 ? "" : "s"} is under the ${tiers[0].min} the first tier starts at, so it isn't judged`,
+    };
+  }
   const tier = tierFor(provider, f.sent, rules);
   if (!tier) return { verdict: "untouched", provider, rates, reasons: [] };
 

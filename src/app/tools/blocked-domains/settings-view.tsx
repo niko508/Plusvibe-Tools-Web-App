@@ -16,23 +16,43 @@ import {
 import { blockedInboxAction, setBlockedDomainSettings } from "@/lib/api-client";
 import { copyToClipboard } from "@/lib/clipboard";
 import { Spinner } from "@/components/ui";
-import { AlertIcon, CheckIcon, CopyIcon, FireIcon, GaugeIcon, TrashIcon } from "@/components/icons";
+import { AlertIcon, CheckIcon, ChevronDownIcon, CopyIcon, FireIcon, GaugeIcon, TrashIcon } from "@/components/icons";
 
 type Side = "microsoft" | "google";
-/** A tier as the form holds it: numbers as typed. */
+/**
+ * A tier as the form holds it: numbers as typed. `to` is the last send count
+ * of the tier, shown for every tier but the last; it is the next tier's start
+ * less one, and editing either moves the other.
+ */
 interface DraftTier {
   min: string;
+  to: string;
   maxBounceRate: string;
   minOooReplyRate: string;
   humanReplyOverrule: string;
 }
 type Draft = Record<Side, DraftTier[]>;
 
-const str = (n: number | undefined) => (n === undefined ? "" : String(n));
-const toDraft = (r: InboxRules): Draft => ({
-  microsoft: r.microsoft.map((t) => ({ min: str(t.min), maxBounceRate: str(t.maxBounceRate), minOooReplyRate: str(t.minOooReplyRate), humanReplyOverrule: str(t.humanReplyOverrule) })),
-  google: r.google.map((t) => ({ min: str(t.min), maxBounceRate: str(t.maxBounceRate), minOooReplyRate: str(t.minOooReplyRate), humanReplyOverrule: str(t.humanReplyOverrule) })),
-});
+const str = (n: number | undefined | null) => (n === undefined || n === null ? "" : String(n));
+const draftSide = (tiers: InboxRules["microsoft"]): DraftTier[] =>
+  tiers.map((t) => ({
+    min: str(t.min),
+    to: str(t.max),
+    maxBounceRate: str(t.maxBounceRate),
+    minOooReplyRate: str(t.minOooReplyRate),
+    humanReplyOverrule: str(t.humanReplyOverrule),
+  }));
+const toDraft = (r: InboxRules): Draft => ({ microsoft: draftSide(r.microsoft), google: draftSide(r.google) });
+const whole = (v: string) => (/^\s*\d+\s*$/.test(v) ? Number(v) : null);
+/** Rule values only: what moves when a tier is moved up or down. */
+const RULE_KEYS = ["maxBounceRate", "minOooReplyRate", "humanReplyOverrule"] as const;
+/** The "to" boxes, which validateRules never sees: each must be a whole number. */
+const toProblems = (d: Draft): string[] =>
+  (["microsoft", "google"] as const).flatMap((side) =>
+    d[side].slice(0, -1).flatMap((t, i) =>
+      whole(t.to) === null ? [`${side === "microsoft" ? "Microsoft" : "Google"} tier ${i + 1}: "to" must be a whole number of sends.`] : []
+    )
+  );
 /** What is sent: empty optional fields left out, so "not checked" stays that. */
 const fromDraft = (d: Draft) => {
   const side = (tiers: DraftTier[]) =>
@@ -74,7 +94,11 @@ export function SettingsView({
     if (!touched) setDraft(toDraft(saved));
   }, [saved, touched]);
 
-  const checked = useMemo(() => validateRules(fromDraft(draft)), [draft]);
+  const checked = useMemo(() => {
+    const v = validateRules(fromDraft(draft));
+    const extra = toProblems(draft);
+    return extra.length > 0 ? { rules: null, problems: [...extra, ...v.problems] } : v;
+  }, [draft]);
   const dirty = !!checked.rules && !same(checked.rules, saved);
   const isDefault = !!checked.rules && same(checked.rules, DEFAULT_RULES);
 
@@ -92,25 +116,43 @@ export function SettingsView({
     : [];
   const storage = readiness?.jobStorage;
 
-  const edit = (side: Side, i: number, key: keyof DraftTier, value: string) => {
+  const change = (side: Side, fn: (tiers: DraftTier[]) => DraftTier[]) => {
     setTouched(true);
     setSavedNote(false);
-    setDraft((d) => ({ ...d, [side]: d[side].map((t, j) => (j === i ? { ...t, [key]: value } : t)) }));
+    setDraft((d) => ({ ...d, [side]: fn(d[side].map((t) => ({ ...t }))) }));
   };
-  const addTier = (side: Side) => {
-    setTouched(true);
-    setSavedNote(false);
-    setDraft((d) => {
-      const last = d[side][d[side].length - 1];
-      const from = String((Number(last?.min) || 0) + 10);
-      return { ...d, [side]: [...d[side], { min: from, maxBounceRate: last?.maxBounceRate ?? "10", minOooReplyRate: "", humanReplyOverrule: "" }] };
+  // A tier's "to" and the next tier's "from" are one boundary: typing either
+  // moves the other, so the ranges never gap or overlap.
+  const edit = (side: Side, i: number, key: keyof DraftTier, value: string) =>
+    change(side, (tiers) => {
+      tiers[i][key] = value;
+      const n = whole(value);
+      if (key === "min" && i > 0 && n !== null) tiers[i - 1].to = String(n - 1);
+      if (key === "to" && i < tiers.length - 1 && n !== null) tiers[i + 1].min = String(n + 1);
+      return tiers;
     });
-  };
-  const removeTier = (side: Side, i: number) => {
-    setTouched(true);
-    setSavedNote(false);
-    setDraft((d) => ({ ...d, [side]: d[side].filter((_, j) => j !== i) }));
-  };
+  const addTier = (side: Side) =>
+    change(side, (tiers) => {
+      const last = tiers[tiers.length - 1];
+      const from = (whole(last?.min ?? "") ?? 0) + 10;
+      if (last) last.to = String(from - 1);
+      return [...tiers, { min: String(from), to: "", maxBounceRate: last?.maxBounceRate ?? "10", minOooReplyRate: "", humanReplyOverrule: "" }];
+    });
+  const removeTier = (side: Side, i: number) =>
+    change(side, (tiers) => {
+      const rest = tiers.filter((_, j) => j !== i);
+      // The tier before takes over the removed one's sends.
+      if (i > 0) rest[i - 1].to = i < rest.length ? String((whole(rest[i].min) ?? 1) - 1) : "";
+      return rest;
+    });
+  // Moving a tier moves its rule; the send ranges stay where they are, in order.
+  const moveTier = (side: Side, i: number, by: -1 | 1) =>
+    change(side, (tiers) => {
+      const j = i + by;
+      if (j < 0 || j >= tiers.length) return tiers;
+      for (const k of RULE_KEYS) [tiers[i][k], tiers[j][k]] = [tiers[j][k], tiers[i][k]];
+      return tiers;
+    });
 
   async function saveRules() {
     if (!checked.rules) return;
@@ -184,11 +226,13 @@ export function SettingsView({
         <p className="mt-1 text-xs text-muted-foreground">
           Each inbox Clay sends is judged on its own last {JUDGE_WINDOW_DAYS} days, on the tier its send count falls in. Bounce
           rate is over everything sent; reply rates are over unique leads contacted, and the OOO reply rate counts
-          out-of-office replies too. Leave a box empty (“off”) to not check that figure. An inbox that is neither Microsoft nor
-          Google is left alone. Changes apply to inboxes judged from now on.
+          out-of-office replies too. Leave a box empty (“off”) to not check that figure. Editing a tier&apos;s “to” moves the next
+          tier&apos;s start with it; an inbox with fewer sends than the first tier starts at isn&apos;t judged. ↑ ↓ move a tier&apos;s rule
+          while the send ranges stay in order. An inbox that is neither Microsoft nor Google is left alone. Changes apply to inboxes
+          judged from now on.
         </p>
-        <TierTable side="microsoft" title="Microsoft (Azure)" tiers={draft.microsoft} onEdit={edit} onAdd={addTier} onRemove={removeTier} />
-        <TierTable side="google" title="Google" tiers={draft.google} onEdit={edit} onAdd={addTier} onRemove={removeTier} />
+        <TierTable side="microsoft" title="Microsoft (Azure)" tiers={draft.microsoft} onEdit={edit} onAdd={addTier} onRemove={removeTier} onMove={moveTier} />
+        <TierTable side="google" title="Google" tiers={draft.google} onEdit={edit} onAdd={addTier} onRemove={removeTier} onMove={moveTier} />
 
         {checked.problems.length > 0 && (
           <ul className="mt-4 space-y-1 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning" data-problems>
@@ -291,7 +335,7 @@ export function SettingsView({
                 if (e.key === "Enter") void tenantBlock();
               }}
             />
-            <button type="button" className="pv-btn-ghost text-danger disabled:opacity-50" data-tenant-block disabled={blocking || !blockDomain.trim()} onClick={tenantBlock}>
+            <button type="button" className="pv-btn-ghost shrink-0 whitespace-nowrap text-danger disabled:opacity-50" data-tenant-block disabled={blocking || !blockDomain.trim()} onClick={tenantBlock}>
               {blocking ? <Spinner size={14} /> : <TrashIcon size={14} />} Block domain
             </button>
           </div>
@@ -518,6 +562,7 @@ function TierTable({
   onEdit,
   onAdd,
   onRemove,
+  onMove,
 }: {
   side: Side;
   title: string;
@@ -525,6 +570,7 @@ function TierTable({
   onEdit: (side: Side, i: number, key: keyof DraftTier, value: string) => void;
   onAdd: (side: Side) => void;
   onRemove: (side: Side, i: number) => void;
+  onMove: (side: Side, i: number, by: -1 | 1) => void;
 }) {
   const num = (i: number, key: keyof DraftTier, label: string, suffix: string, placeholder = "") => (
     <span className="inline-flex items-center gap-1">
@@ -532,8 +578,8 @@ function TierTable({
         type="number"
         inputMode="decimal"
         min={0}
-        max={key === "min" ? undefined : 100}
-        step={key === "min" ? 1 : 0.1}
+        max={key === "min" || key === "to" ? undefined : 100}
+        step={key === "min" || key === "to" ? 1 : 0.1}
         className="pv-input w-20 py-1 text-xs tabular-nums"
         value={tiers[i][key]}
         placeholder={placeholder}
@@ -544,11 +590,6 @@ function TierTable({
       <span className="text-muted-foreground">{suffix}</span>
     </span>
   );
-  // What each row reads as, once it is a valid tier.
-  const upTo = (i: number) => {
-    const next = Number(tiers[i + 1]?.min);
-    return i === tiers.length - 1 ? "and up" : Number.isFinite(next) && next > 0 ? `to ${next - 1}` : "…";
-  };
 
   return (
     <div className="mt-5" data-tier-table={side}>
@@ -573,22 +614,51 @@ function TierTable({
             {tiers.map((t, i) => (
               <tr key={i} className="border-t border-border align-middle">
                 <td className="whitespace-nowrap py-2 pr-3">
-                  {i === 0 ? (
-                    <span className="inline-block w-20 py-1">0</span>
-                  ) : (
-                    num(i, "min", "from sends", "")
-                  )}{" "}
-                  <span className="text-muted-foreground">{upTo(i)}</span>
+                  <span className="inline-flex items-center gap-1.5">
+                    {num(i, "min", "from sends", "")}
+                    {i === tiers.length - 1 ? (
+                      <span className="text-muted-foreground">and up</span>
+                    ) : (
+                      <>
+                        <span className="text-muted-foreground">to</span>
+                        {num(i, "to", "to sends", "")}
+                      </>
+                    )}
+                  </span>
                 </td>
                 <td className="py-2 pr-3">{num(i, "maxBounceRate", "bounce over", "%")}</td>
                 <td className="py-2 pr-3">{num(i, "minOooReplyRate", "OOO reply rate under", "%", "off")}</td>
                 <td className="py-2 pr-3">{num(i, "humanReplyOverrule", "human reply rate over", "%", "off")}</td>
-                <td className="py-2 text-right">
-                  {tiers.length > 1 && (
-                    <button type="button" className="text-muted-foreground hover:text-danger" aria-label={`Remove ${title} tier ${i + 1}`} onClick={() => onRemove(side, i)}>
-                      <TrashIcon size={14} />
+                <td className="whitespace-nowrap py-2 text-right">
+                  <span className="inline-flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+                      aria-label={`Move ${title} tier ${i + 1}'s rule up`}
+                      title="Move this rule up a tier"
+                      data-move-up={`${side}-${i}`}
+                      disabled={i === 0}
+                      onClick={() => onMove(side, i, -1)}
+                    >
+                      <ChevronDownIcon size={14} className="rotate-180" />
                     </button>
-                  )}
+                    <button
+                      type="button"
+                      className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+                      aria-label={`Move ${title} tier ${i + 1}'s rule down`}
+                      title="Move this rule down a tier"
+                      data-move-down={`${side}-${i}`}
+                      disabled={i === tiers.length - 1}
+                      onClick={() => onMove(side, i, 1)}
+                    >
+                      <ChevronDownIcon size={14} />
+                    </button>
+                    {tiers.length > 1 && (
+                      <button type="button" className="text-muted-foreground hover:text-danger" aria-label={`Remove ${title} tier ${i + 1}`} onClick={() => onRemove(side, i)}>
+                        <TrashIcon size={14} />
+                      </button>
+                    )}
+                  </span>
                 </td>
               </tr>
             ))}

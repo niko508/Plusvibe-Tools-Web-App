@@ -94,7 +94,14 @@ console.log("--- rules edited on the Settings tab");
   eq("…the overrule too", judgeInbox("google", f(100, 20, 100, 2), rules).verdict, "pass");
   eq("…and the tier reads back", [describeTier(rules.microsoft[1]), describeRule(rules.google[1])], ["20–59 sends", "bounce > 10% or OOO reply rate < 2% · human reply rate > 1.5% overrules"]);
 }
-eq("the first tier always starts at 0, whatever was typed", validateRules({ microsoft: [{ min: "5", maxBounceRate: 50 }], google: [{ min: 0, maxBounceRate: 50 }] }).rules.microsoft[0].min, 0);
+eq("the first tier can start above 0", validateRules({ microsoft: [{ min: "5", maxBounceRate: 50 }], google: [{ min: 0, maxBounceRate: 50 }] }).rules.microsoft[0].min, 5);
+eq("…and an empty start is 0", validateRules({ microsoft: [{ min: "", maxBounceRate: 50 }], google: [{ min: 0, maxBounceRate: 50 }] }).rules.microsoft[0].min, 0);
+{
+  const rules = validateRules({ microsoft: [{ min: 5, maxBounceRate: 50 }], google: [{ min: 0, maxBounceRate: 50 }] }).rules;
+  const j = judgeInbox("microsoft", { sent: 4, bounces: 4, contacted: 4, replies: 0, oooReplies: 0 }, rules);
+  eq("below the first tier an inbox isn't judged, whatever it bounced", [j.verdict, j.tier, j.notJudged], ["pass", undefined, "4 sends is under the 5 the first tier starts at, so it isn't judged"]);
+  eq("…at the first tier it is", judgeInbox("microsoft", { sent: 5, bounces: 5, contacted: 5, replies: 0, oooReplies: 0 }, rules).verdict, "block");
+}
 eq("tiers out of order are refused, named",
   validateRules({ microsoft: [{ min: 0, maxBounceRate: 50 }, { min: 30, maxBounceRate: 20 }, { min: 30, maxBounceRate: 10 }], google: [{ min: 0, maxBounceRate: 50 }] }).problems,
   ["Microsoft tier 3: must start above 30 sends, where the tier before it starts."]);
