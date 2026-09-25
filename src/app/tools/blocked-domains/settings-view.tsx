@@ -26,17 +26,29 @@ type Side = "microsoft" | "google";
  * are tried top to bottom.
  */
 interface DraftTier {
+  /** Exactly one send count, a range, or a start and everything above it. */
+  mode: RangeMode;
   min: string;
+  /** Only read for a range. */
   to: string;
   maxBounceRate: string;
   minOooReplyRate: string;
   humanReplyOverrule: string;
 }
 type Draft = Record<Side, DraftTier[]>;
+type RangeMode = "exact" | "range" | "up";
+const MODES: { id: RangeMode; label: string }[] = [
+  { id: "exact", label: "Exactly" },
+  { id: "range", label: "From–to" },
+  { id: "up", label: "And up" },
+];
+/** The "to" a tier actually has: its own for a range, "from" when exact, none for "and up". */
+const effectiveTo = (t: DraftTier) => (t.mode === "exact" ? t.min : t.mode === "up" ? "" : t.to);
 
 const str = (n: number | undefined | null) => (n === undefined || n === null ? "" : String(n));
 const draftSide = (tiers: InboxRules["microsoft"]): DraftTier[] =>
   tiers.map((t) => ({
+    mode: t.max === null ? "up" : t.max === t.min ? "exact" : "range",
     min: str(t.min),
     to: str(t.max),
     maxBounceRate: str(t.maxBounceRate),
@@ -50,7 +62,9 @@ const fromDraft = (d: Draft) => {
     tiers.map((t) => ({
       min: t.min,
       // Always sent, so the server reads each tier as its own range.
-      max: t.to.trim() === "" ? null : t.to,
+      // A range with its "to" left empty is still asked for one, not
+      // quietly turned into "and up".
+      max: t.mode === "up" ? null : t.mode === "exact" ? t.min : t.to.trim() === "" ? "missing" : t.to,
       maxBounceRate: t.maxBounceRate,
       ...(t.minOooReplyRate.trim() ? { minOooReplyRate: t.minOooReplyRate } : {}),
       ...(t.humanReplyOverrule.trim() ? { humanReplyOverrule: t.humanReplyOverrule } : {}),
@@ -119,7 +133,14 @@ export function SettingsView({
   };
   const edit = (side: Side, i: number, key: keyof DraftTier, value: string) =>
     change(side, (tiers) => {
-      tiers[i][key] = value;
+      const t = tiers[i];
+      if (key === "mode") {
+        t.mode = value as RangeMode;
+        // Turning a single count into a range starts it as that count to itself.
+        if (t.mode === "range" && t.to.trim() === "") t.to = t.min;
+      } else {
+        t[key] = value;
+      }
       return tiers;
     });
   // A new tier starts where the covered sends end, or empty to fill in; its
@@ -127,13 +148,13 @@ export function SettingsView({
   const addTier = (side: Side) =>
     change(side, (tiers) => {
       const last = tiers[tiers.length - 1];
-      const ends = tiers.map((t) => Number(t.to)).filter((n) => Number.isInteger(n) && n >= 0);
-      const openEnded = tiers.some((t) => t.to.trim() === "");
-      const from = openEnded || ends.length === 0 ? "" : String(Math.max(...ends) + 1);
+      // A new tier is one exact send count to fill in, placed at the bottom;
+      // switch it to a range or "and up", and move it where it belongs.
       return [
         ...tiers,
         {
-          min: from,
+          mode: "exact",
+          min: "",
           to: "",
           maxBounceRate: last?.maxBounceRate ?? "10",
           minOooReplyRate: last?.minOooReplyRate ?? "",
@@ -155,7 +176,7 @@ export function SettingsView({
     change(side, (tiers) =>
       [...tiers].sort((a, b) => {
         const num = (v: string, open: number) => (v.trim() === "" || !Number.isFinite(Number(v)) ? open : Number(v));
-        return num(a.min, 0) - num(b.min, 0) || num(a.to, Infinity) - num(b.to, Infinity);
+        return num(a.min, 0) - num(b.min, 0) || num(effectiveTo(a), Infinity) - num(effectiveTo(b), Infinity);
       })
     );
 
@@ -231,8 +252,8 @@ export function SettingsView({
         <p className="mt-1 text-xs text-muted-foreground">
           Each inbox Clay sends is judged on its own last {JUDGE_WINDOW_DAYS} days, on the tier its send count falls in. Bounce
           rate is over everything sent; reply rates are over unique leads contacted, and the OOO reply rate counts
-          out-of-office replies too. Leave a box empty (“off”) to not check that figure. Each tier is its own range of sends: leave
-          “to” empty for “and up”, or give “from” and “to” the same number for exactly that many. Tiers are tried top to bottom and
+          out-of-office replies too. Leave a box empty (“off”) to not check that figure. Each tier is its own range of sends —
+          exactly one number, from–to, or a number and up. Tiers are tried top to bottom and
           the first that covers an inbox&apos;s sends is used, so a narrow tier above a wide one is an exception to it — ↑ ↓ move a
           whole tier. Sends no tier covers aren&apos;t judged. An inbox that is neither Microsoft nor Google is left alone. Changes
           apply to inboxes judged from now on.
@@ -630,9 +651,27 @@ function TierTable({
               <tr key={i} className="border-t border-border align-middle">
                 <td className="whitespace-nowrap py-2 pr-3">
                   <span className="inline-flex items-center gap-1.5">
-                    {num(i, "min", "from sends", "")}
-                    <span className="text-muted-foreground">to</span>
-                    {num(i, "to", "to sends (empty for and up)", "", "and up")}
+                    <select
+                      className="pv-input w-24 py-1 text-xs"
+                      value={t.mode}
+                      aria-label={`${title} tier ${i + 1}: kind of range`}
+                      data-tier-mode={`${side}-${i}`}
+                      onChange={(e) => onEdit(side, i, "mode", e.target.value)}
+                    >
+                      {MODES.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                    {num(i, "min", t.mode === "exact" ? "sends" : "from sends", "", t.mode === "exact" ? "sends" : "from")}
+                    {t.mode === "range" && (
+                      <>
+                        <span className="text-muted-foreground">to</span>
+                        {num(i, "to", "to sends", "", "to")}
+                      </>
+                    )}
+                    {t.mode === "up" && <span className="text-muted-foreground">and up</span>}
                   </span>
                 </td>
                 <td className="py-2 pr-3">{num(i, "maxBounceRate", "bounce over", "%")}</td>

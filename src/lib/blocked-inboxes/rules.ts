@@ -130,7 +130,7 @@ export function validateRules(input: unknown): { rules: InboxRules | null; probl
       if (min === undefined || !Number.isInteger(min) || min < 0) problems.push(`${label} tier ${n}: "from" must be a whole number of sends.`);
       const max = legacy ? null : asNum(t.max);
       if (max !== undefined && max !== null && (!Number.isInteger(max) || max < 0)) {
-        problems.push(`${label} tier ${n}: "to" must be a whole number of sends, or empty for "and up".`);
+        problems.push(`${label} tier ${n}: "to" must be a whole number of sends.`);
       } else if (max !== undefined && max !== null && min !== undefined && max < min) {
         problems.push(`${label} tier ${n}: "to" (${max}) is below "from" (${min}).`);
       }
