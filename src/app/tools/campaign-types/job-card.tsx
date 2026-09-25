@@ -307,6 +307,11 @@ function SourceBlock({ source, mode, running }: { source: SourceRun; mode: Campa
     <div className="rounded-xl border border-border/70 p-2.5" data-source-block={source.campaignId}>
       <div className="mb-2 flex items-center gap-2">
         <span className="truncate text-xs font-medium">{source.campaignName}</span>
+        {source.convert?.state === "done" && source.convert.renamed && (
+          <span className="truncate text-[11px] text-muted-foreground" data-renamed-to>
+            → {source.convert.to}
+          </span>
+        )}
         {source.state === "error" && <span className="shrink-0 rounded-full bg-danger/10 px-2 py-0.5 text-[11px] text-danger">problem</span>}
         {source.state === "done" && <CheckIcon size={13} className="shrink-0 text-success" />}
         {source.state === "running" && <Spinner size={11} />}
@@ -325,7 +330,7 @@ function SourceBlock({ source, mode, running }: { source: SourceRun; mode: Campa
       </ol>
       {moving.plannedTotal > 0 && (
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-          <Metric label={shortName(source.campaignName)} sub="stays put" value={moving.staysInSource} />
+          <Metric label={shortName(source.convert?.state === "done" ? source.convert.to : source.campaignName)} sub="stays put" value={moving.staysInSource} />
           {targets
             .filter((t) => t.state !== "skipped")
             .map((t) => (
@@ -356,6 +361,30 @@ function SourceDetails({ source, many }: { source: SourceRun; many: boolean }) {
         label="Domains resolved"
         value={`${formatNumber(sorting.domainsResolved)} / ${formatNumber(sorting.domainsTotal)}${sorting.unresolvedDomains > 0 ? ` · ${formatNumber(sorting.unresolvedDomains)} unresolved` : ""}`}
       />
+      {source.convert && (
+        <Detail
+          label={`Original → ${source.convert.to}`}
+          value={
+            source.convert.state === "error"
+              ? source.convert.error || "failed"
+              : source.convert.state !== "done"
+                ? source.convert.state
+                : [
+                    source.convert.applied.length > 0
+                      ? (source.convert.replaced.length > 0 ? `opt-out updated to the new text on step 1 ${source.convert.replaced.join(", ")}` : "") +
+                        (source.convert.applied.length > source.convert.replaced.length
+                          ? `${source.convert.replaced.length > 0 ? "; " : ""}opt-out added to step 1 ${source.convert.applied.filter((l) => !source.convert!.replaced.includes(l)).join(", ")}`
+                          : "")
+                      : null,
+                    source.convert.alreadyPresent.length > 0 ? `already had it on ${source.convert.alreadyPresent.join(", ")}` : null,
+                    source.convert.renamed ? "renamed" : "already had the Opt Out name",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+          }
+          mono
+        />
+      )}
       {created.map((c) => (
         <Detail
           key={c.role}

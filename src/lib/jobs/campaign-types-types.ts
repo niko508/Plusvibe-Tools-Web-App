@@ -28,7 +28,7 @@ export const MAX_STORED_ERRORS = 50;
  * campaign-types/kinds.ts, which imports CREATED_ROLES from this file: the
  * dependency has to run one way.
  */
-export type CampaignKind = "default" | "optOut" | "signature";
+export type CampaignKind = "default" | "optOut" | "signature" | "optOutOnly";
 
 /**
  * What a run does.
@@ -210,6 +210,25 @@ export interface SourceRun {
   created: CreatedCampaign[];
   moving: MovingProgress;
   activation: ActivationTarget[];
+  /**
+   * Opt Out only: the original itself is turned into the Opt Out campaign —
+   * the opt-out line added to its step 1, then renamed — before its 🔵 copy
+   * is made from it.
+   */
+  convert?: ConvertOriginal;
+}
+
+export interface ConvertOriginal {
+  state: PhaseState;
+  /** The name it had, and the Opt Out name it gets. */
+  from: string;
+  to: string;
+  /** Step-1 variants that got the line, of those the ones whose old text was swapped, and the ones that had it. */
+  applied: string[];
+  replaced: string[];
+  alreadyPresent: string[];
+  renamed: boolean;
+  error?: string;
 }
 
 export interface SegmentRuleProgress {

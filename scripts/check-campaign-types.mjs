@@ -673,8 +673,8 @@ eq("…each with a colour the API will take", [POOL_TAGS.google.color, POOL_TAGS
 console.log("--- campaign types");
 const kindsMod = await importTs("@/lib/campaign-types/kinds");
 const { rolesFor, normalizeKinds, kindOfRole, describeKinds, KIND_ORDER, KIND_LABELS } = kindsMod;
-eq("the three types, in order", KIND_ORDER, ["default", "optOut", "signature"]);
-eq("…named as the form shows them", KIND_ORDER.map((k) => KIND_LABELS[k]), ["Default", "With Opt Out", "With Signature"]);
+eq("the three types, then Opt Out only, in order", KIND_ORDER, ["default", "optOut", "signature", "optOutOnly"]);
+eq("…named as the form shows them", KIND_ORDER.map((k) => KIND_LABELS[k]), ["Default", "With Opt Out", "With Signature", "Opt Out only"]);
 eq("all three types make all five copies, in creation order", rolesFor(["default", "optOut", "signature"]), roles.CREATED_ROLES);
 eq("Default alone makes the 🔵 copy only", rolesFor(["default"]), ["blue"]);
 eq("With Opt Out makes the pair", rolesFor(["optOut"]), ["optOut", "blueOptOut"]);
@@ -686,6 +686,23 @@ eq("whatever the form sends is cleaned: junk out, repeats folded, order fixed",
 eq("not a list is nothing", [normalizeKinds("default"), normalizeKinds(undefined)], [[], []]);
 eq("every copy belongs to a type", roles.CREATED_ROLES.map(kindOfRole), ["default", "optOut", "optOut", "signature", "signature"]);
 eq("the types read as a list", describeKinds(["signature", "default"]), "Default, With Signature");
+
+console.log("--- Opt Out only");
+{
+  const { toggleKinds, convertsOriginal, DEFAULT_KINDS } = kindsMod;
+  const { deriveNames } = await importTs("@/lib/campaign-types/names");
+  eq("Opt Out only makes the 🔵 Opt Out copy alone", rolesFor(["optOutOnly"]), ["blueOptOut"]);
+  eq("…and stands alone: sent with the others, it is the one kept", normalizeKinds(["default", "optOutOnly", "signature"]), ["optOutOnly"]);
+  eq("…and says the originals are converted", [convertsOriginal(["optOutOnly"]), convertsOriginal(DEFAULT_KINDS)], [true, false]);
+  eq("ticking it clears the three", toggleKinds(["default", "optOut", "signature"], "optOutOnly"), ["optOutOnly"]);
+  eq("ticking one of the three clears it", toggleKinds(["optOutOnly"], "signature"), ["signature"]);
+  eq("unticking it goes back to the three, not to nothing", toggleKinds(["optOutOnly"], "optOutOnly"), ["default", "optOut", "signature"]);
+  eq("the three still tick and untick as before", [toggleKinds(["default", "optOut"], "optOut"), toggleKinds(["signature"], "default")], [["default"], ["default", "signature"]]);
+  const n = deriveNames("🟡 SaaS - GEO - Sales Led (August)");
+  eq("the original takes the Opt Out name, 🟡 kept; its 🔵 copy the 🔵 Opt Out name", [n.optOut, n.blueOptOut], ["🟡 SaaS - GEO - Sales Led - Opt Out (August)", "🔵 SaaS - GEO - Sales Led - Opt Out (August)"]);
+  const again = deriveNames("🟡 SaaS - GEO - Sales Led - Opt Out (August)");
+  eq("an original already named Opt Out keeps its name, and its 🔵 copy matches", [again.optOut, again.blueOptOut], ["🟡 SaaS - GEO - Sales Led - Opt Out (August)", "🔵 SaaS - GEO - Sales Led - Opt Out (August)"]);
+}
 
 // --- sorting by segment ---------------------------------------------------------
 console.log("--- segments");

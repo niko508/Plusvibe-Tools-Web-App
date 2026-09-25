@@ -13,7 +13,7 @@ import {
   deleteCampaignTypesJob,
   ApiClientError,
 } from "@/lib/api-client";
-import { KIND_HINTS, KIND_LABELS, KIND_ORDER, rolesFor, type CampaignKind } from "@/lib/campaign-types/kinds";
+import { DEFAULT_KINDS, KIND_HINTS, KIND_LABELS, KIND_ORDER, convertsOriginal, rolesFor, toggleKinds, type CampaignKind } from "@/lib/campaign-types/kinds";
 import { MAX_RULES, validateRules, type SegmentRule } from "@/lib/campaign-types/segments";
 import { ALLOC_ROLE_LABELS, classifyDestinations } from "@/lib/campaign-types/allocate";
 import { useApiKey } from "@/lib/use-api-key";
@@ -60,7 +60,7 @@ export function CampaignTypesTool() {
 
   const [rows, setRows] = useState<SegmentRow[]>(emptyRows);
   const [emptyTo, setEmptyTo] = useState("");
-  const [kinds, setKinds] = useState<CampaignKind[]>(KIND_ORDER);
+  const [kinds, setKinds] = useState<CampaignKind[]>(DEFAULT_KINDS);
   const [activate, setActivate] = useState(true);
   const [mode, setMode] = useState<CampaignTypesMode>("create");
   /** Fix Allocation: the campaigns the leads go to, and the segment to take. */
@@ -206,6 +206,12 @@ export function CampaignTypesTool() {
   // In list order, whatever order they were ticked in, so the run is predictable.
   const sources = useMemo(() => parents.filter((c) => selected.includes(c.id)), [parents, selected]);
   const roles = useMemo(() => rolesFor(kinds), [kinds]);
+  // Opt Out only turns each original into its Opt Out campaign in place.
+  const converting = mode === "create" && convertsOriginal(kinds);
+  // Opt Out only is a create-run choice; the Move leads tab goes back to the three.
+  useEffect(() => {
+    if (mode !== "create" && convertsOriginal(kinds)) setKinds([...DEFAULT_KINDS]);
+  }, [mode, kinds]);
 
   // A rule pointing at a campaign that was un-ticked is cleared: the leads
   // it names can only go to one of the originals.
@@ -268,9 +274,20 @@ export function CampaignTypesTool() {
           reused: existing.get(normalizeName(names[role])) ?? null,
         }));
         const match = mode === "move" ? matchCompanions(source.name, parents, source.id, roles) : null;
-        return { source, names, rows: rowsFor, match };
+        // Opt Out only: the name the original takes, and whether another
+        // campaign already has it — which the run refuses.
+        const renameTo = converting ? names.optOut : null;
+        const renameTaken = renameTo ? (existing.get(normalizeName(renameTo)) ?? null) : null;
+        return {
+          source,
+          names,
+          rows: rowsFor,
+          match,
+          renameTo,
+          renameTaken: renameTaken && renameTaken.id !== source.id ? renameTaken : null,
+        };
       }),
-    [sources, roles, existing, mode, parents]
+    [sources, roles, existing, mode, parents, converting]
   );
 
   // Two originals whose copies would share a name — "X" and "🔵 X" picked
@@ -278,6 +295,9 @@ export function CampaignTypesTool() {
   // said here.
   const nameClash = useMemo(() => {
     const taken = new Map<string, string>();
+    for (const p of previews) {
+      if (p.renameTaken) return `"${p.source.name}" would be renamed "${p.renameTo}", but another campaign already has that name. Rename or archive that one first.`;
+    }
     for (const s of sources) taken.set(normalizeName(s.name), s.name);
     for (const p of previews) {
       for (const r of p.rows) {
@@ -321,7 +341,7 @@ export function CampaignTypesTool() {
   }
 
   function toggleKind(kind: CampaignKind) {
-    setKinds((prev) => (prev.includes(kind) ? prev.filter((k) => k !== kind) : KIND_ORDER.filter((k) => k === kind || prev.includes(k))));
+    setKinds((prev) => toggleKinds(prev, kind));
   }
 
   function setRow(i: number, patch: Partial<SegmentRow>) {
@@ -646,11 +666,15 @@ export function CampaignTypesTool() {
         {mode !== "fix" && (
         <div data-kinds>
           <div className="mb-1.5 text-xs font-medium text-muted-foreground">Campaign types</div>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {KIND_ORDER.map((k) => {
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {KIND_ORDER.filter((k) => mode === "create" || k !== "optOutOnly").map((k) => {
               const on = kinds.includes(k);
               return (
-                <label key={k} className={`flex cursor-pointer items-start gap-2 rounded-xl border p-2.5 ${on ? "border-accent/50 bg-accent/5" : "border-border"}`}>
+                <label
+                  key={k}
+                  data-kind={k}
+                  className={`flex cursor-pointer items-start gap-2 rounded-xl border p-2.5 ${on ? "border-accent/50 bg-accent/5" : "border-border"} ${k === "optOutOnly" ? "border-dashed" : ""}`}
+                >
                   <input type="checkbox" className="mt-0.5" checked={on} onChange={() => toggleKind(k)} aria-label={`Type ${KIND_LABELS[k]}`} />
                   <span className="min-w-0">
                     <span className="block text-sm font-medium">{KIND_LABELS[k]}</span>
@@ -660,6 +684,16 @@ export function CampaignTypesTool() {
               );
             })}
           </div>
+          {converting && (
+            <p className="mt-2 flex gap-1.5 text-xs text-muted-foreground" data-opt-out-only-note>
+              <AlertIcon size={13} className="mt-0.5 shrink-0" />
+              <span>
+                Opt Out only changes the originals themselves — including the campaigns your segments point to: step 1 of each gets the
+                current opt-out line (old opt-out text is swapped for it, variants that already have it are left alone) and each is renamed
+                to its Opt Out name. Only the 🔵 Opt Out copies are created. It can&apos;t be combined with the other types.
+              </span>
+            </p>
+          )}
           {kinds.length === 0 && (
             <p className="mt-2 flex gap-1.5 text-xs text-warning">
               <AlertIcon size={13} className="mt-0.5 shrink-0" />
@@ -674,7 +708,9 @@ export function CampaignTypesTool() {
           <div className="rounded-xl border border-border p-3 sm:p-4" data-preview>
             <h3 className="mb-1 text-sm font-medium">
               {mode === "create"
-                ? `${formatNumber(toCreate)} campaign${toCreate === 1 ? "" : "s"} will be created from ${sources.length === 1 ? "this original" : `${sources.length} originals`}`
+                ? converting
+                  ? `${sources.length === 1 ? "The original is" : `${sources.length} originals are`} turned into Opt Out, and ${formatNumber(toCreate)} 🔵 cop${toCreate === 1 ? "y is" : "ies are"} created`
+                  : `${formatNumber(toCreate)} campaign${toCreate === 1 ? "" : "s"} will be created from ${sources.length === 1 ? "this original" : `${sources.length} originals`}`
                 : foundCount === 0
                   ? "None of the copies are in this workspace"
                   : `Leads go to the ${formatNumber(foundCount)} cop${foundCount === 1 ? "y" : "ies"} that ${foundCount === 1 ? "is" : "are"} there`}
@@ -689,6 +725,19 @@ export function CampaignTypesTool() {
                 <div key={p.source.id} data-preview-source={p.source.id}>
                   <div className="mb-1 truncate text-xs font-medium">{p.source.name}</div>
                   <div className="space-y-1.5">
+                    {mode === "create" && p.renameTo && (
+                      <div className="flex flex-col gap-1 rounded-lg border border-border/70 px-2.5 py-2 sm:flex-row sm:items-center sm:justify-between" data-convert-row={p.source.id}>
+                        <div className="min-w-0">
+                          <div className="truncate font-mono text-xs">{p.renameTo}</div>
+                          <div className="mt-0.5 text-[11px] text-muted-foreground">
+                            The original itself — opt-out line on step 1{normalizeName(p.renameTo) === normalizeName(p.source.name) ? "; already named for it" : ", renamed"}
+                          </div>
+                        </div>
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${p.renameTaken ? "bg-danger/10 text-danger" : "bg-accent/10 text-accent"}`}>
+                          {p.renameTaken ? "name already taken" : normalizeName(p.renameTo) === normalizeName(p.source.name) ? "will be updated" : "will be renamed"}
+                        </span>
+                      </div>
+                    )}
                     {mode === "create"
                       ? p.rows.map((r) => (
                           <div key={r.role} className="flex flex-col gap-1 rounded-lg border border-border/70 px-2.5 py-2 sm:flex-row sm:items-center sm:justify-between">

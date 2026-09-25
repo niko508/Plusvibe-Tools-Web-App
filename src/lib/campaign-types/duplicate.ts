@@ -82,3 +82,25 @@ export async function launchCampaign(params: {
     },
   });
 }
+
+/**
+ * Renames a campaign in place.
+ *
+ *   POST /campaign/set/name  { workspace_id, campaign_id, name }
+ *
+ * Used by Opt Out only, which turns the original itself into the Opt Out
+ * campaign rather than making a plain copy of it.
+ */
+export async function renameCampaign(params: {
+  apiKey: string;
+  workspaceId: string;
+  campaignId: string;
+  name: string;
+}): Promise<void> {
+  await acquireSlot();
+  await plusvibePost<{ status?: string }>({
+    apiKey: params.apiKey,
+    path: "/campaign/set/name",
+    body: { workspace_id: params.workspaceId, campaign_id: params.campaignId, name: params.name },
+  });
+}

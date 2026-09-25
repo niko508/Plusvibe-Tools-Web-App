@@ -13,9 +13,10 @@ import { resolveLeadEsps } from "@/lib/campaign-types/resolve-esp";
 import { planSplitFor, type Availability } from "@/lib/campaign-types/split";
 import { applyOptOutToCampaign } from "@/lib/campaign-types/apply-opt-out";
 import { applySignatureToCampaign } from "@/lib/campaign-types/apply-signature";
-import { duplicateCampaign, launchCampaign } from "@/lib/campaign-types/duplicate";
+import { duplicateCampaign, launchCampaign, renameCampaign } from "@/lib/campaign-types/duplicate";
 import { buildReuseIndex, matchCompanions, normalizeName } from "@/lib/campaign-types/match";
-import { rolesFor, type CampaignKind } from "@/lib/campaign-types/kinds";
+import { convertsOriginal, rolesFor, type CampaignKind } from "@/lib/campaign-types/kinds";
+import { deriveNames } from "@/lib/campaign-types/names";
 import { poolOf, sidesFor } from "@/lib/campaign-types/pools";
 import { classifyDestinations, planAllocation, type AllocDestination, type AllocRole } from "@/lib/campaign-types/allocate";
 import { resumePayload, shouldAutoResume, supersededBy } from "@/lib/campaign-types/resume";
@@ -55,7 +56,9 @@ import {
 //   2 building    each original in turn: sort its leads by mailbox provider
 //                 (Google stays plain, Microsoft and everyone else goes 🔵),
 //                 duplicate the copies asked for, add the opt-out line and
-//                 swap the sign-off, move each side into its campaigns
+//                 swap the sign-off (Opt Out only: first turn the original
+//                 itself into the Opt Out campaign — the line added, renamed —
+//                 and copy only its 🔵), move each side into its campaigns
 //                 (add → verify → delete), launch everything
 //   3 tagging     every plain campaign is tagged google-pool, every 🔵 one
 //                 microsoft-pool; the tags are created in the workspace when
@@ -425,7 +428,10 @@ export function labelFor(sources: { campaignName: string }[]): string {
   return sources.length === 1 ? first : `${first} + ${sources.length - 1} more`;
 }
 
-function newSourceRun(src: SourceInput, roles: CreatedRole[], mode: "create" | "move", activate: boolean): SourceRun {
+function newSourceRun(src: SourceInput, roles: CreatedRole[], mode: "create" | "move", activate: boolean, convert = false): SourceRun {
+  // Opt Out only: the original becomes the plain Opt Out campaign, under the
+  // name a With Opt Out copy of it would have had.
+  const convertTo = convert ? (src.names.optOut || deriveNames(src.campaignName).optOut) : "";
   // A move run edits no copy: the campaigns it finds already carry their
   // opt-out line and sign-off, and touching them again is not its business.
   const created: CreatedCampaign[] = roles.map((role) => ({
@@ -441,7 +447,7 @@ function newSourceRun(src: SourceInput, roles: CreatedRole[], mode: "create" | "
   const activation: ActivationTarget[] = activate
     ? (["source", ...roles] as CampaignRole[]).map((role) => ({
         role,
-        name: role === "source" ? src.campaignName : src.names[role as CreatedRole],
+        name: role === "source" ? (convert ? convertTo : src.campaignName) : src.names[role as CreatedRole],
         state: "pending" as const,
       }))
     : [];
@@ -462,6 +468,19 @@ function newSourceRun(src: SourceInput, roles: CreatedRole[], mode: "create" | "
     created,
     moving: { targets: moving, staysInSource: 0, processed: 0, plannedTotal: 0 },
     activation,
+    ...(convert
+      ? {
+          convert: {
+            state: "pending" as const,
+            from: src.campaignName,
+            to: convertTo,
+            applied: [],
+            replaced: [],
+            alreadyPresent: [],
+            renamed: false,
+          },
+        }
+      : {}),
   };
 }
 
@@ -533,7 +552,7 @@ export async function createJob(apiKey: string, payload: CampaignTypesStartPaylo
       moved: 0,
     },
     sources: payload.sources.map((s) => {
-      const run = newSourceRun(s, roles, mode === "create" ? "create" : "move", activate);
+      const run = newSourceRun(s, roles, mode === "create" ? "create" : "move", activate, mode === "create" && convertsOriginal(payload.kinds));
       const carried = payload.carry?.[s.campaignId] ?? {};
       for (const t of run.moving.targets) if ((carried[t.role] ?? 0) > 0) t.carried = carried[t.role];
       return run;
@@ -1155,6 +1174,46 @@ async function runSource(
     await persist(id);
   }
 
+  // Opt Out only: the original itself becomes the Opt Out campaign before its
+  // 🔵 copy is made from it, so the copy carries the line from the start.
+  if (mode === "create" && src.convert && src.convert.state !== "done") {
+    const conv = src.convert;
+    conv.state = "running";
+    conv.error = undefined;
+    await persist(id);
+    try {
+      // Two campaigns under one name break every later match by name — the
+      // Move leads tab, a re-run, Fix Allocation — so a taken name stops it.
+      const holder = workspaceCampaigns.find((c) => c.id !== sourceCampaignId && normalizeName(c.name) === normalizeName(conv.to));
+      if (holder) throw new Error(`another campaign is already called "${holder.name}". Rename or archive that one, then run again`);
+      const res = await applyOptOutToCampaign({ apiKey, workspaceId, campaignId: sourceCampaignId });
+      conv.applied = res.applied;
+      conv.replaced = res.replaced;
+      conv.alreadyPresent = res.alreadyPresent;
+      if (!res.verified) pushError(rec, `${who}The opt-out line was written to the original but the re-read didn't confirm it. Check step 1 in Plusvibe before launching.`);
+      check();
+      const current = workspaceCampaigns.find((c) => c.id === sourceCampaignId)?.name ?? src.campaignName;
+      if (normalizeName(current) !== normalizeName(conv.to)) {
+        await renameCampaign({ apiKey, workspaceId, campaignId: sourceCampaignId, name: conv.to });
+        conv.renamed = true;
+      }
+      conv.state = "done";
+      const act = src.activation.find((a) => a.role === "source");
+      if (act) act.name = conv.to;
+    } catch (err) {
+      if (err instanceof AbortedError || m.aborted) throw err;
+      conv.state = "error";
+      conv.error = msg(err);
+      pushError(rec, `${who}Could not turn the original into "${conv.to}": ${msg(err)}. Nothing was copied and no leads moved.`);
+      src.phaseStates.duplicating = "error";
+      src.state = "error";
+      await persist(id);
+      return;
+    }
+    rec.updatedAt = Date.now();
+    await persist(id);
+  }
+
   for (const target of src.created) {
     if (mode === "move") break;
     check();
@@ -1382,7 +1441,7 @@ async function runTagging(ctx: RunCtx) {
   // Google campaigns, the 🔵 copies Microsoft ones.
   const targets: TagTarget[] = [];
   for (const src of rec.sources) {
-    targets.push({ campaignId: src.campaignId, name: src.campaignName, tag: "google-pool", state: "pending" });
+    targets.push({ campaignId: src.campaignId, name: src.convert?.state === "done" ? src.convert.to : src.campaignName, tag: "google-pool", state: "pending" });
     for (const c of src.created) {
       if (!c.campaignId) continue;
       targets.push({ campaignId: c.campaignId, name: c.name, tag: poolOf(c.role) === "google" ? "google-pool" : "microsoft-pool", state: "pending" });
