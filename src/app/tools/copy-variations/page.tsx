@@ -19,7 +19,8 @@ export default function CopyVariationsPage() {
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground sm:text-base">
             Pick a campaign, paste your variants in the usual{" "}
-            <span className="font-mono text-xs">VARIANT n — name</span> format,
+            <span className="font-mono text-xs">VARIANT n — name</span> or{" "}
+            <span className="font-mono text-xs">EMAIL n — name</span> format,
             and add them all to a sequence step at once — the subject line and
             the variants already there are left untouched.
           </p>

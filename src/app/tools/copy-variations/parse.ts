@@ -1,6 +1,7 @@
 import { bodyToHtml } from "@/lib/body-html";
 
-// Parses the pasted "VARIANT N — Name" block format into structured variants.
+// Parses the pasted "VARIANT N — Name" (or "EMAIL N — Name") block format into
+// structured variants.
 //
 // Expected shape (rule lines and headers are both optional/tolerated):
 //
@@ -15,8 +16,11 @@ import { bodyToHtml } from "@/lib/body-html";
 //
 //   <body…>
 //
+// The variation generator writes the same blocks headed "EMAIL 3 — Template 2:
+// Conditional Opening V2 · Arrangement 1"; those headers are read the same way.
+//
 // Rule lines (runs of ═ or =) are pure decoration and are stripped. Variants are
-// split on the "VARIANT n" header lines. If the paste has no headers at all we
+// split on the "VARIANT n" / "EMAIL n" header lines. If the paste has no headers at all we
 // fall back to splitting on the rule lines, so a plain separator-delimited list
 // still works.
 
@@ -42,8 +46,9 @@ export interface ParseResult {
 // A decoration rule: a line made only of ═ or = (3 or more).
 const RULE_RE = /^\s*(?:═|=){3,}\s*$/;
 
-// "VARIANT 12 — Some name", "Variant 3: Name", "VARIANT 4" (name optional).
-const HEADER_RE = /^\s*VARIANT\s+(\d+)\s*(?:[—–\-:]\s*(.*))?$/i;
+// "VARIANT 12 — Some name", "Variant 3: Name", "VARIANT 4" (name optional), and
+// "EMAIL 14 — Template 7: New Method · Arrangement 10".
+const HEADER_RE = /^\s*(?:VARIANT|EMAIL)\s+(\d+)\s*(?:[—–\-:]\s*(.*))?$/i;
 
 export function parseVariants(raw: string): ParseResult {
   const warnings: string[] = [];
@@ -96,7 +101,7 @@ export function parseVariants(raw: string): ParseResult {
     const variants = blocks.map((body, i) => toVariant(i + 1, undefined, "", body));
     if (variants.length > 0) {
       warnings.push(
-        `No "VARIANT n" headers found — split into ${variants.length} block${
+        `No "VARIANT n" or "EMAIL n" headers found — split into ${variants.length} block${
           variants.length === 1 ? "" : "s"
         } on the separator lines instead.`
       );
@@ -106,7 +111,7 @@ export function parseVariants(raw: string): ParseResult {
 
   if (preamble.some((l) => l.trim())) {
     warnings.push(
-      "Text before the first VARIANT header was ignored."
+      "Text before the first VARIANT / EMAIL header was ignored."
     );
   }
 

@@ -562,7 +562,8 @@ export function CopyVariationsTool() {
             <label className="mb-1.5 block text-sm font-medium">Variants</label>
             <p className="mb-2 text-xs text-muted-foreground">
               Paste your variants. Blocks are split on{" "}
-              <span className="font-mono">VARIANT n — name</span> headers; the{" "}
+              <span className="font-mono">VARIANT n — name</span> or{" "}
+              <span className="font-mono">EMAIL n — name</span> headers; the{" "}
               <span className="font-mono">═══</span> rules are ignored. Spintax and
               Liquid tags are preserved exactly.
             </p>
