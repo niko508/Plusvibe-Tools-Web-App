@@ -26,8 +26,13 @@
 //
 // Those are the defaults. The tiers are edited on the tool's Settings tab and
 // stored with its other settings; validateRules is what stands between that
-// form and the rules an inbox is deleted on. The first tier may start above 0:
-// an inbox with fewer sends than that isn't judged at all.
+// form and the rules an inbox is deleted on.
+//
+// Each tier is its own range of sends — "from" to "to", open-ended when "to"
+// is empty, a single count when they are equal — and the list is read top to
+// bottom: the first tier whose range holds an inbox's sends is the one it is
+// judged on. So a narrow tier above a wide one carves an exception out of it,
+// and a send count no tier covers isn't judged at all.
 //
 // Pure module — no API — so all of it is unit-tested.
 
@@ -99,10 +104,13 @@ const asNum = (v: unknown): number | undefined =>
   v === undefined || v === null || v === "" ? undefined : typeof v === "number" ? v : Number(v);
 
 /**
- * Checks a set of tiers from the Settings form. Each tier starts at a send
- * count and runs to one below the next; its upper end is worked out, never
- * stored, so there can be no gaps or overlaps. Below the first tier nothing is
- * judged. Every problem is named; nothing half-valid is ever saved.
+ * Checks a set of tiers from the Settings form. Each tier is a range of sends:
+ * a whole-number "from", and a "to" at or above it — or none, for "and up".
+ * Their order is kept: it is the order they are tried in. Every problem is
+ * named; nothing half-valid is ever saved.
+ *
+ * A list with no "to" anywhere is the older shape, where each tier ran up to
+ * the next one's start: it is read that way, sorted by start.
  */
 export function validateRules(input: unknown): { rules: InboxRules | null; problems: string[] } {
   const src = (input ?? {}) as Record<string, unknown>;
@@ -114,14 +122,17 @@ export function validateRules(input: unknown): { rules: InboxRules | null; probl
       return [];
     }
     if (raw.length > MAX_TIERS) problems.push(`${label}: at most ${MAX_TIERS} tiers.`);
+    const legacy = raw.every((t) => t && typeof t === "object" && !("max" in t));
     const tiers: Tier[] = [];
     raw.forEach((t, i) => {
       const n = i + 1;
-      const min = asNum(t.min) ?? (i === 0 ? 0 : undefined);
-      if (min === undefined || !Number.isInteger(min) || min < 0) {
-        problems.push(`${label} tier ${n}: "from" must be a whole number of sends.`);
-      } else if (i > 0 && tiers[i - 1] && min <= tiers[i - 1].min) {
-        problems.push(`${label} tier ${n}: must start above ${tiers[i - 1].min} sends, where the tier before it starts.`);
+      const min = asNum(t.min) ?? (i === 0 && legacy ? 0 : undefined);
+      if (min === undefined || !Number.isInteger(min) || min < 0) problems.push(`${label} tier ${n}: "from" must be a whole number of sends.`);
+      const max = legacy ? null : asNum(t.max);
+      if (max !== undefined && max !== null && (!Number.isInteger(max) || max < 0)) {
+        problems.push(`${label} tier ${n}: "to" must be a whole number of sends, or empty for "and up".`);
+      } else if (max !== undefined && max !== null && min !== undefined && max < min) {
+        problems.push(`${label} tier ${n}: "to" (${max}) is below "from" (${min}).`);
       }
       const bounce = asNum(t.maxBounceRate);
       if (!isPct(bounce)) problems.push(`${label} tier ${n}: the bounce rate must be a percentage from 0 to 100.`);
@@ -131,17 +142,65 @@ export function validateRules(input: unknown): { rules: InboxRules | null; probl
       if (human !== undefined && !isPct(human)) problems.push(`${label} tier ${n}: the human reply rate must be a percentage from 0 to 100, or empty.`);
       tiers.push({
         min: min ?? 0,
-        max: null,
+        max: max ?? null,
         maxBounceRate: bounce ?? 0,
         ...(ooo !== undefined ? { minOooReplyRate: ooo } : {}),
         ...(human !== undefined ? { humanReplyOverrule: human } : {}),
       });
     });
-    for (let i = 0; i < tiers.length - 1; i++) tiers[i].max = tiers[i + 1].min - 1;
+    if (legacy) {
+      tiers.sort((a, b) => a.min - b.min);
+      for (let i = 0; i < tiers.length - 1; i++) {
+        if (tiers[i + 1].min === tiers[i].min) problems.push(`${label}: two tiers start at ${tiers[i].min} sends.`);
+        tiers[i].max = Math.max(tiers[i].min, tiers[i + 1].min - 1);
+      }
+    }
     return tiers;
   };
   const rules = { microsoft: side("microsoft", "Microsoft"), google: side("google", "Google") };
   return problems.length > 0 ? { rules: null, problems } : { rules, problems };
+}
+
+const inTier = (t: Tier, sent: number) => sent >= t.min && (t.max === null || sent <= t.max);
+const rangeText = (a: number, b: number | null) => (b === null ? `${a}+` : a === b ? `${a}` : `${a}–${b}`);
+
+/**
+ * What the form should point out about a valid set: send counts two tiers
+ * both cover (the higher one is used), tiers nothing ever reaches, and send
+ * counts no tier covers. None of these is wrong — they are how exceptions and
+ * "don't judge" are made — but each should be meant.
+ */
+export function coverageNotes(tiers: Tier[], label: string): string[] {
+  const notes: string[] = [];
+  tiers.forEach((t, i) => {
+    const above = tiers.slice(0, i);
+    // Every send count of t already taken by a single tier above it?
+    const hidden = above.some((a) => a.min <= t.min && (a.max === null || (t.max !== null && a.max >= t.max)));
+    if (hidden) {
+      notes.push(`${label} tier ${i + 1} (${rangeText(t.min, t.max)} sends) is never used: a tier above it covers all of its sends.`);
+      return;
+    }
+    const clash = above.findIndex((a) => a.min <= (t.max ?? Infinity) && t.min <= (a.max ?? Infinity));
+    if (clash >= 0) {
+      const a = above[clash];
+      const lo = Math.max(a.min, t.min);
+      const hi = a.max === null ? t.max : t.max === null ? a.max : Math.min(a.max, t.max);
+      notes.push(`${label} tiers ${clash + 1} and ${i + 1} both cover ${rangeText(lo, hi)} sends: tier ${clash + 1}, being higher, is used there.`);
+    }
+  });
+  // Gaps: walk the ranges in order of their start.
+  const ranges = [...tiers].sort((a, b) => a.min - b.min);
+  let next = 0;
+  for (const r of ranges) {
+    if (r.min > next) {
+      const one = r.min - 1 === next;
+      notes.push(`${label}: ${rangeText(next, r.min - 1)} sends ${one ? "isn't" : "aren't"} covered by any tier, so ${one ? "that inbox isn't" : "those inboxes aren't"} judged.`);
+    }
+    if (r.max === null) return notes;
+    next = Math.max(next, r.max + 1);
+  }
+  notes.push(`${label}: ${next}+ sends aren't covered by any tier, so those inboxes aren't judged.`);
+  return notes;
 }
 
 /** Rules read back from disk: anything unreadable falls back to the defaults, whole. */
@@ -178,14 +237,16 @@ export function ratesOf(f: InboxFigures): InboxRates {
   };
 }
 
+/** The first tier, top to bottom, whose range holds this many sends. */
 export function tierFor(provider: ProviderBucket, sent: number, rules: InboxRules = DEFAULT_RULES): Tier | undefined {
   const tiers = provider === "google" ? rules.google : provider === "microsoft" ? rules.microsoft : [];
-  return tiers.find((t) => sent >= t.min && (t.max === null || sent <= t.max));
+  return tiers.find((t) => inTier(t, sent));
 }
 
-/** "15–29 sends", "46+ sends", "under 15 sends" */
+/** "15–29 sends", "46+ sends", "under 15 sends", "exactly 10 sends" */
 export function describeTier(t: Tier): string {
   if (t.min === 0 && t.max === null) return "any number of sends";
+  if (t.max === t.min) return `exactly ${t.min} send${t.min === 1 ? "" : "s"}`;
   if (t.min === 0 && t.max !== null) return `under ${t.max + 1} sends`;
   if (t.max === null) return `${t.min}+ sends`;
   return `${t.min}–${t.max} sends`;
@@ -201,18 +262,17 @@ export function describeRule(t: Tier): string {
 
 export function judgeInbox(provider: ProviderBucket, f: InboxFigures, rules: InboxRules = DEFAULT_RULES): Judgement {
   const rates = ratesOf(f);
-  const tiers = provider === "google" ? rules.google : provider === "microsoft" ? rules.microsoft : [];
-  if (tiers.length > 0 && f.sent < tiers[0].min) {
+  if (provider !== "google" && provider !== "microsoft") return { verdict: "untouched", provider, rates, reasons: [] };
+  const tier = tierFor(provider, f.sent, rules);
+  if (!tier) {
     return {
       verdict: "pass",
       provider,
       rates,
       reasons: [],
-      notJudged: `${f.sent} send${f.sent === 1 ? "" : "s"} is under the ${tiers[0].min} the first tier starts at, so it isn't judged`,
+      notJudged: `no tier covers ${f.sent} send${f.sent === 1 ? "" : "s"}, so it isn't judged`,
     };
   }
-  const tier = tierFor(provider, f.sent, rules);
-  if (!tier) return { verdict: "untouched", provider, rates, reasons: [] };
 
   const reasons: string[] = [];
   if (rates.bounceRate > tier.maxBounceRate) {

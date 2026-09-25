@@ -10,6 +10,7 @@ import {
   DEFAULT_RULES,
   JUDGE_WINDOW_DAYS,
   MAX_TIERS,
+  coverageNotes,
   validateRules,
   type InboxRules,
 } from "@/lib/blocked-inboxes/rules";
@@ -20,9 +21,9 @@ import { AlertIcon, CheckIcon, ChevronDownIcon, CopyIcon, FireIcon, GaugeIcon, T
 
 type Side = "microsoft" | "google";
 /**
- * A tier as the form holds it: numbers as typed. `to` is the last send count
- * of the tier, shown for every tier but the last; it is the next tier's start
- * less one, and editing either moves the other.
+ * A tier as the form holds it: numbers as typed. Each tier is its own range —
+ * `to` empty for "and up", equal to `min` for a single count — and the rows
+ * are tried top to bottom.
  */
 interface DraftTier {
   min: string;
@@ -43,21 +44,13 @@ const draftSide = (tiers: InboxRules["microsoft"]): DraftTier[] =>
     humanReplyOverrule: str(t.humanReplyOverrule),
   }));
 const toDraft = (r: InboxRules): Draft => ({ microsoft: draftSide(r.microsoft), google: draftSide(r.google) });
-const whole = (v: string) => (/^\s*\d+\s*$/.test(v) ? Number(v) : null);
-/** Rule values only: what moves when a tier is moved up or down. */
-const RULE_KEYS = ["maxBounceRate", "minOooReplyRate", "humanReplyOverrule"] as const;
-/** The "to" boxes, which validateRules never sees: each must be a whole number. */
-const toProblems = (d: Draft): string[] =>
-  (["microsoft", "google"] as const).flatMap((side) =>
-    d[side].slice(0, -1).flatMap((t, i) =>
-      whole(t.to) === null ? [`${side === "microsoft" ? "Microsoft" : "Google"} tier ${i + 1}: "to" must be a whole number of sends.`] : []
-    )
-  );
 /** What is sent: empty optional fields left out, so "not checked" stays that. */
 const fromDraft = (d: Draft) => {
   const side = (tiers: DraftTier[]) =>
     tiers.map((t) => ({
       min: t.min,
+      // Always sent, so the server reads each tier as its own range.
+      max: t.to.trim() === "" ? null : t.to,
       maxBounceRate: t.maxBounceRate,
       ...(t.minOooReplyRate.trim() ? { minOooReplyRate: t.minOooReplyRate } : {}),
       ...(t.humanReplyOverrule.trim() ? { humanReplyOverrule: t.humanReplyOverrule } : {}),
@@ -94,11 +87,14 @@ export function SettingsView({
     if (!touched) setDraft(toDraft(saved));
   }, [saved, touched]);
 
-  const checked = useMemo(() => {
-    const v = validateRules(fromDraft(draft));
-    const extra = toProblems(draft);
-    return extra.length > 0 ? { rules: null, problems: [...extra, ...v.problems] } : v;
-  }, [draft]);
+  const checked = useMemo(() => validateRules(fromDraft(draft)), [draft]);
+  const notes = useMemo(
+    () =>
+      checked.rules
+        ? { microsoft: coverageNotes(checked.rules.microsoft, "Microsoft"), google: coverageNotes(checked.rules.google, "Google") }
+        : { microsoft: [], google: [] },
+    [checked]
+  );
   const dirty = !!checked.rules && !same(checked.rules, saved);
   const isDefault = !!checked.rules && same(checked.rules, DEFAULT_RULES);
 
@@ -121,38 +117,47 @@ export function SettingsView({
     setSavedNote(false);
     setDraft((d) => ({ ...d, [side]: fn(d[side].map((t) => ({ ...t }))) }));
   };
-  // A tier's "to" and the next tier's "from" are one boundary: typing either
-  // moves the other, so the ranges never gap or overlap.
   const edit = (side: Side, i: number, key: keyof DraftTier, value: string) =>
     change(side, (tiers) => {
       tiers[i][key] = value;
-      const n = whole(value);
-      if (key === "min" && i > 0 && n !== null) tiers[i - 1].to = String(n - 1);
-      if (key === "to" && i < tiers.length - 1 && n !== null) tiers[i + 1].min = String(n + 1);
       return tiers;
     });
+  // A new tier starts where the covered sends end, or empty to fill in; its
+  // rule is copied from the tier it lands below. Move it where it belongs.
   const addTier = (side: Side) =>
     change(side, (tiers) => {
       const last = tiers[tiers.length - 1];
-      const from = (whole(last?.min ?? "") ?? 0) + 10;
-      if (last) last.to = String(from - 1);
-      return [...tiers, { min: String(from), to: "", maxBounceRate: last?.maxBounceRate ?? "10", minOooReplyRate: "", humanReplyOverrule: "" }];
+      const ends = tiers.map((t) => Number(t.to)).filter((n) => Number.isInteger(n) && n >= 0);
+      const openEnded = tiers.some((t) => t.to.trim() === "");
+      const from = openEnded || ends.length === 0 ? "" : String(Math.max(...ends) + 1);
+      return [
+        ...tiers,
+        {
+          min: from,
+          to: "",
+          maxBounceRate: last?.maxBounceRate ?? "10",
+          minOooReplyRate: last?.minOooReplyRate ?? "",
+          humanReplyOverrule: last?.humanReplyOverrule ?? "",
+        },
+      ];
     });
-  const removeTier = (side: Side, i: number) =>
-    change(side, (tiers) => {
-      const rest = tiers.filter((_, j) => j !== i);
-      // The tier before takes over the removed one's sends.
-      if (i > 0) rest[i - 1].to = i < rest.length ? String((whole(rest[i].min) ?? 1) - 1) : "";
-      return rest;
-    });
-  // Moving a tier moves its rule; the send ranges stay where they are, in order.
+  const removeTier = (side: Side, i: number) => change(side, (tiers) => tiers.filter((_, j) => j !== i));
+  // Moving a tier moves all of it — its range and its rule. Order is what
+  // decides between two tiers that cover the same sends: the higher one wins.
   const moveTier = (side: Side, i: number, by: -1 | 1) =>
     change(side, (tiers) => {
       const j = i + by;
       if (j < 0 || j >= tiers.length) return tiers;
-      for (const k of RULE_KEYS) [tiers[i][k], tiers[j][k]] = [tiers[j][k], tiers[i][k]];
+      [tiers[i], tiers[j]] = [tiers[j], tiers[i]];
       return tiers;
     });
+  const sortTiers = (side: Side) =>
+    change(side, (tiers) =>
+      [...tiers].sort((a, b) => {
+        const num = (v: string, open: number) => (v.trim() === "" || !Number.isFinite(Number(v)) ? open : Number(v));
+        return num(a.min, 0) - num(b.min, 0) || num(a.to, Infinity) - num(b.to, Infinity);
+      })
+    );
 
   async function saveRules() {
     if (!checked.rules) return;
@@ -226,13 +231,14 @@ export function SettingsView({
         <p className="mt-1 text-xs text-muted-foreground">
           Each inbox Clay sends is judged on its own last {JUDGE_WINDOW_DAYS} days, on the tier its send count falls in. Bounce
           rate is over everything sent; reply rates are over unique leads contacted, and the OOO reply rate counts
-          out-of-office replies too. Leave a box empty (“off”) to not check that figure. Editing a tier&apos;s “to” moves the next
-          tier&apos;s start with it; an inbox with fewer sends than the first tier starts at isn&apos;t judged. ↑ ↓ move a tier&apos;s rule
-          while the send ranges stay in order. An inbox that is neither Microsoft nor Google is left alone. Changes apply to inboxes
-          judged from now on.
+          out-of-office replies too. Leave a box empty (“off”) to not check that figure. Each tier is its own range of sends: leave
+          “to” empty for “and up”, or give “from” and “to” the same number for exactly that many. Tiers are tried top to bottom and
+          the first that covers an inbox&apos;s sends is used, so a narrow tier above a wide one is an exception to it — ↑ ↓ move a
+          whole tier. Sends no tier covers aren&apos;t judged. An inbox that is neither Microsoft nor Google is left alone. Changes
+          apply to inboxes judged from now on.
         </p>
-        <TierTable side="microsoft" title="Microsoft (Azure)" tiers={draft.microsoft} onEdit={edit} onAdd={addTier} onRemove={removeTier} onMove={moveTier} />
-        <TierTable side="google" title="Google" tiers={draft.google} onEdit={edit} onAdd={addTier} onRemove={removeTier} onMove={moveTier} />
+        <TierTable side="microsoft" title="Microsoft (Azure)" tiers={draft.microsoft} notes={notes.microsoft} onEdit={edit} onAdd={addTier} onRemove={removeTier} onMove={moveTier} onSort={sortTiers} />
+        <TierTable side="google" title="Google" tiers={draft.google} notes={notes.google} onEdit={edit} onAdd={addTier} onRemove={removeTier} onMove={moveTier} onSort={sortTiers} />
 
         {checked.problems.length > 0 && (
           <ul className="mt-4 space-y-1 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning" data-problems>
@@ -563,10 +569,14 @@ function TierTable({
   onAdd,
   onRemove,
   onMove,
+  onSort,
+  notes,
 }: {
   side: Side;
   title: string;
   tiers: DraftTier[];
+  notes: string[];
+  onSort: (side: Side) => void;
   onEdit: (side: Side, i: number, key: keyof DraftTier, value: string) => void;
   onAdd: (side: Side) => void;
   onRemove: (side: Side, i: number) => void;
@@ -580,7 +590,7 @@ function TierTable({
         min={0}
         max={key === "min" || key === "to" ? undefined : 100}
         step={key === "min" || key === "to" ? 1 : 0.1}
-        className="pv-input w-20 py-1 text-xs tabular-nums"
+        className={`pv-input ${key === "to" ? "w-24" : "w-20"} py-1 text-xs tabular-nums`}
         value={tiers[i][key]}
         placeholder={placeholder}
         aria-label={`${title} tier ${i + 1}: ${label}`}
@@ -595,9 +605,14 @@ function TierTable({
     <div className="mt-5" data-tier-table={side}>
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">{title}</h3>
-        <button type="button" className="text-xs text-muted-foreground underline disabled:opacity-50" data-add-tier={side} disabled={tiers.length >= MAX_TIERS} onClick={() => onAdd(side)}>
-          Add a tier
-        </button>
+        <span className="flex items-center gap-3">
+          <button type="button" className="text-xs text-muted-foreground underline disabled:opacity-50" data-sort-tiers={side} disabled={tiers.length < 2} onClick={() => onSort(side)}>
+            Sort by sends
+          </button>
+          <button type="button" className="text-xs text-muted-foreground underline disabled:opacity-50" data-add-tier={side} disabled={tiers.length >= MAX_TIERS} onClick={() => onAdd(side)}>
+            Add a tier
+          </button>
+        </span>
       </div>
       <div className="mt-2 overflow-x-auto">
         <table className="w-full text-xs">
@@ -616,14 +631,8 @@ function TierTable({
                 <td className="whitespace-nowrap py-2 pr-3">
                   <span className="inline-flex items-center gap-1.5">
                     {num(i, "min", "from sends", "")}
-                    {i === tiers.length - 1 ? (
-                      <span className="text-muted-foreground">and up</span>
-                    ) : (
-                      <>
-                        <span className="text-muted-foreground">to</span>
-                        {num(i, "to", "to sends", "")}
-                      </>
-                    )}
+                    <span className="text-muted-foreground">to</span>
+                    {num(i, "to", "to sends (empty for and up)", "", "and up")}
                   </span>
                 </td>
                 <td className="py-2 pr-3">{num(i, "maxBounceRate", "bounce over", "%")}</td>
@@ -634,8 +643,8 @@ function TierTable({
                     <button
                       type="button"
                       className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-                      aria-label={`Move ${title} tier ${i + 1}'s rule up`}
-                      title="Move this rule up a tier"
+                      aria-label={`Move ${title} tier ${i + 1} up`}
+                      title="Move this tier up: it is tried before the ones below it"
                       data-move-up={`${side}-${i}`}
                       disabled={i === 0}
                       onClick={() => onMove(side, i, -1)}
@@ -645,8 +654,8 @@ function TierTable({
                     <button
                       type="button"
                       className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-                      aria-label={`Move ${title} tier ${i + 1}'s rule down`}
-                      title="Move this rule down a tier"
+                      aria-label={`Move ${title} tier ${i + 1} down`}
+                      title="Move this tier down"
                       data-move-down={`${side}-${i}`}
                       disabled={i === tiers.length - 1}
                       onClick={() => onMove(side, i, 1)}
@@ -665,6 +674,13 @@ function TierTable({
           </tbody>
         </table>
       </div>
+      {notes.length > 0 && (
+        <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground" data-tier-notes={side}>
+          {notes.map((n) => (
+            <li key={n}>· {n}</li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

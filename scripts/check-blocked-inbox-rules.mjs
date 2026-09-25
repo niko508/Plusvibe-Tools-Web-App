@@ -16,7 +16,7 @@ const eq = (label, got, want) => {
   }
 };
 
-const { judgeInbox, ratesOf, tierFor, describeTier, describeRule, validateRules, normalizeRules, DEFAULT_RULES } = await importTs("@/lib/blocked-inboxes/rules");
+const { judgeInbox, ratesOf, tierFor, describeTier, describeRule, validateRules, normalizeRules, coverageNotes, DEFAULT_RULES } = await importTs("@/lib/blocked-inboxes/rules");
 
 // An inbox that sent `sent`, with `bounces` bounced, `contacted` unique leads,
 // `replies` human replies and `ooo` out-of-office replies.
@@ -87,24 +87,43 @@ console.log("--- rules edited on the Settings tab");
   };
   const { rules, problems } = validateRules(form);
   eq("a sound set is accepted", problems, []);
-  eq("…each tier running to one below the next", rules.microsoft.map((t) => [t.min, t.max]), [[0, 19], [20, 59], [60, null]]);
+  eq("…a list of starts only runs each tier to one below the next", rules.microsoft.map((t) => [t.min, t.max]), [[0, 19], [20, 59], [60, null]]);
   eq("…with an empty box meaning not checked", [rules.microsoft[0].minOooReplyRate, rules.google[1].humanReplyOverrule], [undefined, 1.5]);
   eq("judging uses them", [judgeInbox("microsoft", f(30, 13), rules).verdict, judgeInbox("microsoft", f(30, 12), rules).verdict], ["block", "pass"]);
   eq("…where the defaults would say otherwise", [judgeInbox("microsoft", f(30, 8), rules).verdict, judgeInbox("microsoft", f(30, 8)).verdict], ["pass", "block"]);
   eq("…the overrule too", judgeInbox("google", f(100, 20, 100, 2), rules).verdict, "pass");
   eq("…and the tier reads back", [describeTier(rules.microsoft[1]), describeRule(rules.google[1])], ["20–59 sends", "bounce > 10% or OOO reply rate < 2% · human reply rate > 1.5% overrules"]);
 }
-eq("the first tier can start above 0", validateRules({ microsoft: [{ min: "5", maxBounceRate: 50 }], google: [{ min: 0, maxBounceRate: 50 }] }).rules.microsoft[0].min, 5);
-eq("…and an empty start is 0", validateRules({ microsoft: [{ min: "", maxBounceRate: 50 }], google: [{ min: 0, maxBounceRate: 50 }] }).rules.microsoft[0].min, 0);
+console.log("--- tiers as ranges, in the order they are tried");
 {
-  const rules = validateRules({ microsoft: [{ min: 5, maxBounceRate: 50 }], google: [{ min: 0, maxBounceRate: 50 }] }).rules;
-  const j = judgeInbox("microsoft", { sent: 4, bounces: 4, contacted: 4, replies: 0, oooReplies: 0 }, rules);
-  eq("below the first tier an inbox isn't judged, whatever it bounced", [j.verdict, j.tier, j.notJudged], ["pass", undefined, "4 sends is under the 5 the first tier starts at, so it isn't judged"]);
-  eq("…at the first tier it is", judgeInbox("microsoft", { sent: 5, bounces: 5, contacted: 5, replies: 0, oooReplies: 0 }, rules).verdict, "block");
+  const G = [{ min: 0, max: 100, maxBounceRate: 50 }];
+  const set = (microsoft) => validateRules({ microsoft, google: G });
+  // An exception carved out of a wider tier: exactly 10 sends, stricter.
+  const r = set([
+    { min: 10, max: 10, maxBounceRate: 5 },
+    { min: 0, max: 29, maxBounceRate: 50 },
+    { min: 30, max: null, maxBounceRate: 10 },
+  ]);
+  eq("a single count, a range and an open end are all accepted, in the order given", [r.problems, r.rules.microsoft.map((t) => [t.min, t.max])], [[], [[10, 10], [0, 29], [30, null]]]);
+  eq("the first tier that holds the sends is used", [tierFor("microsoft", 10, r.rules).maxBounceRate, tierFor("microsoft", 11, r.rules).maxBounceRate, tierFor("microsoft", 9, r.rules).maxBounceRate], [5, 50, 50]);
+  eq("…so the exception bites where the wide tier wouldn't", [judgeInbox("microsoft", f(10, 1), r.rules).verdict, judgeInbox("microsoft", f(11, 1), r.rules).verdict], ["block", "pass"]);
+  eq("a single count reads as one", describeTier(r.rules.microsoft[0]), "exactly 10 sends");
+  eq("the form is told what overlaps, and which wins", coverageNotes(r.rules.microsoft, "Microsoft"), ["Microsoft tiers 1 and 2 both cover 10 sends: tier 1, being higher, is used there."]);
+  const moved = set([{ min: 0, max: 29, maxBounceRate: 50 }, { min: 10, max: 10, maxBounceRate: 5 }]).rules;
+  eq("moved below the wide tier, the exception is never used — and the form says so", [tierFor("microsoft", 10, moved).maxBounceRate, coverageNotes(moved.microsoft, "Microsoft")[0]], [50, "Microsoft tier 2 (10 sends) is never used: a tier above it covers all of its sends."]);
+  const gappy = set([{ min: 5, max: 9, maxBounceRate: 50 }, { min: 20, max: 30, maxBounceRate: 20 }]).rules;
+  eq("send counts no tier covers are named", coverageNotes(gappy.microsoft, "Microsoft"), [
+    "Microsoft: 0–4 sends aren't covered by any tier, so those inboxes aren't judged.",
+    "Microsoft: 10–19 sends aren't covered by any tier, so those inboxes aren't judged.",
+    "Microsoft: 31+ sends aren't covered by any tier, so those inboxes aren't judged.",
+  ]);
+  const j = judgeInbox("microsoft", f(15, 15), gappy);
+  eq("…and an inbox there isn't judged, whatever it bounced", [j.verdict, j.tier, j.notJudged], ["pass", undefined, "no tier covers 15 sends, so it isn't judged"]);
+  eq("the defaults leave nothing uncovered and nothing overlapping", [coverageNotes(DEFAULT_RULES.microsoft, "M"), coverageNotes(DEFAULT_RULES.google, "G")], [[], []]);
+  eq("a \"to\" below its \"from\" is refused", set([{ min: 20, max: 10, maxBounceRate: 50 }]).problems, ['Microsoft tier 1: "to" (10) is below "from" (20).']);
+  eq("…so is a missing \"from\"", set([{ min: "", max: 10, maxBounceRate: 50 }]).problems, ['Microsoft tier 1: "from" must be a whole number of sends.']);
+  eq("an empty \"to\" is \"and up\"", set([{ min: 5, max: "", maxBounceRate: 50 }]).rules.microsoft[0].max, null);
 }
-eq("tiers out of order are refused, named",
-  validateRules({ microsoft: [{ min: 0, maxBounceRate: 50 }, { min: 30, maxBounceRate: 20 }, { min: 30, maxBounceRate: 10 }], google: [{ min: 0, maxBounceRate: 50 }] }).problems,
-  ["Microsoft tier 3: must start above 30 sends, where the tier before it starts."]);
 eq("…so is a percentage over 100, or not a number",
   validateRules({ microsoft: [{ min: 0, maxBounceRate: 150 }], google: [{ min: 0, maxBounceRate: "x" }] }).problems,
   ["Microsoft tier 1: the bounce rate must be a percentage from 0 to 100.", "Google tier 1: the bounce rate must be a percentage from 0 to 100."]);
