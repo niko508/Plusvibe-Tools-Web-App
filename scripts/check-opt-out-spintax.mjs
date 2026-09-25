@@ -68,7 +68,8 @@ function verify(label, block, replies, phrases, extras, counts) {
 const cur = read("opt-out-spintax.ts");
 const current = verify("current block", cur.literal("OPT_OUT_SPINTAX"), cur.array("REPLY_TOKENS"), cur.array("PHRASE_TEMPLATES"), cur.array("EXTRA_OPTIONS"),
   { replies: 19, phrases: 18, extras: 105, total: 447 });
-check("the one-off lines end with the wave", current.at(-1) === 'Not a match? Reply "wave" or 👋 and I\'ll leave with a smile.');
+check("the one-off lines end with the wave — no emoji", current.at(-1) === 'Not a match? Reply "wave" and I\'ll leave with a smile.');
+check("…and no option anywhere carries an emoji", current.every((o) => !/\p{Extended_Pictographic}/u.test(o)));
 check("…and the first is the baton", current[342] === 'Not your thing? Reply "pass the baton" and I\'ll hand this to someone else.');
 
 const prev = read("opt-out-spintax-previous.ts");

@@ -299,6 +299,44 @@ eq("campaign with no step 1 is a no-op", appendStepOne(
   eq("…and a second pass changes nothing", [again.changed, again.alreadyPresent], [[], ["A", "B"]]);
 }
 
+// The same blocks as Plusvibe's editor hands them back: quotes as entities or
+// curly, apostrophes as &#39;, spaces as &nbsp;, a <br> or two. Missing these
+// is what left a second block stacked under the old one.
+{
+  const prevSrc = readFileSync("src/lib/campaign-types/opt-out-spintax-previous.ts", "utf8");
+  const PREV = prevSrc.match(/export const PREVIOUS_OPT_OUT_SPINTAX[^`]*`([\s\S]*?)`;/)[1];
+  const edited = (t) => t.replace(/"/g, "&quot;").replace(/'/g, "&#39;").replace(/ \| /g, "&nbsp;| ");
+  const curly = (t) => t.replace(/"([^"]*)"/g, "\u201C$1\u201D").replace(/'/g, "\u2019").replace(/ \| If/g, " |<br>If");
+  const GREET = "<div>{{Random | Hey {{first_name}}, | Hi {{first_name}},}}</div>";
+  const SIGN = "<div>{{Random | Thanks, | Best, | Regards,}}</div><div>{{sender_first_name}}</div>";
+  const count = (b, t) => b.split(t).length - 1;
+
+  const enc = appendStepOne([{ step: 1, variations: [{ variation: "A", body: `${GREET}<div>hello</div>${SIGN}${SPACER}<div>${edited(PREV)}</div>` }] }]);
+  const a = enc.steps[0].variations[0].body;
+  eq("an old block spelled with entities is recognised and swapped", [enc.replaced, count(a, SPINTAX), a.includes("&quot;")], [["A"], 1, false]);
+  eq("…the greeting and sign-off spintax untouched", a.startsWith(`${GREET}<div>hello</div>${SIGN}`), true);
+
+  const cur = appendStepOne([{ step: 1, variations: [{ variation: "A", body: `<div>x</div>${SPACER}<div>${curly(PREV)}</div>` }] }]);
+  eq("…so is one with curly quotes and line breaks", [cur.replaced, count(cur.steps[0].variations[0].body, SPINTAX)], [["A"], 1]);
+
+  // What the bug left behind: the old block, and the current one added under it.
+  const both = `<div>hello</div>${SIGN}${SPACER}<div>${edited(PREV)}</div>${SPACER}<div>${SPINTAX}</div>`;
+  const fixed = appendStepOne([{ step: 1, variations: [{ variation: "A", body: both }] }]).steps[0].variations[0].body;
+  eq("a variant with both blocks ends with one, the current, where the old one was", fixed, `<div>hello</div>${SIGN}${SPACER}<div>${SPINTAX}</div>`);
+
+  // The current block as it read before its last line lost the 👋.
+  const withWave = SPINTAX.replace(`Reply "wave" and I'll leave with a smile.`, `Reply "wave" or 👋 and I'll leave with a smile.`);
+  eq("(the earlier wording differs from the current)", withWave !== SPINTAX, true);
+  const waved = appendStepOne([{ step: 1, variations: [{ variation: "A", body: `<div>x</div>${SPACER}<div>${withWave}</div>` }] }]);
+  eq("the earlier wording of the current block is replaced too — no emoji left", [waved.replaced, waved.steps[0].variations[0].body.includes("👋")], [["A"], false]);
+
+  const same = appendStepOne([{ step: 1, variations: [{ variation: "A", body: `<div>x</div>${SPACER}<div>${edited(SPINTAX)}</div>` }] }]);
+  eq("the current block, however it is spelled, is left alone", [same.changed, same.alreadyPresent], [[], ["A"]]);
+
+  const plain = appendStepOne([{ step: 1, variations: [{ variation: "A", body: `${GREET}<div>hello</div>${SIGN}` }] }]);
+  eq("greeting and sign-off spintax are not taken for opt-out lines: the block is appended", [plain.changed, plain.replaced, count(plain.steps[0].variations[0].body, SPINTAX)], [["A"], [], 1]);
+}
+
 
 // --- sign-off swap ----------------------------------------------------------
 const {
