@@ -86,5 +86,25 @@ console.log("--- no headers at all");
   eq("split on the separators, with a warning that names both header kinds", [r.variants.length, r.warnings[0]], [2, 'No "VARIANT n" or "EMAIL n" headers found — split into 2 blocks on the separator lines instead.']);
 }
 
+console.log("--- the HTML each email becomes");
+{
+  const S = "<div>&nbsp;</div>";
+  // One paragraph per line, no blank lines between — the generator's shape.
+  const r = parseVariants(`EMAIL 14 — Template 7 · Arrangement 10\n${RULE}\n${OPEN} we found a way.\nOne of our clients is now at 4x more demos.\n{{Random | Could I explain? | Could I share how it works?}}\n${SIGN}`);
+  const html = r.variants[0].html;
+  eq("every line is its own paragraph, with a blank line between", html.split(S).length, 5);
+  eq("…nothing packed together with <br />", html.includes("<br />"), false);
+  eq("…in order, with Liquid and spintax as they were", html.split(S)[0], `<div>${OPEN} we found a way.</div>`);
+
+  // The Two things email: a list between blank lines.
+  const two = parseVariants(`EMAIL 5 — Template 3: Two things · Arrangement 3\n${RULE}\n${OPEN}\n{{Random | Two things: | Just two things:}}\n\n1. We could get your company recommended.\n2. It sits apart from your current setup, so nothing gets paused or undone.\n\n{{Random | Are there any specific company types you'd like to connect with? | Are there certain types?}}\n${SIGN}`).variants[0].html;
+  const paras = two.split(S);
+  eq("a list stays together, a line per item, numbers kept", paras.find((p) => p.includes("1. We could")), "<div>1. We could get your company recommended.<br />2. It sits apart from your current setup, so nothing gets paused or undone.</div>");
+  eq("…with a blank line before and after it, and between every other line", paras.length, 6);
+  eq("blank lines in the paste don't stack extra space", two.includes(`${S}${S}`), false);
+  const bullets = parseVariants(`VARIANT 1 — x\nIntro line\n* first\n* second\nClosing line`).variants[0].html;
+  eq("bullets stay together too", bullets, `<div>Intro line</div>${S}<div>* first<br />* second</div>${S}<div>Closing line</div>`);
+}
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

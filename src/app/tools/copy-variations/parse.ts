@@ -1,4 +1,4 @@
-import { bodyToHtml } from "@/lib/body-html";
+import { bodyToHtml, linesToHtml } from "@/lib/body-html";
 
 // Parses the pasted "VARIANT N — Name" (or "EMAIL N — Name") block format into
 // structured variants.
@@ -159,7 +159,9 @@ function toVariant(
   name: string,
   body: string
 ): ParsedVariant {
-  return { position, number, name, body, html: bodyToHtml(body) };
+  // Every line its own paragraph, spaced: the generator writes one paragraph
+  // per line, with no blank line between them.
+  return { position, number, name, body, html: linesToHtml(body) };
 }
 
 // Drops leading/trailing blank lines without touching the interior.

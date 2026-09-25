@@ -34,3 +34,31 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 }
+
+/** "1. ", "2) ", "* ", "- ", "• " — a line that is one item of a list. */
+const LIST_ITEM = /^\s*(?:\d{1,2}[.)]|[*•\-–])\s+/;
+
+/**
+ * Like bodyToHtml, but every LINE is a paragraph, not only blank-line
+ * separated blocks. The variation generator writes one paragraph per line
+ * with no blank line between them; read with bodyToHtml, each email became
+ * one paragraph of <br />-joined lines and rendered with no spacing at all.
+ *
+ * Consecutive list lines ("1. …", "* …") stay together as one paragraph, a
+ * line each, so a list still reads as a list. Blank lines, however many, are
+ * one spacer. Spintax, Liquid and the text itself are untouched.
+ */
+export function linesToHtml(body: string): string {
+  const lines = body
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const paragraphs: string[][] = [];
+  for (const line of lines) {
+    const last = paragraphs[paragraphs.length - 1];
+    if (last && LIST_ITEM.test(line) && LIST_ITEM.test(last[last.length - 1])) last.push(line);
+    else paragraphs.push([line]);
+  }
+  return paragraphs.map((p) => `<div>${p.map(escapeHtml).join("<br />")}</div>`).join("<div>&nbsp;</div>");
+}
