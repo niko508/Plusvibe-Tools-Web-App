@@ -159,6 +159,16 @@ export const TOOLS: Tool[] = [
     Icon: PlayIcon,
   },
   {
+    slug: "winning-variants",
+    name: "Clone Campaign with Winning Variants",
+    tagline: "A copy of a campaign with only the first emails that got positive replies",
+    description:
+      "Pick a campaign and see every first-step variant with its sends, replies and positive replies, and the top three. The campaign is cloned in its own workspace — settings, sender accounts, follow-ups and sub-sequences as they are — with step 1 cut down to the variants that got at least one positive reply, under a name and tags you choose.",
+    status: "active",
+    color: "emerald",
+    Icon: SparklesIcon,
+  },
+  {
     slug: "copy-campaign",
     name: "Copy Campaign to Other Workspace",
     tagline: "Move a campaign's copy across, on another campaign's settings",

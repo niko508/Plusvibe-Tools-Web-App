@@ -311,6 +311,29 @@ export function runCopyCampaign(payload: CopyCampaignPayload, signal?: AbortSign
   });
 }
 
+// --- Clone Campaign with Winning Variants -----------------------------------
+
+export type { CloneResult, WinnersPreview } from "@/lib/winning-variants/plan";
+
+/** A campaign's step-1 variants with their all-time figures, and its tags. Creates nothing. */
+export function previewWinningVariants(params: { workspaceId: string; campaignId: string }, signal?: AbortSignal) {
+  return request<import("@/lib/winning-variants/plan").WinnersPreview>("/api/winning-variants/preview", { method: "POST", body: params, signal });
+}
+
+export interface CloneWinnersPayload {
+  workspaceId: string;
+  campaignId: string;
+  name: string;
+  tagIds: string[];
+  newTags: string[];
+  /** Step 1 has no winners, and the page has said so. */
+  confirmEmpty: boolean;
+}
+
+export function cloneWinningVariants(payload: CloneWinnersPayload, signal?: AbortSignal) {
+  return request<import("@/lib/winning-variants/plan").CloneResult>("/api/winning-variants/run", { method: "POST", body: payload, signal });
+}
+
 // --- Change Limits with Best Performing Inboxes -----------------------------
 
 export function startChangeLimits(payload: ChangeLimitsStartPayload, signal?: AbortSignal) {
