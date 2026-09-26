@@ -11,6 +11,7 @@
 
 import { domainOf } from "@/lib/campaign-types/esp";
 import { CATEGORIES, categoryOf, type Category } from "@/lib/start-outreach/categories";
+import { generalSettings, isExcludedWorkspace } from "@/lib/general-settings/settings";
 
 /**
  * Emails per inbox per day.
@@ -19,9 +20,16 @@ import { CATEGORIES, categoryOf, type Category } from "@/lib/start-outreach/cate
  * is run slower per mailbox than a 25 — the whole point of telling them apart.
  */
 export const DAILY_PER_INBOX: Record<Category, number> = {
-  google: 13,
-  azure50: 3,
-  azure25: 5,
+  // Read from General Settings (Sending capacity) each time.
+  get google() {
+    return generalSettings().capacity.google;
+  },
+  get azure50() {
+    return generalSettings().capacity.azure50;
+  },
+  get azure25() {
+    return generalSettings().capacity.azure25;
+  },
 };
 
 /**
@@ -31,18 +39,10 @@ export const DAILY_PER_INBOX: Record<Category, number> = {
  * other a duplicate kept for reference, so counting either would inflate the
  * number this tool exists to give.
  */
-export const EXCLUDED_WORKSPACES = [
-  "Ikoni Digital Lead Nurturing + Duplicate Workspace",
-  "Inbox Warmup",
-];
+export const excludedWorkspaces = (): string[] => generalSettings().workspaces.excluded;
 
-const normalizeName = (s: string) => s.trim().toLowerCase();
-
-const EXCLUDED = new Set(EXCLUDED_WORKSPACES.map(normalizeName));
-
-export function isExcluded(workspaceName: string): boolean {
-  return EXCLUDED.has(normalizeName(workspaceName));
-}
+/** The list lives in General Settings (Workspaces); case and padding don't matter. */
+export const isExcluded = isExcludedWorkspace;
 
 /** The order the columns read in, Google first. */
 export const CAPACITY_ORDER: Category[] = ["google", "azure50", "azure25"];

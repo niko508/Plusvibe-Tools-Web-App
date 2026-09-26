@@ -11,11 +11,12 @@
 //
 // Pure module — no API — so all of it is unit-tested.
 
-import { tldOf, DEFAULT_PLATFORM_TAGS, findPlatformTag } from "@/lib/tags/domain-tags";
+import { tldOf, findPlatformTag } from "@/lib/tags/domain-tags";
 import { platformLabel } from "@/lib/blocked-domains/registrar";
 import { dominantProvider, PROVIDER_LABELS, type ProviderBucket } from "@/lib/plusvibe-providers";
 import type { BlockedDomainJob } from "@/lib/jobs/blocked-domains-types";
 import { isBlocked, type BlockedInboxJob, type BlockedInboxStatus } from "@/lib/jobs/blocked-inboxes-types";
+import { generalSettings } from "@/lib/general-settings/settings";
 
 export const UNKNOWN_PLATFORM = "Unknown platform";
 export const UNKNOWN_TLD = "(no ending)";
@@ -28,7 +29,7 @@ export const MIXED_PROVIDER = "Mixed";
  */
 export function platformKey(host: string | undefined, registrar: string | undefined): string {
   const h = host?.trim();
-  if (h) return findPlatformTag(h, DEFAULT_PLATFORM_TAGS)?.name ?? h;
+  if (h) return findPlatformTag(h, generalSettings().tags.platform)?.name ?? h;
   const r = registrar?.trim();
   return r ? platformLabel(r) : UNKNOWN_PLATFORM;
 }

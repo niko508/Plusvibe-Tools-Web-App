@@ -18,8 +18,9 @@ const eq = (label, got, want) => {
 
 const R = await importTs("@/lib/burned/removal");
 const SP = await importTs("@/lib/blocked-domains/sheet-plan");
+const REMOVED_STATUS = (await importTs("@/lib/general-settings/settings")).notActiveStatus();
 const {
-  REMOVED_STATUS, targetsFrom, domainFor, domainsOf, planDomainsTab, tenantsToQueue,
+  targetsFrom, domainFor, domainsOf, planDomainsTab, tenantsToQueue,
   inboxesFor, inboxCount, describeRun,
 } = R;
 

@@ -28,6 +28,7 @@ const ok = (label, cond, detail = "") => {
 
 const d = await importTs("@/lib/blocked-domains/domain");
 const sp = await importTs("@/lib/blocked-domains/sheet-plan");
+const gs = await importTs("@/lib/general-settings/settings");
 
 // --- Domain normalization ---------------------------------------------------
 console.log("--- domain normalization");
@@ -112,7 +113,7 @@ const dupGrid = [...DOMAINS, ["lavasi.pro", "x@y.com", "Active", "", "", "", "",
 const dup = sp.findDomainRow(dupGrid, "lavasi.pro", cols);
 eq("duplicates are counted", dup.matches, 2);
 eq("the first row still wins", dup.row.rowNumber, 3);
-eq("the blocked status", sp.BLOCKED_STATUS, "Not Active");
+eq("the blocked status (General Settings default)", gs.notActiveStatus(), "Not Active");
 
 // --- The Tenants to Cancel tab ----------------------------------------------
 console.log("--- tenants to cancel");
@@ -180,7 +181,7 @@ ok("an empty tab queues nothing", !sp.tenantAlreadyQueued([CANCEL_HEADER], 0, "a
 // --- the Google path ---------------------------------------------------------
 // Google Workspace has no tenant: burned inboxes are listed one per row, and
 // the domain goes Not Active only once every inbox is burned.
-eq("the constants match the real tab", [sp.GOOGLE_CANCEL_TAB, sp.COL_GOOGLE_EMAIL], ["🛑 Google Inboxes to Cancel", "Email Address"]);
+eq("the names match the real tab", [gs.googleInboxesToCancelTab(), sp.GOOGLE_QUEUE.tab, sp.COL_GOOGLE_EMAIL], ["🛑 Google Inboxes to Cancel", "🛑 Google Inboxes to Cancel", "Email Address"]);
 const GH = ["Email Address", "Tenant / Inbox Source"];
 eq("a Google inbox row lands under its columns",
   sp.buildGoogleCancelRow(GH, { email: "a@x.com", source: "Cheap Inboxes" }), ["a@x.com", "Cheap Inboxes"]);

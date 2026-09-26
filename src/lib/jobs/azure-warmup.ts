@@ -37,12 +37,11 @@ import {
   COL_TENANTS_PROVIDER,
   COL_WARMUP_DAYS,
   COL_WARMUP_STARTED,
-  DEFAULT_TENANTS_TAB,
   MAX_CONSECUTIVE_FAILURES,
   MAX_RUN_MS,
   MAX_STORED_ERRORS,
-  STATUS_WARMING_UP,
 } from "@/lib/jobs/azure-warmup-types";
+import { tenantsTab as tenantsTabSetting, warmingUpStatus } from "@/lib/general-settings/settings";
 
 // Server-side manager for the Azure warmup workflow.
 //
@@ -466,7 +465,7 @@ async function updateDomainsSheet(rec: StoredJob) {
   let vocabulary = new Map<string, string>();
   if (iSource !== -1) {
     vocabulary = buildSourceVocabulary(grid, iSource);
-    const tenantsTab = rec.tenantsTab || DEFAULT_TENANTS_TAB;
+    const tenantsTab = rec.tenantsTab || tenantsTabSetting();
     try {
       const tenants = await readTab(sheetId, tenantsTab);
       const tHeader = (tenants[0] ?? []).map((h) => h.trim().toLowerCase());
@@ -522,7 +521,7 @@ async function updateDomainsSheet(rec: StoredJob) {
     });
     updates.push({
       range: `${tab}!${columnLetter(iStatus)}${rowNo}`,
-      value: STATUS_WARMING_UP,
+      value: warmingUpStatus(),
     });
 
     if (iSource !== -1 && byEmail.size > 0) {

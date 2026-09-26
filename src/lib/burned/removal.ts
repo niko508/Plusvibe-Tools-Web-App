@@ -32,9 +32,7 @@ import {
 import { bucketOf } from "@/lib/plusvibe-providers";
 import type { Esp } from "./settings";
 import type { ScanRow } from "./scan";
-
-/** The status a removed domain's row is set to. */
-export const REMOVED_STATUS = "Not Active";
+import { notActiveStatus } from "@/lib/general-settings/settings";
 
 /** One burned row, reduced to what the removal needs. */
 export interface RemovalTarget {
@@ -195,10 +193,10 @@ export function planDomainsTab(
     };
     if (iStatus < 0) {
       lookup.problem = `The "${tabName}" tab has no ${cols.status} column, so the status was left as it was.`;
-    } else if (status.toLowerCase() === REMOVED_STATUS.toLowerCase()) {
+    } else if (status.toLowerCase() === notActiveStatus().toLowerCase()) {
       lookup.statusAlready = true;
     } else {
-      plan.updates.push({ row: rowNumber, column: iStatus, value: REMOVED_STATUS });
+      plan.updates.push({ row: rowNumber, column: iStatus, value: notActiveStatus() });
     }
     plan.lookups.push(lookup);
   }

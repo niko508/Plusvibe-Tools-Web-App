@@ -3,6 +3,7 @@ import { mapPool } from "@/lib/concurrency";
 import { domainFromEmail } from "@/lib/format";
 import type { Workspace } from "@/lib/plusvibe-types";
 import type { IndexEntry } from "./types";
+import { generalSettings } from "@/lib/general-settings/settings";
 
 const PAGE_SIZE = 100;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -49,7 +50,7 @@ export async function buildDomainIndex(
       ).catch(() => ({ tags: [] }));
       const masterIds = new Set(
         (tagsRes.tags ?? [])
-          .filter((t) => t.name.trim().toLowerCase() === "master inbox")
+          .filter((t) => t.name.trim().toLowerCase() === generalSettings().tags.masterInbox.trim().toLowerCase())
           .map((t) => t.id)
       );
 

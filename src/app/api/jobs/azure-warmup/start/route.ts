@@ -4,11 +4,10 @@ import { errorResponse } from "@/lib/api-response";
 import { createJob } from "@/lib/jobs/azure-warmup";
 import type { AzureStartPayload, AzureUploadRow } from "@/lib/jobs/azure-warmup-types";
 import {
-  DEFAULT_SHEET_TAB,
-  DEFAULT_SHEET_URL,
   MAX_DELAY_HOURS,
   MAX_DELAY_MINUTES,
 } from "@/lib/jobs/azure-warmup-types";
+import { defaultSheetUrl, domainsTab } from "@/lib/general-settings/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -71,8 +70,8 @@ export async function POST(request: Request) {
       workspaceId,
       workspaceName: String(body.workspaceName ?? ""),
       delayMinutes,
-      sheetUrl: String(body.sheetUrl || DEFAULT_SHEET_URL),
-      sheetTab: String(body.sheetTab || DEFAULT_SHEET_TAB),
+      sheetUrl: String(body.sheetUrl || defaultSheetUrl()),
+      sheetTab: String(body.sheetTab || domainsTab()),
       rows,
       ignoreEmails: Array.isArray(body.ignoreEmails)
         ? body.ignoreEmails.map(String)

@@ -10,7 +10,7 @@ import {
   CAMPAIGN_NAME,
   SUBSEQUENCES,
   UNSETTABLE_PARENT_SETTINGS,
-  SENDING_TAG_NAME,
+  sendingTagName,
   allSpecLabels,
   buildLabelEvent,
   buildParentUpdate,
@@ -150,7 +150,7 @@ function migrateRecord(raw: FirstCampaignJob): FirstCampaignJob {
     name: rec.label ?? "",
     createState: "pending",
     settingsState: "pending",
-    tagName: SENDING_TAG_NAME,
+    tagName: sendingTagName(),
   };
   const ps = (rec.phaseStates ?? {}) as Record<string, LabelProgress["state"]>;
   rec.phaseStates = {
@@ -257,7 +257,7 @@ export async function createJob(
       name: CAMPAIGN_NAME,
       createState: "pending",
       settingsState: "pending",
-      tagName: SENDING_TAG_NAME,
+      tagName: sendingTagName(),
     },
     subsequences,
     manualFollowUps: [...UNSETTABLE_PARENT_SETTINGS],
@@ -408,7 +408,7 @@ async function runJob(id: string) {
     let tagId: string | null = null;
     try {
       await acquireSlot();
-      tagId = await findTagId(apiKey, workspaceId, SENDING_TAG_NAME);
+      tagId = await findTagId(apiKey, workspaceId, sendingTagName());
     } catch (err) {
       // The lookup itself breaking IS an error — something went wrong.
       pushError(rec, `Could not read this workspace's tags: ${msg(err)}`);
@@ -422,7 +422,7 @@ async function runJob(id: string) {
       // workspace this tool is for — turning the whole run red for it would
       // make an optional step look like a failed one.
       rec.manualFollowUps.push(
-        `No "${SENDING_TAG_NAME}" tag in this workspace, so the campaign has no sending accounts — attach them before launching`
+        `No "${sendingTagName()}" tag in this workspace, so the campaign has no sending accounts — attach them before launching`
       );
     }
     await persist(id);

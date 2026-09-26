@@ -19,14 +19,11 @@
 
 import { domainOfEmail, normalizeDomain } from "@/lib/blocked-domains/domain";
 import { dominantProvider, type ProviderCounts } from "@/lib/plusvibe-providers";
-
-/** The status a blocked domain's row is set to. */
-export const BLOCKED_STATUS = "Not Active";
+import { googleInboxesToCancelTab, tenantsToCancelTab } from "@/lib/general-settings/settings";
 
 /** Where the domain was bought — Porkbun, Spaceship, and so on. */
 export const COL_DOMAIN_HOST = "Domain Host";
 
-export const CANCEL_TAB = "🚯 Tenants to Cancel";
 export const COL_CANCEL_TENANT = "Tenant";
 export const COL_CANCEL_SOURCE = "Tenant / Inbox Source";
 /**
@@ -39,7 +36,6 @@ export const COL_CANCEL_SOURCE = "Tenant / Inbox Source";
  */
 export const COL_CANCEL_DOMAIN = "Domain";
 
-export const GOOGLE_CANCEL_TAB = "🛑 Google Inboxes to Cancel";
 export const COL_GOOGLE_EMAIL = "Email Address";
 
 /**
@@ -258,7 +254,10 @@ export interface QueueTab {
 }
 
 export const GOOGLE_QUEUE: QueueTab = {
-  tab: GOOGLE_CANCEL_TAB,
+  // A getter: the tab name is read from General Settings each time.
+  get tab() {
+    return googleInboxesToCancelTab();
+  },
   keyColumn: COL_GOOGLE_EMAIL,
   sourceColumn: COL_CANCEL_SOURCE,
   domainColumn: COL_CANCEL_DOMAIN,
@@ -266,7 +265,9 @@ export const GOOGLE_QUEUE: QueueTab = {
 };
 
 export const TENANT_QUEUE: QueueTab = {
-  tab: CANCEL_TAB,
+  get tab() {
+    return tenantsToCancelTab();
+  },
   keyColumn: COL_CANCEL_TENANT,
   sourceColumn: COL_CANCEL_SOURCE,
   domainColumn: COL_CANCEL_DOMAIN,

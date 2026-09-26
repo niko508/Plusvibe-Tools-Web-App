@@ -23,11 +23,11 @@ import { normalizeLimit } from "@/lib/blocked-domains/rejudge";
 import { platformLabel } from "@/lib/blocked-domains/registrar";
 import { bucketOf, describeProviders, PROVIDER_LABELS } from "@/lib/plusvibe-providers";
 import {
-  GOOGLE_CANCEL_TAB,
   googleBurnedInboxes,
   googleInboxesToList,
   isGoogleDomain,
 } from "@/lib/blocked-domains/sheet-plan";
+import { googleInboxesToCancelTab } from "@/lib/general-settings/settings";
 
 const STATUS_META: Record<
   BlockedDomainStatus,
@@ -405,7 +405,7 @@ export function JobCard({
             {stoppedByRun > 0
               ? `The ${formatNumber(stoppedByRun)} inbox${stoppedByRun === 1 ? "" : "es"} under the ${perf?.threshold ?? 1}% inbox bar had their daily limit set to 0 and warmup switched off${
                   sheet?.googlePath && (sheet.googleQueued?.length ?? 0) > 0
-                    ? `, and ${formatNumber(sheet.googleQueued!.length)} ${sheet.googleQueued!.length === 1 ? "was" : "were"} added to "${GOOGLE_CANCEL_TAB}"`
+                    ? `, and ${formatNumber(sheet.googleQueued!.length)} ${sheet.googleQueued!.length === 1 ? "was" : "were"} added to "${googleInboxesToCancelTab()}"`
                     : ""
                 }; turn them back on in Plusvibe if you disagree.`
               : "Every inbox on it is above the inbox bar too, so none were stopped."}
@@ -571,8 +571,8 @@ export function JobCard({
             onClick={() => onListGoogle(job.id)}
             title={
               googleUnlisted > 0
-                ? `Put the ${formatNumber(googleUnlisted)} burned inbox${googleUnlisted === 1 ? "" : "es"} in the first blank rows of "${GOOGLE_CANCEL_TAB}" so the seats get cancelled. Nothing else changes.`
-                : `Check the ${formatNumber(googleBurned)} listed inbox${googleBurned === 1 ? "" : "es"} on "${GOOGLE_CANCEL_TAB}": any row left below blank ones is moved up into them.`
+                ? `Put the ${formatNumber(googleUnlisted)} burned inbox${googleUnlisted === 1 ? "" : "es"} in the first blank rows of "${googleInboxesToCancelTab()}" so the seats get cancelled. Nothing else changes.`
+                : `Check the ${formatNumber(googleBurned)} listed inbox${googleBurned === 1 ? "" : "es"} on "${googleInboxesToCancelTab()}": any row left below blank ones is moved up into them.`
             }
             data-list-google
           >
@@ -766,13 +766,13 @@ export function JobCard({
                   label="Google inboxes"
                   value={
                     (sheet.googleQueued?.length ?? 0) > 0
-                      ? `${formatNumber(sheet.googleQueued!.length)} listed on "${GOOGLE_CANCEL_TAB}": ${sheet.googleQueued!.join(", ")}${
+                      ? `${formatNumber(sheet.googleQueued!.length)} listed on "${googleInboxesToCancelTab()}": ${sheet.googleQueued!.join(", ")}${
                           (sheet.googleAlreadyQueued?.length ?? 0) > 0
                             ? ` · ${formatNumber(sheet.googleAlreadyQueued!.length)} already there`
                             : ""
                         }`
                       : (sheet.googleAlreadyQueued?.length ?? 0) > 0
-                        ? `all ${formatNumber(sheet.googleAlreadyQueued!.length)} burned inboxes were already on "${GOOGLE_CANCEL_TAB}"`
+                        ? `all ${formatNumber(sheet.googleAlreadyQueued!.length)} burned inboxes were already on "${googleInboxesToCancelTab()}"`
                         : "none burned, so none listed"
                   }
                 />

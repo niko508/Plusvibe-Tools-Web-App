@@ -44,6 +44,7 @@ import {
   TITLE_SLOTS,
   pickRandomRoles,
 } from "./slots";
+import { generalSettings } from "@/lib/general-settings/settings";
 
 export function AddSignaturesTool() {
   const { hasKey, ready } = useApiKey();
@@ -178,11 +179,11 @@ export function AddSignaturesTool() {
       ]);
       const accounts = accountsRes.accounts ?? [];
       const allTags = tagsRes.tags ?? [];
-      // Tag IDs named "Master Inbox" — those inboxes are always excluded, and
+      // Tag IDs named as the master inbox tag in General Settings — those inboxes are always excluded, and
       // the tag is not offered as a filter since it can never select anything.
       const masters = new Set(
         allTags
-          .filter((t) => t.name.trim().toLowerCase() === "master inbox")
+          .filter((t) => t.name.trim().toLowerCase() === generalSettings().tags.masterInbox.trim().toLowerCase())
           .map((t) => t.id)
       );
 

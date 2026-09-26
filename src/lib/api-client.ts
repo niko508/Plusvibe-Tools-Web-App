@@ -50,6 +50,7 @@ import type {
 } from "@/lib/jobs/azure-warmup-types";
 import type { WarmupSettings as AzureWarmupSettings } from "@/lib/azure-warmup/warmup-settings";
 import type { InboxRules } from "@/lib/blocked-inboxes/rules";
+import type { GeneralSettings } from "@/lib/general-settings/settings";
 import type {
   FirstCampaignJob,
   FirstCampaignStartPayload,
@@ -1484,4 +1485,20 @@ export function deleteBlockedDomainJob(jobId: string, signal?: AbortSignal) {
     body: { jobId },
     signal,
   });
+}
+
+// --- General Settings --------------------------------------------------------
+
+export interface GeneralSettingsResponse {
+  settings: GeneralSettings;
+  /** 0 when they have never been saved. */
+  updatedAt: number;
+}
+
+export function fetchGeneralSettings(signal?: AbortSignal) {
+  return request<GeneralSettingsResponse>("/api/general-settings", { signal });
+}
+
+export function saveGeneralSettings(settings: GeneralSettings, signal?: AbortSignal) {
+  return request<GeneralSettingsResponse>("/api/general-settings", { method: "PUT", body: { settings }, signal });
 }

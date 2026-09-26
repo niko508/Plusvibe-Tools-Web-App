@@ -25,8 +25,8 @@ import type { InboxLite } from "@/lib/inbox-tags/plan";
 
 export const POOLS: Pool[] = ["google", "microsoft"];
 
-/** The two tags, in the shape the tag machinery takes. */
-export const POOL_TAG_SET: TagInput[] = POOLS.map((p) => ({ ...POOL_TAGS[p] }));
+/** The two tags, in the shape the tag machinery takes — as General Settings has them now. */
+export const poolTagSet = (): TagInput[] => POOLS.map((p) => ({ ...POOL_TAGS[p] }));
 
 export const POOL_LABELS: Record<Pool, string> = {
   google: "Google",

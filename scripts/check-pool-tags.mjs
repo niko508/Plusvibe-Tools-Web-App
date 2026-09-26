@@ -17,7 +17,8 @@ const eq = (label, got, want) => {
 
 const P = await importTs("@/lib/tags/pool-tags");
 const POOLS_MOD = await importTs("@/lib/campaign-types/pools");
-const { POOLS, POOL_TAG_SET, poolOfInbox, planPools, emptyPoolCounts, describePools, otherPool } = P;
+const { POOLS, poolTagSet, poolOfInbox, planPools, emptyPoolCounts, describePools, otherPool } = P;
+const POOL_TAG_SET = poolTagSet();
 
 const G = "GOOGLE_WORKSPACE", M = "MICROSOFT365", R = "REGULAR_ACCOUNT";
 /** The workspace's own two tags, as the job hands them over. */

@@ -234,8 +234,7 @@ export function planSignatures(inboxes: MovingInbox[]): SignaturePlan {
 // Tags
 // ---------------------------------------------------------------------------
 
-export const ACTIVE_TAG_NAME = "active";
-export const ACTIVE_TAG_COLOR = "#10B981";
+// The active tag's name and colour are in General Settings (Tags).
 
 export interface DomainTagRow {
   domain: string;

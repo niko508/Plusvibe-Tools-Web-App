@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { ThemeScript } from "@/components/theme";
+import { GeneralSettingsSync } from "@/lib/general-settings/use-general-settings";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -25,7 +26,10 @@ export default function RootLayout({
       <head>
         <ThemeScript />
       </head>
-      <body>{children}</body>
+      <body>
+        <GeneralSettingsSync />
+        {children}
+      </body>
     </html>
   );
 }

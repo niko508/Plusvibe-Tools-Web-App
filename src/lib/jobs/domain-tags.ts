@@ -12,7 +12,7 @@ import { prepareBatch, type TagSpec } from "@/lib/tags/bulk-tags";
 import { chunk, verifyTags, ASSIGN_CHUNK, type InboxLite } from "@/lib/inbox-tags/plan";
 import { ACCOUNTS_MAX_PAGES, ACCOUNTS_PAGE, assignTag, readInboxPage, resolveTag, unassignTag } from "@/lib/inbox-tags/api";
 import { parseDomainHosts, planInboxes, topCounts } from "@/lib/tags/domain-tags";
-import { POOL_TAG_SET, planPools } from "@/lib/tags/pool-tags";
+import { poolTagSet, planPools } from "@/lib/tags/pool-tags";
 import type { DomainTagsJob, DomainTagsStartPayload, WorkspaceOutcome } from "@/lib/jobs/domain-tags-types";
 import { MAX_STORED_ERRORS } from "@/lib/jobs/domain-tags-types";
 
@@ -353,7 +353,7 @@ async function runWorkspace(
   try {
     tldTags = await ensureTags(rec, ws, apiKey, existing, rec.tldTags);
     platformTags = await ensureTags(rec, ws, apiKey, existing, rec.platformTags);
-    poolTags = rec.pools ? await ensureTags(rec, ws, apiKey, existing, POOL_TAG_SET) : [];
+    poolTags = rec.pools ? await ensureTags(rec, ws, apiKey, existing, poolTagSet()) : [];
   } catch (err) {
     throw new Error(`Could not find or create the tags: ${msg(err)}`);
   }

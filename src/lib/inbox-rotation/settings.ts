@@ -25,6 +25,8 @@
 // all in runner.ts. Pure — the files are in store.ts — so all of it is
 // unit-tested and the client imports it for the forms.
 
+import { generalSettings } from "@/lib/general-settings/settings";
+
 export type ProfileKey = "azure50" | "azure25" | "google";
 
 export const PROFILES: { key: ProfileKey; label: string; hint: string }[] = [
@@ -273,7 +275,15 @@ export const GROUPS: { key: Group; label: string }[] = [
 ];
 
 /** The tag an inbox carries to be in a group, as it is named in Plusvibe. */
-export const GROUP_TAG_NAMES: Record<Group, string> = { 1: "Sending Group 1", 2: "Sending Group 2" };
+/** The two group tags, as General Settings (Tags) names them now. */
+export const GROUP_TAG_NAMES: Record<Group, string> = {
+  get 1() {
+    return generalSettings().tags.rotationGroup1;
+  },
+  get 2() {
+    return generalSettings().tags.rotationGroup2;
+  },
+};
 
 export function otherGroup(g: Group): Group {
   return g === 1 ? 2 : 1;

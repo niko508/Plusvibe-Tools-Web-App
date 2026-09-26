@@ -17,7 +17,7 @@ import { duplicateCampaign, launchCampaign, renameCampaign } from "@/lib/campaig
 import { buildReuseIndex, matchCompanions, normalizeName } from "@/lib/campaign-types/match";
 import { convertsOriginal, rolesFor, type CampaignKind } from "@/lib/campaign-types/kinds";
 import { deriveNames } from "@/lib/campaign-types/names";
-import { poolOf, sidesFor } from "@/lib/campaign-types/pools";
+import { POOL_TAGS, poolOf, sidesFor } from "@/lib/campaign-types/pools";
 import { classifyDestinations, planAllocation, type AllocDestination, type AllocRole } from "@/lib/campaign-types/allocate";
 import { resumePayload, shouldAutoResume, supersededBy } from "@/lib/campaign-types/resume";
 import { describeUnmapped, planSegmentMoves, segmentKey, segmentOf, type SegmentRule } from "@/lib/campaign-types/segments";
@@ -1441,10 +1441,10 @@ async function runTagging(ctx: RunCtx) {
   // Google campaigns, the 🔵 copies Microsoft ones.
   const targets: TagTarget[] = [];
   for (const src of rec.sources) {
-    targets.push({ campaignId: src.campaignId, name: src.convert?.state === "done" ? src.convert.to : src.campaignName, tag: "google-pool", state: "pending" });
+    targets.push({ campaignId: src.campaignId, name: src.convert?.state === "done" ? src.convert.to : src.campaignName, tag: POOL_TAGS.google.name, state: "pending" });
     for (const c of src.created) {
       if (!c.campaignId) continue;
-      targets.push({ campaignId: c.campaignId, name: c.name, tag: poolOf(c.role) === "google" ? "google-pool" : "microsoft-pool", state: "pending" });
+      targets.push({ campaignId: c.campaignId, name: c.name, tag: POOL_TAGS[poolOf(c.role)].name, state: "pending" });
     }
   }
   rec.tagging.targets = targets;
@@ -1477,7 +1477,7 @@ async function runTagging(ctx: RunCtx) {
     carried = await readCampaignTags(apiKey, workspaceId);
   } catch (err) {
     if (err instanceof AbortedError || ctx.m.aborted) throw err;
-    pushError(rec, `Could not read the campaigns' current tags: ${msg(err)}. The pool tags were added, but a copy that inherited the other pool's tag keeps it — check the 🔵 campaigns for google-pool.`);
+    pushError(rec, `Could not read the campaigns' current tags: ${msg(err)}. The pool tags were added, but a copy that inherited the other pool's tag keeps it — check the 🔵 campaigns for ${POOL_TAGS.google.name}.`);
   }
 
   let failed = false;

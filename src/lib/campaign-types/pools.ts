@@ -14,12 +14,18 @@
 
 import type { Esp } from "./esp";
 import type { CampaignRole, CreatedRole } from "@/lib/jobs/campaign-types-types";
+import { generalSettings } from "@/lib/general-settings/settings";
 
 export type Pool = "google" | "microsoft";
 
+/** Read from General Settings (Tags) each time, so a rename takes effect without a restart. */
 export const POOL_TAGS: Record<Pool, { name: string; color: string }> = {
-  google: { name: "google-pool", color: "#F59E0B" },
-  microsoft: { name: "microsoft-pool", color: "#3B82F6" },
+  get google() {
+    return generalSettings().tags.googlePool;
+  },
+  get microsoft() {
+    return generalSettings().tags.microsoftPool;
+  },
 };
 
 /** The 🔵 copies: the ones that take the Microsoft side of the split. */

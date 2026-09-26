@@ -3,12 +3,12 @@ import { requireAccountKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { fetchSheetGrid, SheetError } from "@/lib/sheet";
 import { envSpreadsheetId, readTab } from "@/lib/google-sheets";
-import { DEFAULT_SHEET_TAB } from "@/lib/jobs/azure-warmup-types";
 import {
   normalizeDomain,
   warmupFromGrid,
   type SheetWarmup,
 } from "@/lib/start-outreach/readiness";
+import { domainsTab } from "@/lib/general-settings/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +39,7 @@ export async function POST(request: Request) {
     );
     const url = typeof body.url === "string" ? body.url.trim() : "";
     const tab =
-      typeof body.tab === "string" && body.tab.trim() ? body.tab.trim() : DEFAULT_SHEET_TAB;
+      typeof body.tab === "string" && body.tab.trim() ? body.tab.trim() : domainsTab();
 
     let grid: string[][] | null = null;
     let source = "";

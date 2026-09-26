@@ -13,7 +13,7 @@ import {
   CAPACITY_ORDER,
   COLUMN_LABELS,
   DAILY_PER_INBOX,
-  EXCLUDED_WORKSPACES,
+  excludedWorkspaces,
   csvNameFor,
   toCsv,
   type WorkspaceCapacity,
@@ -21,6 +21,7 @@ import {
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatNumber } from "@/lib/format";
 import { useApiKey } from "@/lib/use-api-key";
+import { useGeneralSettings } from "@/lib/general-settings/use-general-settings";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { StatCard } from "@/components/stat-card";
 import { EmptyState, Spinner } from "@/components/ui";
@@ -54,6 +55,8 @@ const HEAD_CELL =
 
 export function CapacityTool() {
   const { hasKey, ready } = useApiKey();
+  // Re-renders when General Settings arrive: the per-inbox figures and the left-out workspaces.
+  useGeneralSettings();
   const [jobs, setJobs] = useState<CapacityJob[]>([]);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -182,7 +185,7 @@ export function CapacityTool() {
           · Azure 25 is a domain with 25 mailboxes or fewer, Azure 50 one with more · every inbox counts, sending or not
         </p>
         <p className="text-xs text-muted-foreground" data-excluded>
-          Always left out: {EXCLUDED_WORKSPACES.map((w) => `“${w}”`).join(" and ")}
+          Always left out: {excludedWorkspaces().map((w) => `“${w}”`).join(" and ")}
           {job && job.excluded.length > 0 ? ` · ${formatNumber(job.excluded.length)} skipped this run` : ""}
         </p>
       </div>

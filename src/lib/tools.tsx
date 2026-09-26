@@ -13,6 +13,7 @@ import {
   PlayIcon,
   RefreshIcon,
   GaugeIcon,
+  SettingsIcon,
 } from "@/components/icons";
 
 // Registry of tools shown on the landing page. Adding a new tool = add an entry
@@ -297,6 +298,16 @@ export const TOOLS: Tool[] = [
     status: "active",
     color: "rose",
     Icon: TrashIcon,
+  },
+  {
+    slug: "general-settings",
+    name: "General Settings",
+    tagline: "The tags, sheet tabs, statuses and texts every tool shares",
+    description:
+      "One place for the values several tools use: the TLD, platform, pool, active, master inbox and rotation tags; the sheet link, tab names and statuses; the workspaces left out of counts; emails a day per inbox; and the opt-out text. Change one and every tool that reads it follows.",
+    status: "active",
+    color: "indigo",
+    Icon: SettingsIcon,
   },
 ];
 

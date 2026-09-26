@@ -5,10 +5,10 @@ import {
   getSheetConfig,
   setSheetConfig,
   clearSheetConfig,
-  DEFAULT_SHEET_TAB,
 } from "@/lib/sheet-config";
 import { fetchSheetMap } from "@/lib/api-client";
 import { SheetIcon, CheckIcon, AlertIcon } from "@/components/icons";
+import { domainsTab } from "@/lib/general-settings/settings";
 
 interface Props {
   open: boolean;
@@ -24,7 +24,7 @@ type TestState =
 
 export function SheetDialog({ open, onClose, onSaved }: Props) {
   const [url, setUrl] = useState("");
-  const [tab, setTab] = useState(DEFAULT_SHEET_TAB);
+  const [tab, setTab] = useState(domainsTab());
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -32,7 +32,7 @@ export function SheetDialog({ open, onClose, onSaved }: Props) {
     if (open) {
       const cfg = getSheetConfig();
       setUrl(cfg?.url ?? "");
-      setTab(cfg?.tab ?? DEFAULT_SHEET_TAB);
+      setTab(cfg?.tab ?? domainsTab());
       setTest({ kind: "idle" });
       setTimeout(() => inputRef.current?.focus(), 50);
     }
@@ -55,7 +55,7 @@ export function SheetDialog({ open, onClose, onSaved }: Props) {
       setTest({ kind: "error", message: "Paste your Google Sheet share URL." });
       return;
     }
-    const cleanTab = tab.trim() || DEFAULT_SHEET_TAB;
+    const cleanTab = tab.trim() || domainsTab();
     setSheetConfig({ url: trimmedUrl, tab: cleanTab });
     setTest({ kind: "testing" });
     try {
@@ -74,7 +74,7 @@ export function SheetDialog({ open, onClose, onSaved }: Props) {
   function handleClear() {
     clearSheetConfig();
     setUrl("");
-    setTab(DEFAULT_SHEET_TAB);
+    setTab(domainsTab());
     setTest({ kind: "idle" });
   }
 
@@ -122,7 +122,7 @@ export function SheetDialog({ open, onClose, onSaved }: Props) {
           type="text"
           spellCheck={false}
           className="pv-input"
-          placeholder={DEFAULT_SHEET_TAB}
+          placeholder={domainsTab()}
           value={tab}
           onChange={(e) => setTab(e.target.value)}
           onKeyDown={(e) => {

@@ -17,7 +17,6 @@ import {
   readTab,
 } from "@/lib/google-sheets";
 import { extractSheetId, fetchSheetGrid } from "@/lib/sheet";
-import { DEFAULT_SHEET_TAB } from "@/lib/jobs/azure-warmup-types";
 import { savePreset } from "@/lib/signatures/store";
 import { buildSignature } from "@/app/tools/add-signatures/generate";
 import { prepareBatch, type TagSpec } from "@/lib/tags/bulk-tags";
@@ -30,7 +29,6 @@ import { weekIsEmpty } from "@/lib/start-outreach/week-settings";
 import { schedule } from "@/lib/jobs/outreach-schedule";
 import {
   ACTIVE_STATUS,
-  ACTIVE_TAG_COLOR,
   describeRun,
   domainsOf,
   parseOutreachSettings,
@@ -48,6 +46,7 @@ import type {
   JobCategory,
 } from "@/lib/jobs/start-outreach-types";
 import { CHUNK, MAX_STORED_ERRORS } from "@/lib/jobs/start-outreach-types";
+import { domainsTab, generalSettings } from "@/lib/general-settings/settings";
 
 // Server-side manager for Start Outreach runs.
 //
@@ -557,7 +556,7 @@ async function runJob(id: string) {
 
       if (tagsOk && payload.activeTag) {
         try {
-          const t = await resolveTag(apiKey, dest, existing, payload.activeTag, ACTIVE_TAG_COLOR);
+          const t = await resolveTag(apiKey, dest, existing, payload.activeTag, generalSettings().tags.active.color);
           if (t.created) existing.push({ id: t.id, name: payload.activeTag });
           const todo = arrived.filter((a) => !a.tags.includes(t.id)).map((a) => a.id);
           let n = 0;
@@ -645,7 +644,7 @@ async function runJob(id: string) {
         const sheetId = sheetIdFor(payload.sheet);
         if (!isSheetWritingConfigured()) throw new Error("Sheet writing is not set up on the server (GOOGLE_SERVICE_ACCOUNT_JSON).");
         if (!sheetId) throw new Error("No spreadsheet to write to: sync the sheet in the header or set SPREADSHEET_ID.");
-        const tab = payload.sheet.tab?.trim() || DEFAULT_SHEET_TAB;
+        const tab = payload.sheet.tab?.trim() || domainsTab();
         const grid = await readTab(sheetId, tab);
         const plan = planSheetWrites(grid, domainsOf(arrived));
         if (plan.problem) throw new Error(plan.problem);
@@ -775,7 +774,7 @@ function sheetIdFor(sheet: StartOutreachStartPayload["sheet"]): string | null {
  * private sheet), otherwise the public CSV of the synced sheet.
  */
 async function readDomainsTab(sheet: StartOutreachStartPayload["sheet"]): Promise<string[][]> {
-  const tab = sheet.tab?.trim() || DEFAULT_SHEET_TAB;
+  const tab = sheet.tab?.trim() || domainsTab();
   const id = sheetIdFor(sheet);
   if (isSheetWritingConfigured() && id) return readTab(id, tab);
   if (sheet.url) return fetchSheetGrid(sheet.url, tab);

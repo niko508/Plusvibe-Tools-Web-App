@@ -25,6 +25,8 @@ import { deriveNames } from "@/lib/campaign-types/names";
 import { isArchived, matchCompanions, normalizeName } from "@/lib/campaign-types/match";
 import { shouldAutoResume } from "@/lib/campaign-types/resume";
 import { JobCard } from "./job-card";
+import { POOL_TAGS } from "@/lib/campaign-types/pools";
+import { useGeneralSettings } from "@/lib/general-settings/use-general-settings";
 
 const POLL_MS = 2000;
 const JOBS_OPEN_KEY = "pv_ct_jobs_open";
@@ -48,6 +50,8 @@ const emptyRows = (): SegmentRow[] => Array.from({ length: SEGMENT_ROWS }, () =>
 
 export function CampaignTypesTool() {
   const { hasKey, ready } = useApiKey();
+  // Re-renders when General Settings arrive, for the pool tag names below.
+  useGeneralSettings();
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
@@ -779,8 +783,8 @@ export function CampaignTypesTool() {
               </p>
             )}
             <p className="mt-3 text-xs text-muted-foreground">
-              At the end every plain campaign is tagged <span className="font-mono">google-pool</span> and every 🔵 one{" "}
-              <span className="font-mono">microsoft-pool</span>.
+              At the end every plain campaign is tagged <span className="font-mono">{POOL_TAGS.google.name}</span> and every 🔵 one{" "}
+              <span className="font-mono">{POOL_TAGS.microsoft.name}</span>.
             </p>
             {mode === "create" && (
               <label className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">

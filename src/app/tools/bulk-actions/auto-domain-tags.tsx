@@ -3,10 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Workspace } from "@/lib/plusvibe-types";
 import type { DomainTagsJob, WorkspaceOutcome } from "@/lib/jobs/domain-tags-types";
-import { DEFAULT_PLATFORM_TAGS, DEFAULT_TLD_TAGS, readTagSets, saveTagSets } from "@/lib/tags/domain-tags";
 import { POOL_TAGS } from "@/lib/campaign-types/pools";
-import { MAX_TAG_NAME_LENGTH, normalizeColor, prepareBatch, type TagInput } from "@/lib/tags/bulk-tags";
-import { DEFAULT_SHEET_URL, DEFAULT_SHEET_TAB } from "@/lib/jobs/azure-warmup-types";
+import Link from "next/link";
+import { prepareBatch } from "@/lib/tags/bulk-tags";
 import { useSheetConfig } from "@/lib/use-sheet-config";
 import {
   startDomainTags,
@@ -17,34 +16,17 @@ import {
 } from "@/lib/api-client";
 import { formatNumber } from "@/lib/format";
 import { Spinner, RemoveJobButton } from "@/components/ui";
-import { AlertIcon, CheckIcon, TagIcon, TrashIcon } from "@/components/icons";
+import { AlertIcon, CheckIcon, TagIcon } from "@/components/icons";
+import { defaultSheetUrl, domainsTab } from "@/lib/general-settings/settings";
+import { useGeneralSettings } from "@/lib/general-settings/use-general-settings";
 
 // Auto-tags every inbox in the selected workspaces by its domain: the TLD
 // tag from the email's domain, and the domain platform tag from the "Domain
-// Host" column of the 📋 Domains sheet. The two tag sets are set up here and
-// remembered in this browser; a workspace missing any of them gets them
-// created. An inbox that already carries a tag from a set is left alone on
+// Host" column of the 📋 Domains sheet. The two tag sets are kept in General
+// Settings; a workspace missing any of them gets them created. An inbox that already carries a tag from a set is left alone on
 // that side; a domain not in the sheet still gets its TLD tag.
 
 const POLL_MS = 2500;
-const STORAGE_KEY = "pv_domain_tag_sets";
-
-interface Row extends TagInput {
-  key: number;
-}
-let nextKey = 1;
-const toRows = (tags: TagInput[]): Row[] => tags.map((t) => ({ key: nextKey++, name: t.name, color: t.color }));
-
-function loadSets(): { tld: Row[]; platform: Row[] } {
-  try {
-    const saved = readTagSets(window.localStorage.getItem(STORAGE_KEY));
-    if (saved) return { tld: toRows(saved.tld), platform: toRows(saved.platform) };
-  } catch {
-    // fall through to the defaults
-  }
-  return { tld: toRows(DEFAULT_TLD_TAGS), platform: toRows(DEFAULT_PLATFORM_TAGS) };
-}
-
 export function AutoDomainTags({
   workspaces,
   selected,
@@ -54,47 +36,31 @@ export function AutoDomainTags({
   selected: Set<string>;
   loading: boolean;
 }) {
-  const [tld, setTld] = useState<Row[]>([]);
-  const [platform, setPlatform] = useState<Row[]>([]);
-  const [setsReady, setSetsReady] = useState(false);
-  const [open, setOpen] = useState(false);
+  const { settings } = useGeneralSettings();
+  const tld = settings.tags.tld;
+  const platform = settings.tags.platform;
   const { config: sheet, ready: sheetReady } = useSheetConfig();
   const [sheetUrl, setSheetUrl] = useState<string | null>(null);
-  const [sheetTab, setSheetTab] = useState(DEFAULT_SHEET_TAB);
+  const [sheetTab, setSheetTab] = useState(domainsTab());
   const [jobs, setJobs] = useState<DomainTagsJob[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const lock = useRef(false);
 
-  // The sets live in this browser, like the API key.
-  useEffect(() => {
-    const s = loadSets();
-    setTld(s.tld);
-    setPlatform(s.platform);
-    setSetsReady(true);
-  }, []);
-  useEffect(() => {
-    if (!setsReady) return;
-    try {
-      window.localStorage.setItem(STORAGE_KEY, saveTagSets(tld.map(strip), platform.map(strip)));
-    } catch {
-      // nothing to do — the defaults come back next time
-    }
-  }, [tld, platform, setsReady]);
   // The synced sheet from the header wins; otherwise the known infra sheet.
   useEffect(() => {
     if (!sheetReady || sheetUrl !== null) return;
-    setSheetUrl(sheet?.url ?? DEFAULT_SHEET_URL);
-    setSheetTab(sheet?.tab ?? DEFAULT_SHEET_TAB);
+    setSheetUrl(sheet?.url ?? defaultSheetUrl());
+    setSheetTab(sheet?.tab ?? domainsTab());
   }, [sheetReady, sheet, sheetUrl]);
 
   const chosen = useMemo(
     () => workspaces.filter((w) => selected.has(w._id)).map((w) => ({ id: w._id, name: w.name })),
     [workspaces, selected]
   );
-  const tldBatch = prepareBatch(tld.filter((r) => r.name.trim() !== ""));
-  const platformBatch = prepareBatch(platform.filter((r) => r.name.trim() !== ""));
+  const tldBatch = prepareBatch(tld);
+  const platformBatch = prepareBatch(platform);
   const problems = tldBatch.problems.size + platformBatch.problems.size;
   const active = jobs.find((j) => j.status === "running") ?? null;
   const canStart = chosen.length > 0 && tldBatch.specs.length > 0 && problems === 0 && !busy && !active;
@@ -175,32 +141,14 @@ export function AutoDomainTags({
               side; a domain not in the sheet still gets its TLD tag. Existing tags are always kept.
             </p>
           </div>
-          <button type="button" className="pv-btn-ghost text-xs" onClick={() => setOpen((v) => !v)}>
-            {open ? "Hide tag sets" : "Edit tag sets"}
-          </button>
+          <Link href="/tools/general-settings#tags" className="pv-btn-ghost text-xs">
+            Edit tag sets in General Settings
+          </Link>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <TagSet
-            title="TLD tags"
-            hint="One per domain ending. The name is the ending itself."
-            rows={tld}
-            batch={tldBatch}
-            open={open}
-            placeholder=".com"
-            onChange={setTld}
-            onReset={() => setTld(toRows(DEFAULT_TLD_TAGS))}
-          />
-          <TagSet
-            title="Domain platform tags"
-            hint='Matched against the sheet&apos;s "Domain Host" column, case-insensitively.'
-            rows={platform}
-            batch={platformBatch}
-            open={open}
-            placeholder="porkbun"
-            onChange={setPlatform}
-            onReset={() => setPlatform(toRows(DEFAULT_PLATFORM_TAGS))}
-          />
+          <TagSet title="TLD tags" batch={tldBatch} />
+          <TagSet title="Domain platform tags" batch={platformBatch} />
         </div>
 
         <div className="grid gap-2 sm:grid-cols-[1fr_180px]">
@@ -303,100 +251,21 @@ export function AutoDomainTags({
   );
 }
 
-const strip = (r: Row): TagInput => ({ name: r.name, color: r.color });
-
-function TagSet({
-  title,
-  hint,
-  rows,
-  batch,
-  open,
-  placeholder,
-  onChange,
-  onReset,
-}: {
-  title: string;
-  hint: string;
-  rows: Row[];
-  batch: ReturnType<typeof prepareBatch>;
-  open: boolean;
-  placeholder: string;
-  onChange: (rows: Row[]) => void;
-  onReset: () => void;
-}) {
-  const filled = rows.filter((r) => r.name.trim() !== "");
+function TagSet({ title, batch }: { title: string; batch: ReturnType<typeof prepareBatch> }) {
   return (
     <div className="rounded-xl border border-border p-3">
-      <div className="mb-1.5 flex items-center justify-between gap-2">
-        <span className="text-xs font-medium">
-          {title} <span className="font-normal text-muted-foreground">· {formatNumber(batch.specs.length)}</span>
-        </span>
-        {open && (
-          <span className="flex gap-1">
-            <button type="button" className="pv-btn-ghost text-xs" onClick={() => onChange([...rows, { key: nextKey++, name: "", color: "#6B7280" }])}>
-              + Add
-            </button>
-            <button type="button" className="pv-btn-ghost text-xs" onClick={onReset}>
-              Reset
-            </button>
-          </span>
-        )}
+      <div className="mb-1.5 text-xs font-medium">
+        {title} <span className="font-normal text-muted-foreground">· {formatNumber(batch.specs.length)}</span>
       </div>
-      {!open ? (
-        <div className="flex flex-wrap gap-1.5">
-          {batch.specs.map((t) => (
-            <span key={t.name} className="pv-chip">
-              <span className="h-2 w-2 rounded-full" style={{ background: t.color }} />
-              {t.name}
-            </span>
-          ))}
-          {batch.specs.length === 0 && <span className="text-xs text-muted-foreground">none</span>}
-        </div>
-      ) : (
-        <div className="space-y-1.5">
-          <p className="text-[11px] text-muted-foreground">{hint}</p>
-          {rows.map((r) => {
-            const idx = filled.findIndex((f) => f.key === r.key);
-            const problems = idx >= 0 ? batch.problems.get(idx) ?? [] : [];
-            const dup = idx >= 0 && batch.duplicates.includes(idx);
-            return (
-              <div key={r.key}>
-                <div className="grid grid-cols-[1fr_auto_96px_auto] items-center gap-1.5">
-                  <input
-                    type="text"
-                    className="pv-input text-sm"
-                    placeholder={placeholder}
-                    value={r.name}
-                    maxLength={MAX_TAG_NAME_LENGTH * 2}
-                    onChange={(e) => onChange(rows.map((x) => (x.key === r.key ? { ...x, name: e.target.value } : x)))}
-                    aria-label={`${title} name`}
-                  />
-                  <input
-                    type="color"
-                    className="h-9 w-10 cursor-pointer rounded-lg border border-border bg-transparent p-0.5"
-                    value={normalizeColor(r.color) ?? "#000000"}
-                    onChange={(e) => onChange(rows.map((x) => (x.key === r.key ? { ...x, color: e.target.value } : x)))}
-                    title="Colour, used when the tag has to be created"
-                  />
-                  <input
-                    type="text"
-                    className="pv-input font-mono text-xs"
-                    value={r.color}
-                    onChange={(e) => onChange(rows.map((x) => (x.key === r.key ? { ...x, color: e.target.value } : x)))}
-                    spellCheck={false}
-                    aria-label={`${title} colour`}
-                  />
-                  <button type="button" className="pv-btn-ghost text-xs" onClick={() => onChange(rows.filter((x) => x.key !== r.key))} title="Remove">
-                    <TrashIcon size={14} />
-                  </button>
-                </div>
-                {problems.length > 0 && <p className="mt-1 text-xs text-warning">{problems.join(" ")}</p>}
-                {dup && <p className="mt-1 text-xs text-muted-foreground">Repeated — only the first counts.</p>}
-              </div>
-            );
-          })}
-        </div>
-      )}
+      <div className="flex flex-wrap gap-1.5">
+        {batch.specs.map((t) => (
+          <span key={t.name} className="pv-chip">
+            <span className="h-2 w-2 rounded-full" style={{ background: t.color }} />
+            {t.name}
+          </span>
+        ))}
+        {batch.specs.length === 0 && <span className="text-xs text-muted-foreground">none</span>}
+      </div>
     </div>
   );
 }

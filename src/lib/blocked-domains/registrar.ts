@@ -11,7 +11,8 @@
 // The parsing and naming are pure and unit-tested; lookupRegistrar is the one
 // network call.
 
-import { DEFAULT_PLATFORM_TAGS, findPlatformTag } from "@/lib/tags/domain-tags";
+import { findPlatformTag } from "@/lib/tags/domain-tags";
+import { generalSettings } from "@/lib/general-settings/settings";
 
 /** rdap.org redirects to whichever registry runs the domain's ending. */
 const RDAP_BASE = process.env.RDAP_BASE_URL || "https://rdap.org/domain/";
@@ -56,7 +57,7 @@ export function registrarFromRdap(json: unknown): string | null {
  * the company suffix ("NameCheap, Inc." → "NameCheap").
  */
 export function platformLabel(registrar: string): string {
-  const known = findPlatformTag(registrar, DEFAULT_PLATFORM_TAGS);
+  const known = findPlatformTag(registrar, generalSettings().tags.platform);
   if (known) return known.name;
   return registrar
     .replace(/[,\s]+(llc|l\.l\.c\.|inc\.?|ltd\.?|limited|gmbh|s\.?a\.?|corp\.?|corporation|co\.?)$/i, "")

@@ -16,6 +16,11 @@
 
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
+    // General Settings first: the tab names, tags and statuses everything
+    // below reads. Never throws — an unreadable file means the defaults.
+    const generalSettings = await import("@/lib/general-settings/store");
+    await generalSettings.loadGeneralSettings();
+
     const { bootScheduler } = await import("@/lib/jobs/pause-campaigns");
     await bootScheduler();
 

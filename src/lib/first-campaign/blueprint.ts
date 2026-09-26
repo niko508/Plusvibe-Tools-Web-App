@@ -20,6 +20,7 @@ import {
   NO_SHOW_STEP_TWO,
   NUDGE_STEP_TWO,
 } from "@/lib/first-campaign/subsequence-content";
+import { generalSettings } from "@/lib/general-settings/settings";
 
 // --- Step 1 ----------------------------------------------------------------
 
@@ -187,8 +188,8 @@ export const UNSETTABLE_PARENT_SETTINGS = [
   "Fallback Sending for errored accounts (shares one API field with deleted/removed)",
 ];
 
-/** The tag whose email accounts send this campaign. */
-export const SENDING_TAG_NAME = "Active";
+/** The tag whose email accounts send this campaign: the active tag in General Settings. */
+export const sendingTagName = () => generalSettings().tags.active.name;
 
 /**
  * The campaign is always created under this name.

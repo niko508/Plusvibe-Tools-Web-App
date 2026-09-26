@@ -18,7 +18,7 @@ const eq = (label, got, want) => {
 
 const C = await importTs("@/lib/capacity/capacity");
 const {
-  DAILY_PER_INBOX, EXCLUDED_WORKSPACES, isExcluded, CAPACITY_ORDER, COLUMN_LABELS,
+  DAILY_PER_INBOX, excludedWorkspaces, isExcluded, CAPACITY_ORDER, COLUMN_LABELS,
   capacityOf, capacityFrom, totalsOf, sortRows, emptyCounts, toCsv, csvNameFor, describeRates,
 } = C;
 
@@ -38,7 +38,8 @@ eq("the rates read back in words", describeRates(),
 
 // --- the workspaces that never count -----------------------------------------
 console.log("--- the exclusions");
-eq("the two that never send to prospects are named",
+const EXCLUDED_WORKSPACES = excludedWorkspaces();
+eq("the two that never send to prospects are named (General Settings default)",
   EXCLUDED_WORKSPACES, ["Ikoni Digital Lead Nurturing + Duplicate Workspace", "Inbox Warmup"]);
 eq("…and are recognised", EXCLUDED_WORKSPACES.map(isExcluded), [true, true]);
 // Matched on the name, so stray spacing or case in Plusvibe cannot slip one in.

@@ -5,7 +5,7 @@ import {
   PARENT_SCHEDULE,
   SUBSEQUENCE_SCHEDULE,
   SUBSEQUENCES,
-  SENDING_TAG_NAME,
+  sendingTagName,
   STEP_ONE_BODY,
   SUBJECT_PLACEHOLDER,
   UNSETTABLE_PARENT_SETTINGS,
@@ -71,7 +71,7 @@ export function Blueprint() {
                 {SUBSEQUENCE_SCHEDULE.timing.to} · sender limits ignored
               </li>
               <li>
-                Sending accounts: the <strong>{SENDING_TAG_NAME}</strong> tag, so
+                Sending accounts: the <strong>{sendingTagName()}</strong> tag, so
                 the senders follow the tag rather than freezing today&apos;s
                 list. Optional — a workspace with no such tag still gets the
                 whole campaign, just with no accounts attached yet

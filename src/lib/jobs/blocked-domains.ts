@@ -14,7 +14,6 @@ import {
   readTab,
 } from "@/lib/google-sheets";
 import {
-  DEFAULT_SHEET_TAB,
   COL_DOMAIN,
   COL_STATUS,
   COL_TENANT_EMAIL,
@@ -23,10 +22,7 @@ import {
 import { normalizeDomain, inboxIsOnDomain } from "@/lib/blocked-domains/domain";
 import { COL_CANCEL_SOURCE } from "@/lib/blocked-domains/sheet-plan";
 import {
-  BLOCKED_STATUS,
-  CANCEL_TAB,
   COL_DOMAIN_HOST,
-  GOOGLE_CANCEL_TAB,
   TENANT_QUEUE,
   findDomainRow,
   headerIndex,
@@ -81,6 +77,7 @@ import type {
   SheetOutcome,
 } from "@/lib/jobs/blocked-domains-types";
 import { MAX_RECHECK_RUNS, MAX_STORED_ERRORS } from "@/lib/jobs/blocked-domains-types";
+import { domainsTab, googleInboxesToCancelTab, notActiveStatus, tenantsToCancelTab } from "@/lib/general-settings/settings";
 
 // Server-side manager for the Blocked Domains automation.
 //
@@ -595,7 +592,7 @@ async function runSheetGoogle(
 
   try {
     // --- the domain's row ------------------------------------------------
-    const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
+    const grid = await readTab(sheetId, domainsTab());
     const header = grid[0] ?? [];
     const iStatus = headerIndex(header, COL_STATUS);
     const hit = findDomainRow(grid, rec.domain, {
@@ -613,13 +610,13 @@ async function runSheetGoogle(
       // they can be listed without a source.
       pushError(
         rec,
-        `${rec.domain} isn't in the "${DEFAULT_SHEET_TAB}" tab, so its status was left alone and its inboxes are listed without a source.`
+        `${rec.domain} isn't in the "${domainsTab()}" tab, so its status was left alone and its inboxes are listed without a source.`
       );
     } else {
       if (hit.matches > 1) {
         pushError(
           rec,
-          `${rec.domain} appears ${hit.matches} times in "${DEFAULT_SHEET_TAB}" — only row ${hit.row.rowNumber} was used.`
+          `${rec.domain} appears ${hit.matches} times in "${domainsTab()}" — only row ${hit.row.rowNumber} was used.`
         );
       }
       outcome.domainRow = hit.row.rowNumber;
@@ -632,12 +629,12 @@ async function runSheetGoogle(
 
       if (args.allBurned) {
         if (iStatus < 0) {
-          pushError(rec, `The "${DEFAULT_SHEET_TAB}" tab has no ${COL_STATUS} column.`);
+          pushError(rec, `The "${domainsTab()}" tab has no ${COL_STATUS} column.`);
         } else {
           await batchUpdateCells(sheetId, [
             {
-              range: `${quoteTab(DEFAULT_SHEET_TAB)}!${columnLetter(iStatus)}${hit.row.rowNumber}`,
-              value: BLOCKED_STATUS,
+              range: `${quoteTab(domainsTab())}!${columnLetter(iStatus)}${hit.row.rowNumber}`,
+              value: notActiveStatus(),
             },
           ]);
           outcome.statusUpdated = true;
@@ -675,7 +672,7 @@ async function listGoogleInboxes(
   rec.sheet = outcome;
   let src = source ?? outcome.tenantSource ?? "";
   if (source === undefined && !outcome.tenantSource) {
-    const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
+    const grid = await readTab(sheetId, domainsTab());
     const header = grid[0] ?? [];
     const hit = findDomainRow(grid, rec.domain, {
       domain: headerIndex(header, COL_DOMAIN),
@@ -692,7 +689,7 @@ async function listGoogleInboxes(
       outcome.domainHost = hit.row.domainHost || outcome.domainHost;
     }
   }
-  const gGrid = await readTab(sheetId, GOOGLE_CANCEL_TAB);
+  const gGrid = await readTab(sheetId, googleInboxesToCancelTab());
   const plan = planGoogleTabWrites(gGrid, emails, src);
   if (plan.problem) {
     // Writing rows the tab can't place would put addresses under the wrong
@@ -707,12 +704,12 @@ async function listGoogleInboxes(
     await batchUpdateCells(
       sheetId,
       plan.updates.map((u) => ({
-        range: `${quoteTab(GOOGLE_CANCEL_TAB)}!${columnLetter(u.column)}${u.row}`,
+        range: `${quoteTab(googleInboxesToCancelTab())}!${columnLetter(u.column)}${u.row}`,
         value: u.value,
       }))
     );
   }
-  if (plan.append.length > 0) await appendRows(sheetId, GOOGLE_CANCEL_TAB, plan.append);
+  if (plan.append.length > 0) await appendRows(sheetId, googleInboxesToCancelTab(), plan.append);
   // A row moved up from the bottom counts as listed by this run: until now it
   // was on the tab in name only.
   const queued = [...plan.queued, ...plan.moved];
@@ -826,7 +823,7 @@ async function locate(
   try {
     const sheetId = envSpreadsheetId();
     if (sheetId) {
-      const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
+      const grid = await readTab(sheetId, domainsTab());
       const header = grid[0] ?? [];
       const hit = findDomainRow(grid, rec.domain, {
         domain: headerIndex(header, COL_DOMAIN),
@@ -975,7 +972,7 @@ async function runDelete(id: string) {
       try {
         await listGoogleInboxes(rec, sheetId, inboxes.map((i) => i.email));
       } catch (err) {
-        pushError(rec, `Could not list the inboxes on "${GOOGLE_CANCEL_TAB}" before deleting: ${msg(err)}`);
+        pushError(rec, `Could not list the inboxes on "${googleInboxesToCancelTab()}" before deleting: ${msg(err)}`);
       }
     }
   }
@@ -1046,7 +1043,7 @@ async function runSheet(rec: BlockedDomainJob) {
   }
 
   try {
-    const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
+    const grid = await readTab(sheetId, domainsTab());
     const header = grid[0] ?? [];
     const iStatus = headerIndex(header, COL_STATUS);
     const hit = findDomainRow(grid, rec.domain, {
@@ -1059,7 +1056,7 @@ async function runSheet(rec: BlockedDomainJob) {
     });
 
     if (!hit.row) {
-      outcome.error = `${rec.domain} isn't in the "${DEFAULT_SHEET_TAB}" tab, so nothing was updated there.`;
+      outcome.error = `${rec.domain} isn't in the "${domainsTab()}" tab, so nothing was updated there.`;
       rec.phaseStates.sheet = "error";
       pushError(rec, outcome.error);
       return;
@@ -1067,7 +1064,7 @@ async function runSheet(rec: BlockedDomainJob) {
     if (hit.matches > 1) {
       pushError(
         rec,
-        `${rec.domain} appears ${hit.matches} times in "${DEFAULT_SHEET_TAB}" — only row ${hit.row.rowNumber} was updated.`
+        `${rec.domain} appears ${hit.matches} times in "${domainsTab()}" — only row ${hit.row.rowNumber} was updated.`
       );
     }
 
@@ -1079,12 +1076,12 @@ async function runSheet(rec: BlockedDomainJob) {
     outcome.domainHost = hit.row.domainHost || outcome.domainHost;
 
     if (iStatus < 0) {
-      pushError(rec, `The "${DEFAULT_SHEET_TAB}" tab has no ${COL_STATUS} column.`);
+      pushError(rec, `The "${domainsTab()}" tab has no ${COL_STATUS} column.`);
     } else {
       await batchUpdateCells(sheetId, [
         {
-          range: `${quoteTab(DEFAULT_SHEET_TAB)}!${columnLetter(iStatus)}${hit.row.rowNumber}`,
-          value: BLOCKED_STATUS,
+          range: `${quoteTab(domainsTab())}!${columnLetter(iStatus)}${hit.row.rowNumber}`,
+          value: notActiveStatus(),
         },
       ]);
       outcome.statusUpdated = true;
@@ -1098,10 +1095,10 @@ async function runSheet(rec: BlockedDomainJob) {
     if (!hit.row.tenantEmail) {
       pushError(
         rec,
-        `${rec.domain} has no ${COL_TENANT_EMAIL} in the sheet, so nothing was added to "${CANCEL_TAB}".`
+        `${rec.domain} has no ${COL_TENANT_EMAIL} in the sheet, so nothing was added to "${tenantsToCancelTab()}".`
       );
     } else {
-      const cancelGrid = await readTab(sheetId, CANCEL_TAB);
+      const cancelGrid = await readTab(sheetId, tenantsToCancelTab());
       // Planned rather than appended: the tab is laid out in advance with
       // blank rows and a source dropdown, and Sheets' own append treats those
       // as part of the table and writes BELOW them, out of sight. The plan
@@ -1126,13 +1123,13 @@ async function runSheet(rec: BlockedDomainJob) {
           await batchUpdateCells(
             sheetId,
             tenantPlan.updates.map((u) => ({
-              range: `${quoteTab(CANCEL_TAB)}!${columnLetter(u.column)}${u.row}`,
+              range: `${quoteTab(tenantsToCancelTab())}!${columnLetter(u.column)}${u.row}`,
               value: u.value,
             }))
           );
         }
         if (tenantPlan.append.length > 0) {
-          await appendRows(sheetId, CANCEL_TAB, tenantPlan.append);
+          await appendRows(sheetId, tenantsToCancelTab(), tenantPlan.append);
         }
         outcome.tenantQueued = true;
       }
@@ -1190,7 +1187,7 @@ async function refreshDomainHost(rec: BlockedDomainJob) {
   try {
     const sheetId = envSpreadsheetId();
     if (!sheetId) return;
-    const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
+    const grid = await readTab(sheetId, domainsTab());
     const header = grid[0] ?? [];
     const hit = findDomainRow(grid, rec.domain, {
       domain: headerIndex(header, COL_DOMAIN),
@@ -1705,7 +1702,7 @@ export async function undoWriteOff(id: string): Promise<{ ok: boolean; error?: s
   if (!sheetId || !isSheetWritingConfigured()) return { ok: false, error: "The sheet is not configured for writing." };
 
   try {
-    const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
+    const grid = await readTab(sheetId, domainsTab());
     const header = grid[0] ?? [];
     const iStatus = headerIndex(header, COL_STATUS);
     const hit = findDomainRow(grid, rec.domain, {
@@ -1717,11 +1714,11 @@ export async function undoWriteOff(id: string): Promise<{ ok: boolean; error?: s
       domainHost: headerIndex(header, COL_DOMAIN_HOST),
     });
     if (!hit.row || iStatus < 0) {
-      return { ok: false, error: `${rec.domain} is no longer in the "${DEFAULT_SHEET_TAB}" tab, so its status could not be put back.` };
+      return { ok: false, error: `${rec.domain} is no longer in the "${domainsTab()}" tab, so its status could not be put back.` };
     }
     const to = s.previousStatus ?? "";
     await batchUpdateCells(sheetId, [
-      { range: `${quoteTab(DEFAULT_SHEET_TAB)}!${columnLetter(iStatus)}${hit.row.rowNumber}`, value: to },
+      { range: `${quoteTab(domainsTab())}!${columnLetter(iStatus)}${hit.row.rowNumber}`, value: to },
     ]);
     s.statusUpdated = false;
     s.revertedTo = to;
@@ -1729,10 +1726,10 @@ export async function undoWriteOff(id: string): Promise<{ ok: boolean; error?: s
 
     const cleanup: string[] = [];
     if (s.tenantQueued && s.tenantEmail) {
-      cleanup.push(`remove ${s.tenantEmail} from "${CANCEL_TAB}"`);
+      cleanup.push(`remove ${s.tenantEmail} from "${tenantsToCancelTab()}"`);
     }
     if ((s.googleQueued?.length ?? 0) > 0) {
-      cleanup.push(`remove ${s.googleQueued!.join(", ")} from "${GOOGLE_CANCEL_TAB}"`);
+      cleanup.push(`remove ${s.googleQueued!.join(", ")} from "${googleInboxesToCancelTab()}"`);
     }
     s.manualCleanup = cleanup.length > 0 ? `By hand: ${cleanup.join("; ")}.` : undefined;
 
@@ -1854,7 +1851,7 @@ export async function listGoogleInboxesForJob(
     await persist(id);
     return { ok: r.ok, listed: r.queued.length, already: r.already.length, error: r.ok ? undefined : rec.sheet?.error };
   } catch (err) {
-    pushError(rec, `Could not list the inboxes on "${GOOGLE_CANCEL_TAB}": ${msg(err)}`);
+    pushError(rec, `Could not list the inboxes on "${googleInboxesToCancelTab()}": ${msg(err)}`);
     rec.updatedAt = Date.now();
     await persist(id);
     return { ok: false, listed: 0, already: 0, error: msg(err) };

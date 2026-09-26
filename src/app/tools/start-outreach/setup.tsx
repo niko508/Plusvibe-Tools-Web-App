@@ -14,9 +14,8 @@ import { formatNumber } from "@/lib/format";
 import { Spinner } from "@/components/ui";
 import { AlertIcon, ChevronDownIcon, MoveIcon, RefreshIcon } from "@/components/icons";
 import type { SheetConfig } from "@/lib/sheet-config";
-import { DEFAULT_SHEET_TAB } from "@/lib/sheet-config";
-import { DEFAULT_PLATFORM_TAGS, DEFAULT_TLD_TAGS, readTagSets } from "@/lib/tags/domain-tags";
-import type { TagInput } from "@/lib/tags/bulk-tags";
+import { generalSettings } from "@/lib/general-settings/settings";
+import { refreshGeneralSettings, useGeneralSettings } from "@/lib/general-settings/use-general-settings";
 import {
   ADDRESS_SLOTS,
   COMPANY_SLOTS,
@@ -28,7 +27,6 @@ import {
 } from "../add-signatures/slots";
 import {
   ACTIVE_STATUS,
-  ACTIVE_TAG_NAME,
   countsInWords,
   domainsOf,
   parseOutreachSettings,
@@ -52,6 +50,7 @@ import { CategoryWeeks, WEEK_NOTE } from "./settings-panel";
 import type { SheetWarmup } from "@/lib/start-outreach/readiness";
 import type { StartOutreachJob } from "@/lib/jobs/start-outreach-types";
 import { JobsPanel } from "./jobs-panel";
+import { domainsTab } from "@/lib/general-settings/settings";
 
 // Steps 2–6 of Start Outreach: where the inboxes go and what they get there,
 // then the run itself. Everything here is a preview until the button is
@@ -59,7 +58,6 @@ import { JobsPanel } from "./jobs-panel";
 
 const DEST_KEY = "pv_outreach_dest";
 const OPTIONS_KEY = "pv_outreach_options";
-const TAG_SETS_KEY = "pv_domain_tag_sets"; // shared with Bulk Actions
 const POLL_MS = 2500;
 
 interface Options {
@@ -69,16 +67,6 @@ interface Options {
   sheet: boolean;
 }
 const DEFAULT_OPTIONS: Options = { signatures: true, activeTag: true, domainTags: true, sheet: true };
-
-function loadTagSets(): { tld: TagInput[]; platform: TagInput[] } {
-  try {
-    const saved = readTagSets(window.localStorage.getItem(TAG_SETS_KEY));
-    if (saved) return saved;
-  } catch {
-    // defaults below
-  }
-  return { tld: DEFAULT_TLD_TAGS, platform: DEFAULT_PLATFORM_TAGS };
-}
 
 export function OutreachSetup({
   source,
@@ -122,7 +110,10 @@ export function OutreachSetup({
   const [presetFrom, setPresetFrom] = useState<"destination" | "source" | null>(null);
   const [presetLoading, setPresetLoading] = useState(false);
 
-  const [tagSets, setTagSets] = useState<{ tld: TagInput[]; platform: TagInput[] }>({ tld: [], platform: [] });
+  // Tag sets and the active tag come from General Settings.
+  const { settings: general } = useGeneralSettings();
+  const tagSets = useMemo(() => ({ tld: general.tags.tld, platform: general.tags.platform }), [general]);
+  const activeTagName = general.tags.active.name;
 
   const [armed, setArmed] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -145,7 +136,6 @@ export function OutreachSetup({
     } catch {
       // storage unavailable
     }
-    setTagSets(loadTagSets());
     setTitles(pickRandomRoles(TITLE_SLOTS));
     setPrefsLoaded(true);
   }, []);
@@ -343,6 +333,9 @@ export function OutreachSetup({
     setStarting(true);
     setError(null);
     try {
+      // The settings as saved right now, not as they were when the page opened.
+      await refreshGeneralSettings();
+      const latest = generalSettings();
       const { jobId } = await startStartOutreach({
         sourceWorkspaceId: source.id,
         sourceWorkspaceName: source.name,
@@ -353,11 +346,11 @@ export function OutreachSetup({
         // must not reach a run that has no Azure 50 domains.
         weeks: Object.fromEntries(present.map((c) => [c, weeks[c]])),
         signatures: options.signatures ? fields : null,
-        activeTag: options.activeTag ? ACTIVE_TAG_NAME : null,
-        domainTags: options.domainTags ? tagSets : null,
+        activeTag: options.activeTag ? latest.tags.active.name : null,
+        domainTags: options.domainTags ? { tld: latest.tags.tld, platform: latest.tags.platform } : null,
         sheet: {
           url: sheetConfig?.url,
-          tab: sheetConfig?.tab || DEFAULT_SHEET_TAB,
+          tab: sheetConfig?.tab || domainsTab(),
           updateSheet: options.sheet,
         },
       });
@@ -545,7 +538,7 @@ export function OutreachSetup({
             aria-label="Add active tag"
           />
           <span>
-            Add the <span className="pv-chip">{ACTIVE_TAG_NAME}</span> tag to every moved inbox
+            Add the <span className="pv-chip">{activeTagName}</span> tag to every moved inbox
           </span>
         </label>
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -569,8 +562,8 @@ export function OutreachSetup({
         )}
         <p className="text-xs text-muted-foreground">
           Tag sets: {tagSets.tld.map((t) => t.name).join(", ")} · {tagSets.platform.map((t) => t.name).join(", ")}{" "}
-          <a href="/tools/bulk-actions" className="underline">
-            edit in Bulk Actions
+          <a href="/tools/general-settings#tags" className="underline">
+            edit in General Settings
           </a>
         </p>
       </div>
@@ -615,7 +608,7 @@ export function OutreachSetup({
           {[
             `week 1 settings (${present.length} kind${present.length === 1 ? "" : "s"})`,
             options.signatures ? "signatures" : null,
-            options.activeTag ? `"${ACTIVE_TAG_NAME}" tag` : null,
+            options.activeTag ? `"${activeTagName}" tag` : null,
             options.domainTags ? "TLD + platform tags" : null,
             options.sheet ? "sheet (Status, warmup cleared)" : null,
           ]

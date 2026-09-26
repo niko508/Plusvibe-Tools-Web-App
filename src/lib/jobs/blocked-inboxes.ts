@@ -14,12 +14,9 @@ import {
   quoteTab,
   readTab,
 } from "@/lib/google-sheets";
-import { DEFAULT_SHEET_TAB, COL_DOMAIN, COL_STATUS, COL_TENANT_EMAIL, COL_TENANT_SOURCE } from "@/lib/jobs/azure-warmup-types";
+import { COL_DOMAIN, COL_STATUS, COL_TENANT_EMAIL, COL_TENANT_SOURCE } from "@/lib/jobs/azure-warmup-types";
 import {
-  BLOCKED_STATUS,
-  CANCEL_TAB,
   COL_DOMAIN_HOST,
-  GOOGLE_CANCEL_TAB,
   TENANT_QUEUE,
   findDomainRow,
   headerIndex,
@@ -41,6 +38,7 @@ import {
   type BlockedInboxJob,
   type InboxDomainState,
 } from "@/lib/jobs/blocked-inboxes-types";
+import { domainsTab, googleInboxesToCancelTab, notActiveStatus, tenantsToCancelTab } from "@/lib/general-settings/settings";
 
 // Server-side manager for the inbox-level Blocked Domains automation.
 //
@@ -429,7 +427,7 @@ async function domainsGrid(): Promise<string[][] | null> {
   if (c && Date.now() - c.at < CACHE_MS) return c.grid;
   return once("sheet:domains", () =>
     withSheet(async () => {
-      const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
+      const grid = await readTab(sheetId, domainsTab());
       shared.sheetCache = { at: Date.now(), grid };
       return grid;
     })
@@ -662,12 +660,12 @@ async function listOnGoogleCancel(rec: BlockedInboxJob) {
   const sheetId = envSpreadsheetId();
   if (!sheetId || !isSheetWritingConfigured()) {
     rec.googleCancel = { listed: false, error: "The sheet isn't set up for writing, so it was not listed." };
-    pushError(rec, `${rec.email} was not listed on "${GOOGLE_CANCEL_TAB}": the sheet isn't set up for writing.`);
+    pushError(rec, `${rec.email} was not listed on "${googleInboxesToCancelTab()}": the sheet isn't set up for writing.`);
     return;
   }
   try {
     await withSheet(async () => {
-      const grid = await readTab(sheetId, GOOGLE_CANCEL_TAB);
+      const grid = await readTab(sheetId, googleInboxesToCancelTab());
       const plan = planGoogleTabWrites(grid, [rec.email], rec.tenantSource ?? "");
       if (plan.problem) {
         rec.googleCancel = { listed: false, error: plan.problem };
@@ -677,15 +675,15 @@ async function listOnGoogleCancel(rec: BlockedInboxJob) {
       if (plan.updates.length > 0) {
         await batchUpdateCells(
           sheetId,
-          plan.updates.map((u) => ({ range: `${quoteTab(GOOGLE_CANCEL_TAB)}!${columnLetter(u.column)}${u.row}`, value: u.value }))
+          plan.updates.map((u) => ({ range: `${quoteTab(googleInboxesToCancelTab())}!${columnLetter(u.column)}${u.row}`, value: u.value }))
         );
       }
-      if (plan.append.length > 0) await appendRows(sheetId, GOOGLE_CANCEL_TAB, plan.append);
+      if (plan.append.length > 0) await appendRows(sheetId, googleInboxesToCancelTab(), plan.append);
       rec.googleCancel = { listed: true, alreadyThere: plan.already.length > 0 && plan.queued.length === 0 && plan.moved.length === 0 };
     });
   } catch (err) {
     rec.googleCancel = { listed: false, error: msg(err) };
-    pushError(rec, `Could not list ${rec.email} on "${GOOGLE_CANCEL_TAB}": ${msg(err)}`);
+    pushError(rec, `Could not list ${rec.email} on "${googleInboxesToCancelTab()}": ${msg(err)}`);
   }
 }
 
@@ -790,7 +788,7 @@ async function writeNotActive(
   sheetId: string,
   domain: string
 ): Promise<{ error?: string; previousStatus?: string; tenantEmail?: string; tenantSource?: string }> {
-  const grid = await readTab(sheetId, DEFAULT_SHEET_TAB);
+  const grid = await readTab(sheetId, domainsTab());
   shared.sheetCache = { at: Date.now(), grid };
   const header = grid[0] ?? [];
   const iStatus = headerIndex(header, COL_STATUS);
@@ -802,10 +800,10 @@ async function writeNotActive(
     client: headerIndex(header, "Client"),
     domainHost: headerIndex(header, COL_DOMAIN_HOST),
   });
-  if (!hit.row) return { error: `${domain} isn't in the "${DEFAULT_SHEET_TAB}" tab` };
-  if (iStatus < 0) return { error: `the "${DEFAULT_SHEET_TAB}" tab has no ${COL_STATUS} column` };
+  if (!hit.row) return { error: `${domain} isn't in the "${domainsTab()}" tab` };
+  if (iStatus < 0) return { error: `the "${domainsTab()}" tab has no ${COL_STATUS} column` };
   await batchUpdateCells(sheetId, [
-    { range: `${quoteTab(DEFAULT_SHEET_TAB)}!${columnLetter(iStatus)}${hit.row.rowNumber}`, value: BLOCKED_STATUS },
+    { range: `${quoteTab(domainsTab())}!${columnLetter(iStatus)}${hit.row.rowNumber}`, value: notActiveStatus() },
   ]);
   return {
     previousStatus: hit.row.currentStatus,
@@ -822,17 +820,17 @@ async function queueTenant(domain: string, tenant: string, source: string): Prom
 }
 
 async function writeTenant(sheetId: string, domain: string, tenant: string, source: string): Promise<{ queued: boolean; already: boolean; error?: string }> {
-  const grid = await readTab(sheetId, CANCEL_TAB);
+  const grid = await readTab(sheetId, tenantsToCancelTab());
   const plan = planQueueTabWrites(grid, [{ key: tenant, source, domain }], TENANT_QUEUE);
   if (plan.problem) return { queued: false, already: false, error: plan.problem };
   if (plan.already.length > 0) return { queued: false, already: true };
   if (plan.updates.length > 0) {
     await batchUpdateCells(
       sheetId,
-      plan.updates.map((u) => ({ range: `${quoteTab(CANCEL_TAB)}!${columnLetter(u.column)}${u.row}`, value: u.value }))
+      plan.updates.map((u) => ({ range: `${quoteTab(tenantsToCancelTab())}!${columnLetter(u.column)}${u.row}`, value: u.value }))
     );
   }
-  if (plan.append.length > 0) await appendRows(sheetId, CANCEL_TAB, plan.append);
+  if (plan.append.length > 0) await appendRows(sheetId, tenantsToCancelTab(), plan.append);
   return { queued: true, already: false };
 }
 
@@ -1037,7 +1035,7 @@ async function cancelDomain(domain: string): Promise<void> {
         const t = await queueTenant(domain, r.tenantEmail, r.tenantSource ?? "");
         d.tenantQueued = t.queued;
         d.tenantAlreadyQueued = t.already;
-        if (t.error) domainError(d, `Could not queue the tenant on "${CANCEL_TAB}": ${t.error}`);
+        if (t.error) domainError(d, `Could not queue the tenant on "${tenantsToCancelTab()}": ${t.error}`);
       } else if (!r.error && hasMicrosoft) {
         domainError(d, `${domain} has no ${COL_TENANT_EMAIL} in the sheet, so no tenant was queued to cancel.`);
       }

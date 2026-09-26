@@ -7,12 +7,13 @@ import { ESP_LABELS, NOUNS, countNoun, levelOf } from "@/lib/burned/settings";
 import { copyText, csvName, toCsv, verdictText, type ScanRow, type Verdict } from "@/lib/burned/scan";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatNumber } from "@/lib/format";
-import { DEFAULT_SHEET_URL } from "@/lib/jobs/azure-warmup-types";
 import { useSheetConfig } from "@/lib/use-sheet-config";
 import { StatCard } from "@/components/stat-card";
 import { RemoveJobButton, Spinner, TableDisclosure } from "@/components/ui";
 import { AlertIcon, CheckIcon, CopyIcon, DownloadIcon, FireIcon, TrashIcon } from "@/components/icons";
 import { RemovalCard } from "./removal-card";
+import { defaultSheetUrl } from "@/lib/general-settings/settings";
+import { useSettingField } from "@/lib/general-settings/use-general-settings";
 
 // One scan's results: what it found, and the list ready to take away.
 
@@ -295,7 +296,7 @@ function RemovalPanel({
   onStart: (sheetUrl: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [sheetUrl, setSheetUrl] = useState(DEFAULT_SHEET_URL);
+  const [sheetUrl, setSheetUrl] = useSettingField((s) => s.sheet.url);
   const { config } = useSheetConfig();
   const google = job.esp === "google";
 
@@ -361,7 +362,7 @@ function RemovalPanel({
           className="pv-input text-sm"
           value={sheetUrl}
           onChange={(e) => setSheetUrl(e.target.value)}
-          placeholder={DEFAULT_SHEET_URL}
+          placeholder={defaultSheetUrl()}
           aria-label="Email Infrastructure sheet"
         />
       </div>

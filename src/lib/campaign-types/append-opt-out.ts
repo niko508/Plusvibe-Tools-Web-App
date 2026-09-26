@@ -1,6 +1,5 @@
 import type { SequenceStep } from "@/lib/plusvibe-types";
-import { OPT_OUT_SPINTAX } from "./opt-out-spintax";
-import { PREVIOUS_OPT_OUT_SPINTAX } from "./opt-out-spintax-previous";
+import { generalSettings, type GeneralSettings } from "@/lib/general-settings/settings";
 
 // Puts the opt-out spintax at the bottom of every variation in STEP 1 of the
 // parent sequence — and nowhere else. Not later steps, not sub-sequences.
@@ -13,6 +12,9 @@ import { PREVIOUS_OPT_OUT_SPINTAX } from "./opt-out-spintax-previous";
 //   two or more blocks    the first becomes the current one, the rest go —
 //                         which is also what cleans up a variation an earlier
 //                         run stacked a second block onto
+//
+// The current block and the older ones are in General Settings (Opt-out text);
+// the defaults there are opt-out-spintax.ts and opt-out-spintax-previous.ts.
 //
 // Blocks are recognised by their OPTIONS, not character for character. Once a
 // campaign has been through Plusvibe's editor its HTML may carry &quot; for ",
@@ -28,7 +30,12 @@ const SPACER = "<div>&nbsp;</div>";
 
 /** Wraps the block the way Plusvibe's editor expects a trailing paragraph. */
 export function optOutHtml(): string {
-  return `${SPACER}<div>${OPT_OUT_SPINTAX}</div>`;
+  return `${SPACER}<div>${currentOptOut()}</div>`;
+}
+
+/** The block put on step 1 now. */
+export function currentOptOut(): string {
+  return generalSettings().optOut.current;
 }
 
 // --- Reading blocks out of HTML ------------------------------------------------
@@ -134,12 +141,14 @@ export function findRandomBlocks(html: string): SpintaxBlock[] {
 
 // --- Which blocks are opt-out blocks ------------------------------------------------
 
-let known: { current: Set<string>; all: Set<string> } | null = null;
+// Worked out once per version of the settings, not once per variation.
+let known: { from: GeneralSettings["optOut"]; current: Set<string>; all: Set<string> } | null = null;
 function knownOptions() {
-  if (!known) {
+  const from = generalSettings().optOut;
+  if (known?.from !== from) {
     const opts = (block: string) => findRandomBlocks(block)[0]?.options ?? [];
-    const current = new Set(opts(OPT_OUT_SPINTAX));
-    known = { current, all: new Set([...current, ...opts(PREVIOUS_OPT_OUT_SPINTAX)]) };
+    const current = new Set(opts(from.current));
+    known = { from, current, all: new Set([...current, ...from.previous.flatMap(opts)]) };
   }
   return known;
 }
@@ -203,7 +212,7 @@ export function withCurrentOptOut(body: string): { body: string; outcome: OptOut
   let out = body;
   // Later blocks first, so the earlier positions still hold.
   for (const b of [...extra].reverse()) out = removeBlock(out, b);
-  out = out.slice(0, first.start) + OPT_OUT_SPINTAX + out.slice(first.end);
+  out = out.slice(0, first.start) + currentOptOut() + out.slice(first.end);
   return { body: out, outcome: "replaced", removed: extra.length };
 }
 

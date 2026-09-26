@@ -15,15 +15,12 @@ import {
 } from "@/lib/google-sheets";
 import { extractSheetId } from "@/lib/sheet";
 import {
-  DEFAULT_SHEET_TAB,
   COL_DOMAIN,
   COL_STATUS,
   COL_TENANT_EMAIL,
   COL_TENANT_SOURCE,
 } from "@/lib/jobs/azure-warmup-types";
 import {
-  CANCEL_TAB,
-  GOOGLE_CANCEL_TAB,
   GOOGLE_QUEUE,
   TENANT_QUEUE,
   planQueueTabWrites,
@@ -40,7 +37,6 @@ import {
   planDomainsTab,
   targetsFrom,
   tenantsToQueue,
-  REMOVED_STATUS,
   type DomainLookup,
   type RemovalTarget,
   type TargetResult,
@@ -52,6 +48,7 @@ import type {
   SheetOutcome,
 } from "@/lib/jobs/burned-removal-types";
 import { MAX_STORED_ERRORS } from "@/lib/jobs/burned-removal-types";
+import { domainsTab, googleInboxesToCancelTab, notActiveStatus, tenantsToCancelTab } from "@/lib/general-settings/settings";
 
 // Server-side manager for "Remove Inboxes & Domains".
 //
@@ -330,7 +327,7 @@ async function runSheet(rec: BurnedRemovalJob, targets: RemovalTarget[], check: 
 
   if (rec.esp === "google") {
     check();
-    const grid = await readTab(rec.spreadsheetId, GOOGLE_CANCEL_TAB);
+    const grid = await readTab(rec.spreadsheetId, googleInboxesToCancelTab());
     // The source dropdown is deliberately left empty: a Google mailbox has no
     // tenant behind it, and guessing a source would be worse than blank.
     const plan = planQueueTabWrites(
@@ -366,7 +363,7 @@ async function runSheet(rec: BurnedRemovalJob, targets: RemovalTarget[], check: 
 
   // --- Microsoft -----------------------------------------------------------
   check();
-  const grid = await readTab(rec.spreadsheetId, DEFAULT_SHEET_TAB);
+  const grid = await readTab(rec.spreadsheetId, domainsTab());
   const plan = planDomainsTab(
     grid,
     domainsOf(targets),
@@ -376,7 +373,7 @@ async function runSheet(rec: BurnedRemovalJob, targets: RemovalTarget[], check: 
       tenantEmail: COL_TENANT_EMAIL,
       tenantSource: COL_TENANT_SOURCE,
     },
-    DEFAULT_SHEET_TAB
+    domainsTab()
   );
   if (plan.problem) {
     rec.sheet.error = plan.problem;
@@ -392,7 +389,7 @@ async function runSheet(rec: BurnedRemovalJob, targets: RemovalTarget[], check: 
     if (l.matches > 1) {
       pushError(
         rec,
-        `${l.domain} appears ${l.matches} times in "${DEFAULT_SHEET_TAB}" — only row ${l.rowNumber} was updated.`
+        `${l.domain} appears ${l.matches} times in "${domainsTab()}" — only row ${l.rowNumber} was updated.`
       );
     }
   }
@@ -403,7 +400,7 @@ async function runSheet(rec: BurnedRemovalJob, targets: RemovalTarget[], check: 
     await batchUpdateCells(
       rec.spreadsheetId,
       plan.updates.map((u) => ({
-        range: `${quoteTab(DEFAULT_SHEET_TAB)}!${columnLetter(u.column)}${u.row}`,
+        range: `${quoteTab(domainsTab())}!${columnLetter(u.column)}${u.row}`,
         value: u.value,
       }))
     );
@@ -418,14 +415,14 @@ async function runSheet(rec: BurnedRemovalJob, targets: RemovalTarget[], check: 
   for (const domain of missing) {
     pushError(
       rec,
-      `${domain} has no ${COL_TENANT_EMAIL} in the sheet, so nothing was added to "${CANCEL_TAB}" — its inboxes were left alone.`
+      `${domain} has no ${COL_TENANT_EMAIL} in the sheet, so nothing was added to "${tenantsToCancelTab()}" — its inboxes were left alone.`
     );
   }
   let queued = new Set<string>();
   let already = new Set<string>();
   if (entries.length > 0) {
     check();
-    const cancelGrid = await readTab(rec.spreadsheetId, CANCEL_TAB);
+    const cancelGrid = await readTab(rec.spreadsheetId, tenantsToCancelTab());
     const tenantPlan = planQueueTabWrites(cancelGrid, entries, TENANT_QUEUE);
     if (tenantPlan.problem) {
       rec.sheet.error = tenantPlan.problem;
@@ -446,14 +443,14 @@ async function runSheet(rec: BurnedRemovalJob, targets: RemovalTarget[], check: 
     const row = rowFor(t);
     const lookup = lookupOf.get(t.domain || t.name);
     if (!lookup || !lookup.rowNumber) {
-      markSkipped(rec, row, lookup?.problem ?? `${t.name} isn't in the "${DEFAULT_SHEET_TAB}" tab.`);
+      markSkipped(rec, row, lookup?.problem ?? `${t.name} isn't in the "${domainsTab()}" tab.`);
       continue;
     }
     if (!lookup.tenantEmail) {
       markSkipped(
         rec,
         row,
-        `No ${COL_TENANT_EMAIL} in the sheet, so the tenant was never queued to cancel and the inboxes were left alone. The row is marked ${REMOVED_STATUS}.`
+        `No ${COL_TENANT_EMAIL} in the sheet, so the tenant was never queued to cancel and the inboxes were left alone. The row is marked ${notActiveStatus()}.`
       );
       continue;
     }

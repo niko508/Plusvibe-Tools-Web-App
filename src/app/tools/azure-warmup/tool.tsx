@@ -7,8 +7,6 @@ import type {
   AzureJobStatus,
 } from "@/lib/jobs/azure-warmup-types";
 import {
-  DEFAULT_SHEET_TAB,
-  DEFAULT_SHEET_URL,
   MAX_DELAY_HOURS,
   MAX_DELAY_MINUTES,
 } from "@/lib/jobs/azure-warmup-types";
@@ -40,6 +38,7 @@ import {
 import { parseUpload, type ParsedUpload } from "./parse";
 import { WarmupSettingsPanel } from "./settings-panel";
 import { LEGACY_WARMUP_SETTINGS, describeWarmup, type WarmupSettings } from "@/lib/azure-warmup/warmup-settings";
+import { useSettingField } from "@/lib/general-settings/use-general-settings";
 
 export function AzureWarmupTool() {
   const { hasKey, ready } = useApiKey();
@@ -56,8 +55,8 @@ export function AzureWarmupTool() {
   const [raw, setRaw] = useState("");
   const [delayH, setDelayH] = useState("0");
   const [delayM, setDelayM] = useState("0");
-  const [sheetUrl, setSheetUrl] = useState(DEFAULT_SHEET_URL);
-  const [sheetTab, setSheetTab] = useState(DEFAULT_SHEET_TAB);
+  const [sheetUrl, setSheetUrl] = useSettingField((s) => s.sheet.url);
+  const [sheetTab, setSheetTab] = useSettingField((s) => s.sheet.domainsTab);
   const [erroredRaw, setErroredRaw] = useState("");
 
   const [starting, setStarting] = useState(false);
