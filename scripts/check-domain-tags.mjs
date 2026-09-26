@@ -91,8 +91,32 @@ eq("no sheet → everything is 'not in sheet', TLDs still assigned", (() => { co
 eq("topCounts reads well", topCounts(new Map([["a", 1], ["b", 5], ["c", 2]]), 2), "b ×5, c ×2, +1 more");
 
 // --- the defaults are the sets on the account ---------------------------------------------
-eq("default TLD tags", DEFAULT_TLD_TAGS.map((t) => t.name), [".co", ".com", ".digital", ".live", ".one", ".org", ".pro"]);
-eq("default platform tags", DEFAULT_PLATFORM_TAGS.map((t) => t.name), ["porkbun", "dynadot", "namesilo", "spaceship"]);
+eq("default TLD tags", DEFAULT_TLD_TAGS.map((t) => t.name), [".co", ".com", ".digital", ".live", ".one", ".org", ".pro", ".biz"]);
+eq("default platform tags", DEFAULT_PLATFORM_TAGS.map((t) => t.name), ["porkbun", "dynadot", "namesilo", "spaceship", "name.com"]);
+
+console.log("--- .biz and name.com");
+{
+  eq(".biz is a TLD tag", m.findTldTag("rumpe.biz", m.DEFAULT_TLD_TAGS)?.name, ".biz");
+  eq("name.com is a platform tag, however the sheet spells it", ["name.com", "Name.com", "NAME.COM", " name.com "].map((h) => m.findPlatformTag(h, m.DEFAULT_PLATFORM_TAGS)?.name), ["name.com", "name.com", "name.com", "name.com"]);
+  eq("…and as the registry names it", m.findPlatformTag("Name.com, Inc.", m.DEFAULT_PLATFORM_TAGS)?.name, "name.com");
+  eq("lookalikes stay what they are", ["NameSilo", "namesilo.com", "Porkbun.com"].map((h) => m.findPlatformTag(h, m.DEFAULT_PLATFORM_TAGS)?.name), ["namesilo", "namesilo", "porkbun"]);
+  eq("Namecheap isn't taken for name.com", m.findPlatformTag("Namecheap", m.DEFAULT_PLATFORM_TAGS)?.name, undefined);
+}
+
+console.log("--- saved lists pick up new defaults");
+{
+  const names = (l) => l.map((t) => t.name);
+  // Saved before .biz and name.com existed, with no record of what it had seen.
+  const old = JSON.stringify({ tld: [{ name: ".com", color: "#10B981" }, { name: ".xyz", color: "#000000" }], platform: [{ name: "porkbun", color: "#FD4949" }] });
+  const r = m.readTagSets(old);
+  eq("a list saved earlier gets the new ones added", [names(r.tld).includes(".biz"), names(r.platform).includes("name.com")], [true, true]);
+  eq("…keeping its own additions", names(r.tld).includes(".xyz"), true);
+  // Saved now, having seen every default, with .pro taken out on purpose.
+  const now = m.saveTagSets(m.DEFAULT_TLD_TAGS.filter((t) => t.name !== ".pro"), m.DEFAULT_PLATFORM_TAGS);
+  eq("one taken out on purpose stays out", names(m.readTagSets(now).tld).includes(".pro"), false);
+  eq("nothing saved: the defaults are used", m.readTagSets(null), null);
+  eq("something unreadable: the defaults are used", m.readTagSets("{oops"), null);
+}
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

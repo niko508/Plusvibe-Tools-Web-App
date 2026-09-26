@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Workspace } from "@/lib/plusvibe-types";
 import type { DomainTagsJob, WorkspaceOutcome } from "@/lib/jobs/domain-tags-types";
-import { DEFAULT_PLATFORM_TAGS, DEFAULT_TLD_TAGS } from "@/lib/tags/domain-tags";
+import { DEFAULT_PLATFORM_TAGS, DEFAULT_TLD_TAGS, readTagSets, saveTagSets } from "@/lib/tags/domain-tags";
 import { POOL_TAGS } from "@/lib/campaign-types/pools";
 import { MAX_TAG_NAME_LENGTH, normalizeColor, prepareBatch, type TagInput } from "@/lib/tags/bulk-tags";
 import { DEFAULT_SHEET_URL, DEFAULT_SHEET_TAB } from "@/lib/jobs/azure-warmup-types";
@@ -37,13 +37,8 @@ const toRows = (tags: TagInput[]): Row[] => tags.map((t) => ({ key: nextKey++, n
 
 function loadSets(): { tld: Row[]; platform: Row[] } {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as { tld?: TagInput[]; platform?: TagInput[] };
-      if (Array.isArray(parsed.tld) && Array.isArray(parsed.platform)) {
-        return { tld: toRows(parsed.tld), platform: toRows(parsed.platform) };
-      }
-    }
+    const saved = readTagSets(window.localStorage.getItem(STORAGE_KEY));
+    if (saved) return { tld: toRows(saved.tld), platform: toRows(saved.platform) };
   } catch {
     // fall through to the defaults
   }
@@ -82,7 +77,7 @@ export function AutoDomainTags({
   useEffect(() => {
     if (!setsReady) return;
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ tld: tld.map(strip), platform: platform.map(strip) }));
+      window.localStorage.setItem(STORAGE_KEY, saveTagSets(tld.map(strip), platform.map(strip)));
     } catch {
       // nothing to do — the defaults come back next time
     }

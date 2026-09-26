@@ -15,7 +15,7 @@ import { Spinner } from "@/components/ui";
 import { AlertIcon, ChevronDownIcon, MoveIcon, RefreshIcon } from "@/components/icons";
 import type { SheetConfig } from "@/lib/sheet-config";
 import { DEFAULT_SHEET_TAB } from "@/lib/sheet-config";
-import { DEFAULT_PLATFORM_TAGS, DEFAULT_TLD_TAGS } from "@/lib/tags/domain-tags";
+import { DEFAULT_PLATFORM_TAGS, DEFAULT_TLD_TAGS, readTagSets } from "@/lib/tags/domain-tags";
 import type { TagInput } from "@/lib/tags/bulk-tags";
 import {
   ADDRESS_SLOTS,
@@ -72,13 +72,8 @@ const DEFAULT_OPTIONS: Options = { signatures: true, activeTag: true, domainTags
 
 function loadTagSets(): { tld: TagInput[]; platform: TagInput[] } {
   try {
-    const raw = window.localStorage.getItem(TAG_SETS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as { tld?: TagInput[]; platform?: TagInput[] };
-      if (Array.isArray(parsed.tld) && Array.isArray(parsed.platform)) {
-        return { tld: parsed.tld, platform: parsed.platform };
-      }
-    }
+    const saved = readTagSets(window.localStorage.getItem(TAG_SETS_KEY));
+    if (saved) return saved;
   } catch {
     // defaults below
   }

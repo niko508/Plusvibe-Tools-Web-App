@@ -20,6 +20,7 @@ export const DEFAULT_TLD_TAGS: TagInput[] = [
   { name: ".one", color: "#14B8A6" },
   { name: ".org", color: "#6B7280" },
   { name: ".pro", color: "#FF5733" },
+  { name: ".biz", color: "#EC4899" },
 ];
 
 export const DEFAULT_PLATFORM_TAGS: TagInput[] = [
@@ -27,7 +28,56 @@ export const DEFAULT_PLATFORM_TAGS: TagInput[] = [
   { name: "dynadot", color: "#3341FF" },
   { name: "namesilo", color: "#88E798" },
   { name: "spaceship", color: "#562FC1" },
+  { name: "name.com", color: "#0EA5E9" },
 ];
+
+/**
+ * The TLD and platform lists as saved in the browser (Bulk Actions edits
+ * them; Start Outreach reads them). `seen` is the defaults that existed when
+ * they were saved.
+ */
+export interface SavedTagSets {
+  tld: TagInput[];
+  platform: TagInput[];
+  seen?: { tld: string[]; platform: string[] };
+}
+
+/**
+ * A saved list with the defaults it has never seen added to the end: a TLD or
+ * platform added to the app after the list was saved shows up without a
+ * Reset, while one taken out on purpose — seen, then removed — stays out.
+ * A list saved before `seen` was kept is taken to have seen none of them.
+ */
+export function withNewDefaults(saved: TagInput[], defaults: TagInput[], seen: string[] | undefined): TagInput[] {
+  const have = new Set(saved.map((t) => tagKey(t.name)));
+  const knew = new Set((seen ?? []).map(tagKey));
+  return [...saved, ...defaults.filter((d) => !have.has(tagKey(d.name)) && !knew.has(tagKey(d.name)))];
+}
+
+/** The saved lists, brought up to date with new defaults; null when nothing usable is saved. */
+export function readTagSets(raw: string | null): { tld: TagInput[]; platform: TagInput[] } | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<SavedTagSets>;
+    if (!Array.isArray(parsed.tld) || !Array.isArray(parsed.platform)) return null;
+    return {
+      tld: withNewDefaults(parsed.tld, DEFAULT_TLD_TAGS, parsed.seen?.tld),
+      platform: withNewDefaults(parsed.platform, DEFAULT_PLATFORM_TAGS, parsed.seen?.platform),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** What is saved: the lists, and the defaults they have now seen. */
+export function saveTagSets(tld: TagInput[], platform: TagInput[]): string {
+  const sets: SavedTagSets = {
+    tld,
+    platform,
+    seen: { tld: DEFAULT_TLD_TAGS.map((t) => t.name), platform: DEFAULT_PLATFORM_TAGS.map((t) => t.name) },
+  };
+  return JSON.stringify(sets);
+}
 
 export const COL_DOMAIN = "Domain";
 export const COL_DOMAIN_HOST = "Domain Host";
