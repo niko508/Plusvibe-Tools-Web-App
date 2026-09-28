@@ -201,6 +201,24 @@ function removeBlock(html: string, b: SpintaxBlock): string {
   return before + after;
 }
 
+/** What a body carries: the current block alone, an older or doubled one, or none. */
+export type OptOutState = "current" | "older" | "none";
+
+export function optOutState(body: string): OptOutState {
+  const blocks = optOutBlocks(body);
+  if (blocks.length === 0) return "none";
+  return blocks.length === 1 && isCurrentBlock(blocks[0]) ? "current" : "older";
+}
+
+/** The body with every opt-out block taken out — current or older — and how many went. */
+export function withoutOptOut(body: string): { body: string; removed: number } {
+  const blocks = optOutBlocks(body);
+  let out = body;
+  // Last first, so the earlier positions still hold.
+  for (const b of [...blocks].reverse()) out = removeBlock(out, b);
+  return { body: out, removed: blocks.length };
+}
+
 export type OptOutOutcome = "added" | "replaced" | "present";
 
 /** The body with exactly one opt-out block, the current one, and what it took. */

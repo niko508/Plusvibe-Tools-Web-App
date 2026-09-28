@@ -11,12 +11,18 @@
 //   no winners  step 1 becomes one empty variant, to be written by hand —
 //               the page warns before anything is created
 //
+// The opt-out line: the page asks whether the kept variants should carry it.
+// Yes adds the current block where a variant has none (and swaps an older
+// wording for the current one); no takes it out wherever it is. Only step 1 —
+// the follow-ups stay exactly as they are either way.
+//
 // Positive replies come from Plusvibe's variation stats (`pos_reply`), which
 // also say which variants are deleted: those never travel.
 //
 // Pure module — no API — so all of it is unit-tested.
 
 import type { SequenceStep, SequenceVariation } from "@/lib/plusvibe-types";
+import { optOutState, withCurrentOptOut, withoutOptOut, type OptOutState } from "@/lib/campaign-types/append-opt-out";
 
 export interface VariantStat {
   variation: string;
@@ -73,6 +79,26 @@ export interface VariantRow {
   /** Positive replies per 100 sent, 2 decimals; 0 when nothing was sent. */
   positiveRate: number;
   kept: boolean;
+  /** Whether its body carries the opt-out line: the current one, an older wording, or none. */
+  optOut: OptOutState;
+}
+
+/**
+ * What to do with the opt-out line on the kept variants. "keep" leaves each
+ * body as it is — only for callers that don't say.
+ */
+export type OptOutChoice = "add" | "remove" | "keep";
+
+export interface OptOutSummary {
+  choice: OptOutChoice;
+  /** Variants that had none and got the current block. */
+  added: string[];
+  /** Variants whose older wording (or a second copy) was swapped for the current block. */
+  replaced: string[];
+  /** Variants already carrying the current block, left as they were. */
+  present: string[];
+  /** Variants it was taken out of. */
+  removed: string[];
 }
 
 export interface WinnerPlan {
@@ -89,6 +115,8 @@ export interface WinnerPlan {
   followUps: { step: number; variations: number }[];
   /** Variants Plusvibe has deleted but still returns: never written back. */
   droppedDeleted: number;
+  /** What happens to the opt-out line on the kept variants. */
+  optOut: OptOutSummary;
   /** What the clone's sequence is written as. */
   steps: SequenceStep[];
 }
@@ -110,7 +138,42 @@ function byStrength(a: VariantRow, b: VariantRow): number {
   return b.positiveReplies - a.positiveReplies || b.replies - a.replies || a.sent - b.sent || a.variation.localeCompare(b.variation);
 }
 
-export function planWinners(sequence: SequenceStep[], stats: StatsByStep): WinnerPlan {
+/**
+ * The box starts ticked when most of the kept variants already carry the line,
+ * so leaving it alone changes as little as possible.
+ */
+export function defaultOptOut(rows: VariantRow[]): boolean {
+  const kept = rows.filter((r) => r.kept);
+  if (kept.length === 0) return false;
+  return kept.filter((r) => r.optOut !== "none").length * 2 >= kept.length;
+}
+
+/** Applies the choice to step 1's kept variants, saying what each got. */
+function applyOptOut(variations: SequenceVariation[], choice: OptOutChoice): { variations: SequenceVariation[]; summary: OptOutSummary } {
+  const summary: OptOutSummary = { choice, added: [], replaced: [], present: [], removed: [] };
+  if (choice === "keep") return { variations, summary };
+  const out = variations.map((v) => {
+    const body = v.body ?? "";
+    if (choice === "remove") {
+      const r = withoutOptOut(body);
+      if (r.removed === 0) return v;
+      summary.removed.push(v.variation);
+      return { ...v, body: r.body };
+    }
+    // An empty body is left for writing by hand, not given a lone opt-out line.
+    if (!body.trim()) return v;
+    const r = withCurrentOptOut(body);
+    if (r.outcome === "present") {
+      summary.present.push(v.variation);
+      return v;
+    }
+    (r.outcome === "added" ? summary.added : summary.replaced).push(v.variation);
+    return { ...v, body: r.body };
+  });
+  return { variations: out, summary };
+}
+
+export function planWinners(sequence: SequenceStep[], stats: StatsByStep, optOut: OptOutChoice = "keep"): WinnerPlan {
   const ordered = [...sequence].sort((a, b) => a.step - b.step);
   let droppedDeleted = 0;
   // Deleted variants are left out everywhere, as the other copy tools do.
@@ -139,18 +202,20 @@ export function planWinners(sequence: SequenceStep[], stats: StatsByStep): Winne
       positiveReplies,
       positiveRate: sent > 0 ? Math.round((positiveReplies / sent) * 10000) / 100 : 0,
       kept: positiveReplies >= 1,
+      optOut: optOutState(v.body ?? ""),
     };
   });
   const winners = rows.filter((r) => r.kept);
   const noWinners = winners.length === 0;
   const keptLetters = new Set(winners.map((r) => r.variation));
 
+  let optOutSummary: OptOutSummary = { choice: optOut, added: [], replaced: [], present: [], removed: [] };
   const steps: SequenceStep[] = live.map((s, i) => {
     if (i > 0) return s;
-    return {
-      ...s,
-      variations: noWinners ? [emptyVariant()] : s.variations.filter((v) => keptLetters.has(v.variation)),
-    };
+    if (noWinners) return { ...s, variations: [emptyVariant()] };
+    const applied = applyOptOut(s.variations.filter((v) => keptLetters.has(v.variation)), optOut);
+    optOutSummary = applied.summary;
+    return { ...s, variations: applied.variations };
   });
 
   return {
@@ -162,6 +227,7 @@ export function planWinners(sequence: SequenceStep[], stats: StatsByStep): Winne
     noWinners,
     followUps: live.slice(1).map((s) => ({ step: s.step, variations: s.variations.length })),
     droppedDeleted,
+    optOut: optOutSummary,
     steps,
   };
 }

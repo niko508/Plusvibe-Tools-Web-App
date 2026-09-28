@@ -8,6 +8,8 @@
 // accounts, follow-ups and sub-sequences as they are — with step 1 cut down to
 // the variants that got at least one positive reply. When none did, the page
 // says so plainly and step 1 becomes one empty variant to write by hand.
+// A box says whether the kept variants carry the opt-out line: ticked adds it
+// where it is missing, unticked takes it out.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CampaignSummary, Workspace } from "@/lib/plusvibe-types";
@@ -20,7 +22,7 @@ import {
   type CloneResult,
   type WinnersPreview,
 } from "@/lib/api-client";
-import { cleanTagName, defaultName, planProblems, type TagRef } from "@/lib/winning-variants/plan";
+import { cleanTagName, defaultName, defaultOptOut, planProblems, type TagRef, type VariantRow } from "@/lib/winning-variants/plan";
 import { useApiKey } from "@/lib/use-api-key";
 import { formatNumber } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
@@ -44,6 +46,7 @@ export function WinningVariantsTool() {
   const [tagIds, setTagIds] = useState<string[]>([]);
   const [newTags, setNewTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState("");
+  const [optOut, setOptOut] = useState(false);
 
   const [armed, setArmed] = useState(false);
   const [running, setRunning] = useState(false);
@@ -98,6 +101,7 @@ export function WinningVariantsTool() {
         setName(defaultName(p.campaignName));
         setTagIds(p.tags.map((t) => t.id));
         setNewTags([]);
+        setOptOut(defaultOptOut(p.plan.rows));
       })
       .catch((err) => !cancelled && setError(errMessage(err)))
       .finally(() => !cancelled && setPreviewLoading(false));
@@ -145,7 +149,7 @@ export function WinningVariantsTool() {
     setResult(null);
     try {
       const res = await cloneWinningVariants(
-        { workspaceId: ws, campaignId, name: name.trim(), tagIds, newTags, confirmEmpty: plan.noWinners },
+        { workspaceId: ws, campaignId, name: name.trim(), tagIds, newTags, confirmEmpty: plan.noWinners, optOut },
         controller.signal
       );
       setResult(res);
@@ -243,6 +247,7 @@ export function WinningVariantsTool() {
                   <th className="px-3 py-2 text-right font-medium">Replies</th>
                   <th className="px-3 py-2 text-right font-medium">Positive</th>
                   <th className="px-3 py-2 text-right font-medium">Positive %</th>
+                  <th className="px-3 py-2 font-medium">Opt-out</th>
                   <th className="px-4 py-2 font-medium sm:px-5">In the clone</th>
                 </tr>
               </thead>
@@ -259,6 +264,9 @@ export function WinningVariantsTool() {
                       {formatNumber(r.positiveReplies)}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{r.positiveRate}%</td>
+                    <td className="px-3 py-2" data-opt-out={r.optOut}>
+                      {r.optOut === "current" ? "Yes" : r.optOut === "older" ? "Older wording" : <span className="text-muted-foreground">—</span>}
+                    </td>
                     <td className="px-4 py-2 sm:px-5" data-kept={String(r.kept)}>
                       {r.kept ? (
                         <span className="inline-flex items-center gap-1 text-success">
@@ -345,6 +353,8 @@ export function WinningVariantsTool() {
               </div>
             </div>
 
+            {!plan.noWinners && <OptOutChoiceBox rows={plan.rows} checked={optOut} onChange={setOptOut} />}
+
             <div className="flex flex-wrap items-center gap-2">
               {armed && (
                 <button type="button" className="pv-btn-ghost" onClick={() => setArmed(false)}>
@@ -402,6 +412,11 @@ export function WinningVariantsTool() {
             <Metric label="Follow-up steps" value={result.plan.followUps.length} />
             <Metric label="Sub-sequences" value={result.subsequences} />
           </div>
+          {result.plan.optOut.choice !== "keep" && !result.plan.noWinners && (
+            <p className="mt-3 text-xs text-muted-foreground" data-result-opt-out>
+              Opt-out line: {optOutReport(result.plan.optOut)}
+            </p>
+          )}
           <p className="mt-3 text-xs text-muted-foreground" data-result-tags>
             Tags: {result.tags.length > 0 ? result.tags.map((t) => t.name).join(", ") : "none"}
             {result.createdTags.length > 0 ? ` (new: ${result.createdTags.join(", ")})` : ""}.
@@ -434,6 +449,49 @@ export function WinningVariantsTool() {
       )}
     </div>
   );
+}
+
+const letters = (l: string[]) => l.join(", ");
+
+function OptOutChoiceBox({ rows, checked, onChange }: { rows: VariantRow[]; checked: boolean; onChange: (v: boolean) => void }) {
+  const kept = rows.filter((r) => r.kept);
+  const none = kept.filter((r) => r.optOut === "none").map((r) => r.variation);
+  const older = kept.filter((r) => r.optOut === "older").map((r) => r.variation);
+  const current = kept.filter((r) => r.optOut === "current").map((r) => r.variation);
+  const having = kept.filter((r) => r.optOut !== "none").map((r) => r.variation);
+  let note: string;
+  if (checked) {
+    const bits = [
+      none.length > 0 ? `added to ${letters(none)}` : null,
+      older.length > 0 ? `the older wording on ${letters(older)} swapped for the current one` : null,
+      current.length > 0 ? `${letters(current)} already ${current.length === 1 ? "has" : "have"} it` : null,
+    ].filter(Boolean);
+    note = bits.length > 0 ? `${bits.join("; ")}.` : "";
+  } else {
+    note = having.length > 0 ? `Taken out of ${letters(having)}.` : "None of the kept variants has it, so nothing changes.";
+  }
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3" data-opt-out-choice>
+      <input type="checkbox" className="mt-0.5 h-4 w-4 accent-accent" checked={checked} onChange={(e) => onChange(e.target.checked)} aria-label="Opt-out text on the kept variants" />
+      <span className="text-sm">
+        <span className="font-medium">Opt-out text on the kept variants</span>
+        <span className="mt-0.5 block text-xs text-muted-foreground" data-opt-out-note>
+          {checked ? "Every kept step-1 variant ends with the opt-out line: " : "No kept step-1 variant carries the opt-out line. "}
+          {note} Follow-ups are left as they are.
+        </span>
+      </span>
+    </label>
+  );
+}
+
+function optOutReport(o: { choice: string; added: string[]; replaced: string[]; present: string[]; removed: string[] }): string {
+  if (o.choice === "remove") return o.removed.length > 0 ? `taken out of ${letters(o.removed)}.` : "none of the kept variants had it.";
+  const bits = [
+    o.added.length > 0 ? `added to ${letters(o.added)}` : null,
+    o.replaced.length > 0 ? `older wording swapped on ${letters(o.replaced)}` : null,
+    o.present.length > 0 ? `already on ${letters(o.present)}` : null,
+  ].filter(Boolean);
+  return `${bits.join("; ")}.`;
 }
 
 function TagChip({ name, color, isNew, onRemove }: { name: string; color?: string; isNew?: boolean; onRemove: () => void }) {

@@ -96,5 +96,52 @@ console.log("--- tags");
   eq("a typed tag name is tidied, an empty one ignored", [cleanTagName("  Winners   Q3 "), cleanTagName("   ")], ["Winners Q3", null]);
 }
 
+console.log("--- the opt-out line on the kept variants");
+{
+  const { OPT_OUT_SPINTAX } = await importTs("@/lib/campaign-types/opt-out-spintax");
+  const { PREVIOUS_OPT_OUT_SPINTAX } = await importTs("@/lib/campaign-types/opt-out-spintax-previous");
+  const { defaultOptOut } = await importTs("@/lib/winning-variants/plan");
+  const count = (s, sub) => s.split(sub).length - 1;
+  const withBody = (letter, body) => ({ variation: letter, subject: `S ${letter}`, preheader: "", name: "", body });
+  const seq = [
+    {
+      step: 1,
+      variations: [
+        withBody("A", "<div>Plain A</div><div>{{sender_first_name}}</div>"),
+        withBody("B", `<div>Old B</div><div>&nbsp;</div><div>${PREVIOUS_OPT_OUT_SPINTAX}</div>`),
+        withBody("C", `<div>Current C</div><div>&nbsp;</div><div>${OPT_OUT_SPINTAX.replace(/"/g, "&quot;")}</div>`),
+        withBody("D", `<div>Loser D</div><div>&nbsp;</div><div>${OPT_OUT_SPINTAX}</div>`),
+      ],
+    },
+    { step: 2, variations: [withBody("A", `<div>Bump</div><div>&nbsp;</div><div>${OPT_OUT_SPINTAX}</div>`)] },
+  ];
+  const stats = parseVariationStats([
+    { step: 1, variations: [{ variation: "A", sent: 10, pos_reply: 1 }, { variation: "B", sent: 10, pos_reply: 2 }, { variation: "C", sent: 10, pos_reply: 1 }, { variation: "D", sent: 10, pos_reply: 0 }] },
+  ]);
+  const first = (p) => p.steps[0].variations;
+
+  const look = planWinners(seq, stats);
+  eq("each variant says whether it has the line", look.rows.map((r) => [r.variation, r.optOut]), [["A", "none"], ["B", "older"], ["C", "current"], ["D", "current"]]);
+  eq("left unsaid, the bodies are untouched", first(look).map((v) => v.body), seq[0].variations.slice(0, 3).map((v) => v.body));
+  eq("the box starts ticked when most kept variants have it (2 of 3)", defaultOptOut(look.rows), true);
+  eq("…unticked when most don't", defaultOptOut(look.rows.map((r) => ({ ...r, optOut: r.variation === "C" ? "current" : "none" }))), false);
+  eq("…and unticked when nothing is kept", defaultOptOut(look.rows.map((r) => ({ ...r, kept: false }))), false);
+
+  const add = planWinners(seq, stats, "add");
+  eq("ticked: added where missing, older swapped, current kept", [add.optOut.added, add.optOut.replaced, add.optOut.present], [["A"], ["B"], ["C"]]);
+  const { optOutState } = await importTs("@/lib/campaign-types/append-opt-out");
+  eq("…every kept variant carries exactly one block, the current one", first(add).map((v) => [count(v.body, OPT_OUT_SPINTAX) + count(v.body, OPT_OUT_SPINTAX.replace(/"/g, "&quot;")), optOutState(v.body)]), [[1, "current"], [1, "current"], [1, "current"]]);
+  eq("…the variant with it already is left byte for byte", first(add)[2].body, seq[0].variations[2].body);
+  eq("…and the copy before it stays", [first(add)[0].body.startsWith("<div>Plain A</div>"), first(add)[1].body.startsWith("<div>Old B</div>")], [true, true]);
+
+  const remove = planWinners(seq, stats, "remove");
+  eq("unticked: taken out of every kept variant that had it", remove.optOut.removed, ["B", "C"]);
+  eq("…current or older, with its spacer, leaving the copy", first(remove).map((v) => v.body), ["<div>Plain A</div><div>{{sender_first_name}}</div>", "<div>Old B</div>", "<div>Current C</div>"]);
+  eq("the follow-ups keep theirs either way", [add.steps[1].variations[0].body, remove.steps[1].variations[0].body], [seq[1].variations[0].body, seq[1].variations[0].body]);
+
+  const none = planWinners(seq, parseVariationStats([{ step: 1, variations: [] }]), "add");
+  eq("no winners: the empty variant stays empty", [none.noWinners, first(none)[0].body, none.optOut.added], [true, "", []]);
+}
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

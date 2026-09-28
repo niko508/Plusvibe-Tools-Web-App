@@ -329,6 +329,8 @@ export interface CloneWinnersPayload {
   newTags: string[];
   /** Step 1 has no winners, and the page has said so. */
   confirmEmpty: boolean;
+  /** true: the kept variants carry the opt-out line; false: it is taken out. */
+  optOut: boolean;
 }
 
 export function cloneWinningVariants(payload: CloneWinnersPayload, signal?: AbortSignal) {

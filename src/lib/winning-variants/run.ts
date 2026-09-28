@@ -7,12 +7,14 @@ import { listTags, type Tag } from "@/lib/plusvibe-tags";
 import { resolveTag } from "@/lib/inbox-tags/api";
 import { assignCampaignTag, tagIdsOf, unassignCampaignTag } from "@/lib/campaign-types/tag-campaigns";
 import { compareShapes, shapeOf } from "@/lib/copy-campaign/plan";
+import { optOutState } from "@/lib/campaign-types/append-opt-out";
 import {
   cleanTagName,
   parseVariationStats,
   planWinners,
   tagChanges,
   type CloneResult,
+  type OptOutChoice,
   type PlanSummary,
   type StatsByStep,
   type WinnerPlan,
@@ -89,6 +91,8 @@ export interface CloneInput {
   newTags: string[];
   /** Given once the page has warned that step 1 has no winners. */
   confirmEmpty: boolean;
+  /** The opt-out line on the kept variants: added, taken out, or left as each has it. */
+  optOut: OptOutChoice;
 }
 
 /** Step 1 has no winners and the page hasn't said the user knows. */
@@ -122,7 +126,7 @@ export async function cloneWithWinners(input: CloneInput): Promise<CloneResult> 
   // --- 1. Read it all first: a failure here leaves nothing behind ---------
   const raw = await readCampaign(apiKey, workspaceId, campaignId);
   const stats = await readStats(apiKey, workspaceId, campaignId);
-  const plan = planWinners(normalizeSequences(raw.sequences), stats);
+  const plan = planWinners(normalizeSequences(raw.sequences), stats, input.optOut);
   if (plan.steps.length === 0) throw new Error("That campaign has no sequence steps, so there is nothing to clone.");
   if (plan.noWinners && !input.confirmEmpty) throw new NeedsConfirmError();
   if (plan.noWinners) warnings.push(`No variant in step ${plan.firstStep} had a positive reply, so it was left as one empty variant for you to write.`);
@@ -188,6 +192,17 @@ export async function cloneWithWinners(input: CloneInput): Promise<CloneResult> 
     const after = await readCampaign(apiKey, workspaceId, createdId);
     const check = compareShapes(shapeOf(plan.steps), shapeOf(normalizeSequences(after.sequences)));
     problems.push(...check.problems);
+    // The opt-out line, variant by variant, as chosen.
+    if (!plan.noWinners && input.optOut !== "keep") {
+      const firstAfter = normalizeSequences(after.sequences).sort((a, b) => a.step - b.step)[0];
+      const want = input.optOut === "add" ? "current" : "none";
+      const off = (firstAfter?.variations ?? []).filter((v) => (v.body ?? "").trim() && optOutState(v.body ?? "") !== want).map((v) => v.variation);
+      if (off.length > 0) {
+        problems.push(
+          `Variant${off.length === 1 ? "" : "s"} ${off.join(", ")} ${input.optOut === "add" ? "didn't come back with the opt-out line" : "still carr" + (off.length === 1 ? "ies" : "y") + " opt-out text"}.`
+        );
+      }
+    }
     const byId = new Map(known.map((t) => [t.id, t]));
     const onClone = tagIdsOf(after);
     finalTags = onClone.map((id) => byId.get(id) ?? { id, name: id });

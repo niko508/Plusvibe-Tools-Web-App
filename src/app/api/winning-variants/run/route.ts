@@ -7,7 +7,9 @@ import { planProblems } from "@/lib/winning-variants/plan";
 export const dynamic = "force-dynamic";
 
 // POST /api/winning-variants/run
-// { workspaceId, campaignId, name, tagIds, newTags, confirmEmpty }
+// { workspaceId, campaignId, name, tagIds, newTags, confirmEmpty, optOut }
+// optOut: true adds the opt-out line to the kept step-1 variants that lack it,
+// false takes it out; left out, each variant stays as it is.
 // Duplicates the campaign in its own workspace, keeps only step 1's winning
 // variants, sets the clone's tags, and reads it back.
 export async function POST(request: Request) {
@@ -20,6 +22,7 @@ export async function POST(request: Request) {
       tagIds?: unknown;
       newTags?: unknown;
       confirmEmpty?: boolean;
+      optOut?: unknown;
     };
     const sel = { workspaceId: String(body.workspaceId ?? ""), campaignId: String(body.campaignId ?? ""), name: String(body.name ?? "") };
     // Checked again here: this is the last stop before a campaign is created.
@@ -32,6 +35,7 @@ export async function POST(request: Request) {
       tagIds: strings(body.tagIds),
       newTags: strings(body.newTags),
       confirmEmpty: body.confirmEmpty === true,
+      optOut: body.optOut === true ? "add" : body.optOut === false ? "remove" : "keep",
     });
     return NextResponse.json(result);
   } catch (err) {
