@@ -51,6 +51,7 @@ import type {
 import type { WarmupSettings as AzureWarmupSettings } from "@/lib/azure-warmup/warmup-settings";
 import type { InboxRules } from "@/lib/blocked-inboxes/rules";
 import type { GeneralSettings } from "@/lib/general-settings/settings";
+import type { Industry } from "@/lib/campaign-types/industries";
 import type {
   FirstCampaignJob,
   FirstCampaignStartPayload,
@@ -1503,4 +1504,18 @@ export function fetchGeneralSettings(signal?: AbortSignal) {
 
 export function saveGeneralSettings(settings: GeneralSettings, signal?: AbortSignal) {
   return request<GeneralSettingsResponse>("/api/general-settings", { method: "PUT", body: { settings }, signal });
+}
+
+// --- Create All Campaign Types: saved industries -----------------------------
+
+export function fetchIndustries(signal?: AbortSignal) {
+  return request<{ industries: Industry[] }>("/api/campaign-types/industries", { signal });
+}
+
+export function saveIndustry(input: { name: string; segments: string[]; noSegment?: string | null }, signal?: AbortSignal) {
+  return request<{ industries: Industry[]; saved: Industry }>("/api/campaign-types/industries", { method: "PUT", body: input, signal });
+}
+
+export function deleteIndustry(name: string, signal?: AbortSignal) {
+  return request<{ industries: Industry[] }>(`/api/campaign-types/industries?name=${encodeURIComponent(name)}`, { method: "DELETE", signal });
 }

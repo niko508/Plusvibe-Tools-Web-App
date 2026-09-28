@@ -11,6 +11,9 @@ import {
   abortCampaignTypes,
   resumeCampaignTypes,
   deleteCampaignTypesJob,
+  fetchIndustries,
+  saveIndustry,
+  deleteIndustry,
   ApiClientError,
 } from "@/lib/api-client";
 import { DEFAULT_KINDS, KIND_HINTS, KIND_LABELS, KIND_ORDER, convertsOriginal, rolesFor, toggleKinds, type CampaignKind } from "@/lib/campaign-types/kinds";
@@ -25,6 +28,8 @@ import { deriveNames } from "@/lib/campaign-types/names";
 import { isArchived, matchCompanions, normalizeName } from "@/lib/campaign-types/match";
 import { shouldAutoResume } from "@/lib/campaign-types/resume";
 import { JobCard } from "./job-card";
+import { IndustryPicker } from "./industry-picker";
+import { findIndustry, matchCampaign, type Industry } from "@/lib/campaign-types/industries";
 import { POOL_TAGS } from "@/lib/campaign-types/pools";
 import { useGeneralSettings } from "@/lib/general-settings/use-general-settings";
 
@@ -48,6 +53,15 @@ interface SegmentRow {
 
 const emptyRows = (): SegmentRow[] => Array.from({ length: SEGMENT_ROWS }, () => ({ segment: "", campaignId: "" }));
 
+/** A saved industry's segments in the rows, each beside the one picked original its name points to. */
+function rowsFor(industry: Industry | undefined, campaigns: { id: string; name: string }[]): SegmentRow[] {
+  const rows = emptyRows();
+  industry?.segments.slice(0, SEGMENT_ROWS).forEach((segment, i) => {
+    rows[i] = { segment, campaignId: matchCampaign(segment, campaigns) ?? "" };
+  });
+  return rows;
+}
+
 export function CampaignTypesTool() {
   const { hasKey, ready } = useApiKey();
   // Re-renders when General Settings arrive, for the pool tag names below.
@@ -63,6 +77,11 @@ export function CampaignTypesTool() {
   const [filter, setFilter] = useState("");
 
   const [rows, setRows] = useState<SegmentRow[]>(emptyRows);
+  const [industries, setIndustries] = useState<Industry[]>([]);
+  const [industry, setIndustry] = useState("");
+  const [industrySaving, setIndustrySaving] = useState(false);
+  /** The saved industry last picked, so a workspace change can fill its segments in again. */
+  const pickedRef = useRef<Industry | undefined>(undefined);
   const [emptyTo, setEmptyTo] = useState("");
   const [kinds, setKinds] = useState<CampaignKind[]>(DEFAULT_KINDS);
   const [activate, setActivate] = useState(true);
@@ -124,6 +143,13 @@ export function CampaignTypesTool() {
   }
 
   useEffect(() => {
+    if (!ready || !hasKey) return;
+    fetchIndustries()
+      .then((r) => setIndustries(r.industries))
+      .catch(() => undefined);
+  }, [ready, hasKey]);
+
+  useEffect(() => {
     if (ready && hasKey) {
       void loadWorkspaces();
       void refreshJobs();
@@ -182,7 +208,7 @@ export function CampaignTypesTool() {
     setCampaignsLoading(true);
     setCampaigns(null);
     setSelected([]);
-    setRows(emptyRows());
+    setRows(rowsFor(pickedRef.current, []));
     setEmptyTo("");
     setFilter("");
     setError(null);
@@ -223,6 +249,46 @@ export function CampaignTypesTool() {
     setRows((prev) => prev.map((r) => (r.campaignId && !selected.includes(r.campaignId) ? { ...r, campaignId: "" } : r)));
     setEmptyTo((prev) => (prev && !selected.includes(prev) ? "" : prev));
   }, [selected]);
+
+  // A row with a segment but no campaign yet is matched to the picked
+  // original whose name contains it — once, as originals are ticked. A
+  // campaign chosen by hand is never changed.
+  useEffect(() => {
+    if (sources.length === 0) return;
+    setRows((prev) => prev.map((r) => (r.segment.trim() && !r.campaignId ? { ...r, campaignId: matchCampaign(r.segment, sources) ?? "" } : r)));
+    const noSeg = pickedRef.current?.noSegment;
+    if (noSeg) setEmptyTo((prev) => prev || (matchCampaign(noSeg, sources) ?? ""));
+  }, [sources]);
+
+  function pickIndustry(i: Industry) {
+    pickedRef.current = i;
+    setIndustry(i.name);
+    setRows(rowsFor(i, sources));
+    setEmptyTo(i.noSegment ? matchCampaign(i.noSegment, sources) ?? "" : "");
+  }
+
+  /** The segments in the rows, and the one whose campaign takes the no-segment leads. */
+  const typedSegments = rows.map((r) => r.segment.trim()).filter(Boolean);
+  const noSegmentOf = () => rows.find((r) => r.segment.trim() && r.campaignId && r.campaignId === emptyTo)?.segment.trim() ?? null;
+
+  async function rememberIndustry(quiet: boolean) {
+    if (!industry.trim() || typedSegments.length === 0) return;
+    setIndustrySaving(true);
+    try {
+      const r = await saveIndustry({ name: industry, segments: typedSegments, noSegment: noSegmentOf() });
+      setIndustries(r.industries);
+      pickedRef.current = r.saved;
+      setIndustry(r.saved.name);
+      if (!quiet) {
+        setToast(`Saved the segments for ${r.saved.name}`);
+        setTimeout(() => setToast(null), 4000);
+      }
+    } catch (err) {
+      if (!quiet) setError(errMessage(err));
+    } finally {
+      setIndustrySaving(false);
+    }
+  }
 
   // Fix Allocation reads the part each destination plays off its own name, so
   // what a pick will do can be shown before anything moves.
@@ -372,6 +438,8 @@ export function CampaignTypesTool() {
             : undefined,
         activate: mode === "create" && activate,
       });
+      // The segments this run used are what the industry starts from next time.
+      if (mode !== "fix") void rememberIndustry(true);
       setToast(activeJob || queuedCount > 0 ? "Added to the queue — it starts when the ones ahead finish" : "Job started — you can close this tab");
       setTimeout(() => setToast(null), 5000);
       toggleJobs(true);
@@ -454,6 +522,30 @@ export function CampaignTypesTool() {
               </select>
               <ChevronDownIcon size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             </div>
+            {mode !== "fix" && (
+              <div className="mt-4">
+                <IndustryPicker
+                  industries={industries}
+                  value={industry}
+                  segments={typedSegments}
+                  saving={industrySaving}
+                  onType={(name) => {
+                    setIndustry(name);
+                    pickedRef.current = findIndustry(industries, name);
+                  }}
+                  onPick={pickIndustry}
+                  onForget={async (name) => {
+                    try {
+                      setIndustries((await deleteIndustry(name)).industries);
+                      if (pickedRef.current && pickedRef.current.name === name) pickedRef.current = undefined;
+                    } catch (err) {
+                      setError(errMessage(err));
+                    }
+                  }}
+                  onSave={() => void rememberIndustry(false)}
+                />
+              </div>
+            )}
           </div>
 
           <div>
