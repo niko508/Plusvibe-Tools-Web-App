@@ -7,7 +7,7 @@ import { describeKinds } from "@/lib/campaign-types/kinds";
 import { describeRule } from "@/lib/campaign-types/segments";
 import { formatNumber } from "@/lib/format";
 import { Spinner, RemoveJobButton } from "@/components/ui";
-import { CheckIcon, AlertIcon } from "@/components/icons";
+import { CheckIcon, AlertIcon, ChevronDownIcon } from "@/components/icons";
 
 const STATUS_META: Record<CampaignTypesStatus, { label: string; className: string }> = {
   queued: { label: "Queued", className: "bg-muted text-muted-foreground" },
@@ -51,9 +51,33 @@ export function JobCard({
 
   const sourcesDone = sources.filter((s) => s.state === "done" || s.state === "error").length;
 
+  // A finished run folds to one line, so the list stays short. A run still
+  // going, waiting, or cut off with something to do opens by itself; one that
+  // finishes while the page is open stays as it was.
+  const needsAction = job.status === "interrupted" && !job.resumedAs;
+  const [expanded, setExpanded] = useState(() => running || queued || needsAction);
+  const canFold = !running && !queued;
+  const summary = [
+    sources.length > 0 ? `${formatNumber(sources.length)} original${sources.length === 1 ? "" : "s"}` : null,
+    (() => {
+      const made = sources.reduce((n, s) => n + (s.created ?? []).length, 0);
+      return made > 0 ? `${formatNumber(made)} campaign${made === 1 ? "" : "s"}` : null;
+    })(),
+    segmenting.moved > 0 ? `${formatNumber(segmenting.moved)} leads sorted` : null,
+    errors.length > 0 ? `${formatNumber(errors.length)} problem${errors.length === 1 ? "" : "s"}` : null,
+  ].filter(Boolean);
+
   return (
-    <div className="pv-card p-4 sm:p-5" data-job={job.id}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className={`pv-card ${expanded ? "p-4 sm:p-5" : "px-4 py-3 sm:px-5"}`} data-job={job.id} data-expanded={expanded}>
+      <div
+        className={`flex flex-wrap items-center justify-between gap-2 ${canFold ? "cursor-pointer select-none" : ""}`}
+        role={canFold ? "button" : undefined}
+        tabIndex={canFold ? 0 : undefined}
+        aria-expanded={canFold ? expanded : undefined}
+        onClick={canFold ? () => setExpanded((v) => !v) : undefined}
+        onKeyDown={canFold ? (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setExpanded((v) => !v)) : undefined}
+        data-job-toggle
+      >
         <div className="flex min-w-0 items-center gap-2.5">
           <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${status.className}`}>
             {running && <Spinner size={10} />} {status.label}
@@ -64,8 +88,15 @@ export function JobCard({
             <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">Move leads</span>
           )}
         </div>
-        <span className="shrink-0 text-xs text-muted-foreground">{relativeTime(job.createdAt)}</span>
+        <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+          {!expanded && summary.length > 0 && <span className="hidden sm:inline" data-job-summary>{summary.join(" · ")} ·</span>}
+          {relativeTime(job.createdAt)}
+          {canFold && <ChevronDownIcon size={16} className={`transition-transform ${expanded ? "rotate-180" : ""}`} />}
+        </span>
       </div>
+
+      {expanded && (
+      <>
 
       {/* A fix run has one phase of its own: read, take the segment, move. */}
       {job.mode === "fix" && job.allocation && (
@@ -291,6 +322,8 @@ export function JobCard({
             />
           ))}
         </div>
+      )}
+      </>
       )}
     </div>
   );
