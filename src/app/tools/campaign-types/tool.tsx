@@ -35,6 +35,7 @@ import { useGeneralSettings } from "@/lib/general-settings/use-general-settings"
 
 const POLL_MS = 2000;
 const JOBS_OPEN_KEY = "pv_ct_jobs_open";
+const NO_SEGMENTS_KEY = "pv_ct_no_segments";
 /** Segment rows, besides the one for leads with no segment. */
 const SEGMENT_ROWS = MAX_RULES - 1;
 
@@ -86,6 +87,12 @@ export function CampaignTypesTool() {
   const [kinds, setKinds] = useState<CampaignKind[]>(DEFAULT_KINDS);
   const [activate, setActivate] = useState(true);
   const [mode, setMode] = useState<CampaignTypesMode>("create");
+  /**
+   * "No segments", per tab: nothing is sorted by segment, and the segment rows
+   * and the Industry field are out of the way. Remembered in this browser.
+   */
+  const [noSegmentsBy, setNoSegmentsBy] = useState<Partial<Record<CampaignTypesMode, boolean>>>({});
+  const noSegments = mode !== "fix" && noSegmentsBy[mode] === true;
   /** Fix Allocation: the campaigns the leads go to, and the segment to take. */
   const [destIds, setDestIds] = useState<string[]>([]);
   const [fixSegment, setFixSegment] = useState("");
@@ -121,6 +128,27 @@ export function CampaignTypesTool() {
       // polling failure is not worth a banner
     }
   }, []);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(NO_SEGMENTS_KEY);
+      if (raw) setNoSegmentsBy(JSON.parse(raw) as Partial<Record<CampaignTypesMode, boolean>>);
+    } catch {
+      // storage may be unavailable; segments are shown
+    }
+  }, []);
+
+  function setNoSegments(on: boolean) {
+    setNoSegmentsBy((prev) => {
+      const next = { ...prev, [mode]: on };
+      try {
+        localStorage.setItem(NO_SEGMENTS_KEY, JSON.stringify(next));
+      } catch {
+        // fine
+      }
+      return next;
+    });
+  }
 
   useEffect(() => {
     try {
@@ -317,13 +345,14 @@ export function CampaignTypesTool() {
   }, [mode, destinations.problems, sources.length, destIds, fixSegment, parents, selected]);
 
   const rules = useMemo<SegmentRule[]>(() => {
+    if (noSegments) return [];
     const nameOf = (id: string) => sources.find((s) => s.id === id)?.name ?? "";
     const out: SegmentRule[] = rows
       .filter((r) => r.segment.trim() !== "" || r.campaignId)
       .map((r) => ({ segment: r.segment, campaignId: r.campaignId, campaignName: nameOf(r.campaignId) }));
     if (emptyTo) out.push({ segment: null, campaignId: emptyTo, campaignName: nameOf(emptyTo) });
     return out;
-  }, [rows, emptyTo, sources]);
+  }, [rows, emptyTo, sources, noSegments]);
   const ruleProblems = useMemo(() => validateRules(rules, sources.map((s) => s.id)), [rules, sources]);
 
   // Names already taken in this workspace. The job adopts an existing campaign
@@ -445,7 +474,7 @@ export function CampaignTypesTool() {
         activate: mode === "create" && activate,
       });
       // The segments this run used are what the industry starts from next time.
-      if (mode !== "fix") void rememberIndustry(true);
+      if (mode !== "fix" && !noSegments) void rememberIndustry(true);
       setToast(activeJob || queuedCount > 0 ? "Added to the queue — it starts when the ones ahead finish" : "Job started — you can close this tab");
       setTimeout(() => setToast(null), 5000);
       toggleJobs(true);
@@ -528,7 +557,7 @@ export function CampaignTypesTool() {
               </select>
               <ChevronDownIcon size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             </div>
-            {mode !== "fix" && (
+            {mode !== "fix" && !noSegments && (
               <div className="mt-4">
                 <IndustryPicker
                   industries={industries}
@@ -708,7 +737,26 @@ export function CampaignTypesTool() {
         {/* Segments */}
         {mode !== "fix" && (
         <div data-segments>
-          <div className="mb-1.5 text-xs font-medium text-muted-foreground">Segments</div>
+          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-medium text-muted-foreground">Segments</span>
+            <label className="flex cursor-pointer items-center gap-2 text-xs" data-no-segments>
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-accent"
+                checked={noSegments}
+                onChange={(e) => setNoSegments(e.target.checked)}
+                aria-label="No segments"
+              />
+              No segments
+            </label>
+          </div>
+          {noSegments ? (
+            <p className="rounded-xl border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground" data-no-segments-note>
+              Nothing is sorted by segment: every original keeps the leads it has, and they are split{" "}
+              {mode === "move" ? "into its copies" : "into the copies built from it"} as usual.
+            </p>
+          ) : (
+          <>
           <p className="mb-2 text-xs text-muted-foreground">
             Before anything is built, every lead is moved to the campaign its Segment field names. Only the originals picked
             above can be chosen. A segment on no row stays where it is.
@@ -764,6 +812,8 @@ export function CampaignTypesTool() {
               <AlertIcon size={13} className="mt-0.5 shrink-0" />
               <span>{ruleProblems.join(" ")}</span>
             </p>
+          )}
+          </>
           )}
         </div>
         )}

@@ -179,7 +179,7 @@ export function JobCard({
         {JOB_PHASE_ORDER.map((phase, i) => {
           const state = phaseStates[phase] ?? "pending";
           let summary = "";
-          if (state === "skipped") summary = phase === "segmenting" ? "no segment rows" : "skipped";
+          if (state === "skipped") summary = phase === "segmenting" ? "No segments" : "skipped";
           else if (state !== "pending") {
             if (phase === "segmenting") {
               summary =
