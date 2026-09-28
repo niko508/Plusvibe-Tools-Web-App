@@ -1,7 +1,7 @@
 // Create All Campaign Types: saved industries and the segments each one uses.
 //
-// Picking an industry fills the segment rows with the segments last used for
-// it, and — where the name of exactly one picked original contains the
+// An industry is added by name from its dropdown, with or without segments.
+// Picking one fills the segment rows with the segments last used for it, and — where the name of exactly one picked original contains the
 // segment — the campaign beside it. A run started under an industry saves the
 // segments it used, so the next run for that industry starts from them.
 //
@@ -36,7 +36,6 @@ export function normalizeIndustries(raw: unknown): Industry[] {
     const name = typeof o.name === "string" ? tidy(o.name).slice(0, MAX_NAME) : "";
     if (!name || seen.has(key(name))) continue;
     const segments = cleanSegments(Array.isArray(o.segments) ? o.segments : []);
-    if (segments.length === 0) continue;
     const noSegment = typeof o.noSegment === "string" ? segments.find((s) => key(s) === key(o.noSegment as string)) : undefined;
     seen.add(key(name));
     out.push({ name, segments, ...(noSegment ? { noSegment } : {}), updatedAt: typeof o.updatedAt === "number" ? o.updatedAt : 0 });
@@ -70,8 +69,8 @@ export function saveIndustry(
 ): { list: Industry[]; saved: Industry | null; problem?: string } {
   const name = tidy(input.name ?? "").slice(0, MAX_NAME);
   if (!name) return { list, saved: null, problem: "Type the industry's name." };
+  // Added from the dropdown before any segment is typed: saved with none.
   const segments = cleanSegments(input.segments ?? []);
-  if (segments.length === 0) return { list, saved: null, problem: "Fill in at least one segment to save for it." };
   const noSegment = input.noSegment ? segments.find((s) => key(s) === key(input.noSegment!)) : undefined;
   const existing = findIndustry(list, name);
   const saved: Industry = { name: existing?.name ?? name, segments, ...(noSegment ? { noSegment } : {}), updatedAt: now };

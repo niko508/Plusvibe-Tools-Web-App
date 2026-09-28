@@ -27,7 +27,7 @@ console.log("--- saving");
   const c = saveIndustry(b.list, { name: "SaaS", segments: ["smb", "mid"] }, 3);
   eq("the latest saved comes first", c.list.map((i) => i.name), ["SaaS", "eCommerce"]);
   eq("no name: refused", saveIndustry([], { name: " ", segments: ["x"] }, 1).problem, "Type the industry's name.");
-  eq("no segments: refused", saveIndustry([], { name: "X", segments: ["", " "] }, 1).problem, "Fill in at least one segment to save for it.");
+  eq("added before any segment is typed: saved with none", saveIndustry([], { name: "SaaS", segments: ["", " "] }, 1).saved, { name: "SaaS", segments: [], updatedAt: 1 });
   eq(`at most ${MAX_INDUSTRY_SEGMENTS} segments, no repeats`, saveIndustry([], { name: "X", segments: ["a", "A", "b", "c", "d"] }, 1).saved.segments, ["a", "b", "c"]);
   eq("the no-segment choice must be one of its segments", saveIndustry([], { name: "X", segments: ["a"], noSegment: "z" }, 1).saved.noSegment, undefined);
   eq("found whatever the capitals", findIndustry(c.list, " saas ")?.name, "SaaS");
@@ -41,9 +41,9 @@ console.log("--- reading the file");
     { name: "A", segments: ["x"], updatedAt: 1 },
     { name: "a", segments: ["y"], updatedAt: 5 },
     { name: "", segments: ["x"] },
-    { name: "B", segments: [] },
+    { name: "B", segments: [], updatedAt: 2 },
     { name: "C", segments: ["q"], updatedAt: 9 },
-  ]).map((i) => [i.name, i.segments]), [["C", ["q"]], ["A", ["x"]]]);
+  ]).map((i) => [i.name, i.segments]), [["C", ["q"]], ["B", []], ["A", ["x"]]]);
 }
 
 console.log("--- matching a segment to its original");

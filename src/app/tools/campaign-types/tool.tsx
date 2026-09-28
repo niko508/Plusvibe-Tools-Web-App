@@ -263,6 +263,8 @@ export function CampaignTypesTool() {
   function pickIndustry(i: Industry) {
     pickedRef.current = i;
     setIndustry(i.name);
+    // One added but never run has no segments yet: the rows are left as typed.
+    if (i.segments.length === 0) return;
     setRows(rowsFor(i, sources));
     setEmptyTo(i.noSegment ? matchCampaign(i.noSegment, sources) ?? "" : "");
   }
@@ -271,16 +273,20 @@ export function CampaignTypesTool() {
   const typedSegments = rows.map((r) => r.segment.trim()).filter(Boolean);
   const noSegmentOf = () => rows.find((r) => r.segment.trim() && r.campaignId && r.campaignId === emptyTo)?.segment.trim() ?? null;
 
-  async function rememberIndustry(quiet: boolean) {
-    if (!industry.trim() || typedSegments.length === 0) return;
+  /**
+   * Saves the industry with the segments in the rows. Added from the dropdown
+   * it is saved even with none; a run saves only when there are some.
+   */
+  async function rememberIndustry(quiet: boolean, name = industry, allowEmpty = false) {
+    if (!name.trim() || (!allowEmpty && typedSegments.length === 0)) return;
     setIndustrySaving(true);
     try {
-      const r = await saveIndustry({ name: industry, segments: typedSegments, noSegment: noSegmentOf() });
+      const r = await saveIndustry({ name, segments: typedSegments, noSegment: noSegmentOf() });
       setIndustries(r.industries);
       pickedRef.current = r.saved;
       setIndustry(r.saved.name);
       if (!quiet) {
-        setToast(`Saved the segments for ${r.saved.name}`);
+        setToast(r.saved.segments.length > 0 ? `Saved the segments for ${r.saved.name}` : `Added ${r.saved.name}`);
         setTimeout(() => setToast(null), 4000);
       }
     } catch (err) {
@@ -534,6 +540,10 @@ export function CampaignTypesTool() {
                     pickedRef.current = findIndustry(industries, name);
                   }}
                   onPick={pickIndustry}
+                  onAdd={(name) => {
+                    setIndustry(name);
+                    void rememberIndustry(false, name, true);
+                  }}
                   onForget={async (name) => {
                     try {
                       setIndustries((await deleteIndustry(name)).industries);
