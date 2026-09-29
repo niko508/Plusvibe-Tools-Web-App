@@ -1036,7 +1036,9 @@ async function runSegmenting(ctx: RunCtx, rules: SegmentRule[]) {
     r.planned = planned?.planned ?? 0;
     if (r.planned === 0) r.state = "done";
   }
-  if (seg.unmapped > 0) {
+  // Add More Leads showed which segments stay before it ran, so leads left
+  // in the source are what was asked for there, not a problem.
+  if (seg.unmapped > 0 && !ctx.m.payload?.onlyExisting) {
     pushError(rec, describeUnmapped(seg.unmapped, seg.unmappedSegments, seg.rules));
   }
   await persist(id);
@@ -1179,12 +1181,16 @@ async function runSource(
         target.error = hit?.ambiguous ? "more than one campaign has this name" : "no campaign with this name";
         const mv = src.moving.targets.find((t) => t.role === target.role);
         if (mv) mv.state = "skipped";
-        pushError(
-          rec,
-          hit?.ambiguous
-            ? `${who}More than one campaign is called "${target.name}", so there is no telling which was meant. Nothing was moved into it.`
-            : `${who}No campaign called "${target.name}" in this workspace, so its share went to the other campaigns in its pool.`
-        );
+        // Add More Leads splits into whatever each family has: a missing copy
+        // is expected there, and only a name two campaigns share is a problem.
+        if (hit?.ambiguous || !m.payload?.onlyExisting) {
+          pushError(
+            rec,
+            hit?.ambiguous
+              ? `${who}More than one campaign is called "${target.name}", so there is no telling which was meant. Nothing was moved into it.`
+              : `${who}No campaign called "${target.name}" in this workspace, so its share went to the other campaigns in its pool.`
+          );
+        }
       }
     }
     if (!src.created.some((c) => c.campaignId)) {

@@ -122,6 +122,8 @@ export interface CampaignSummary {
   /** For a sub-sequence, the parent campaign it belongs to. */
   parentCampId?: string;
   sequenceSteps: number;
+  /** When it was created, in ms, if Plusvibe says. */
+  createdAt?: number;
 }
 
 /** Per-step view used by the UI, including any variants hidden from `sequences`. */

@@ -776,7 +776,7 @@ eq("what the form sends is cleaned: empty rows dropped, the rest trimmed",
   normalizeRules([{ segment: " cash pay ", campaignId: " A ", campaignName: "🟡 A" }, { segment: "", campaignId: "" }, { segment: null, campaignId: "C", campaignName: "🟡 C" }, "junk"]),
   [{ segment: "cash pay", campaignId: "A", campaignName: "🟡 A" }, { segment: null, campaignId: "C", campaignName: "🟡 C" }]);
 eq("…a half-filled row is kept for validation to name", normalizeRules([{ segment: "", campaignId: "A" }]), [{ segment: "", campaignId: "A", campaignName: "" }]);
-eq("…at most four rows", normalizeRules(Array.from({ length: 6 }, (_, i) => ({ segment: `s${i}`, campaignId: "A" }))).length, 4);
+eq("…at most 30 rules a run (Add More Leads sends one per segment found)", normalizeRules(Array.from({ length: 35 }, (_, i) => ({ segment: `s${i}`, campaignId: "A" }))).length, 30);
 eq("not a list is no rules", normalizeRules(undefined), []);
 
 // The plan: leads from every original, each to the campaign its segment names.

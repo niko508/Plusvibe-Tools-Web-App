@@ -135,7 +135,20 @@ export function summarize(c: RawCampaign): CampaignSummary {
     campaignType: str(c.campaign_type) || undefined,
     parentCampId: str(c.parent_camp_id) || undefined,
     sequenceSteps: num(c.sequence_steps, normalizeSequences(c.sequences).length),
+    ...(createdAtOf(c) ? { createdAt: createdAtOf(c) } : {}),
   };
+}
+
+/** The creation time from whichever field Plusvibe filled, in ms; undefined when none reads. */
+function createdAtOf(c: RawCampaign): number | undefined {
+  const o = c as unknown as Record<string, unknown>;
+  for (const k of ["created_at", "timestamp_created", "createdAt", "created"]) {
+    const v = o[k];
+    if (v === undefined || v === null || v === "") continue;
+    const t = typeof v === "number" ? (v < 1e12 ? v * 1000 : v) : Date.parse(String(v));
+    if (Number.isFinite(t) && t > 0) return t;
+  }
+  return undefined;
 }
 
 /**

@@ -140,6 +140,7 @@ export async function POST(request: Request) {
       kinds,
       rules,
       activate: body.activate !== false,
+      ...(mode === "move" && body.onlyExisting === true ? { onlyExisting: true } : {}),
     });
 
     return NextResponse.json({ jobId });

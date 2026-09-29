@@ -22,6 +22,12 @@ export const SEGMENT_FIELD = "segment";
 /** The most rules the form offers: three segments and the empty one. */
 export const MAX_RULES = 4;
 
+/**
+ * The most a run takes. Add More Leads sends one rule per segment it finds in
+ * the leads, which can be more than the form's rows.
+ */
+export const MAX_RUN_RULES = 30;
+
 export interface SegmentRule {
   /** The segment's text, or null for leads whose segment is empty. */
   segment: string | null;
@@ -107,7 +113,7 @@ export function normalizeRules(raw: unknown): SegmentRule[] {
     if (segment !== null && segment === "" && !campaignId) continue;
     out.push({ segment, campaignId, campaignName });
   }
-  return out.slice(0, MAX_RULES);
+  return out.slice(0, MAX_RUN_RULES);
 }
 
 export interface SegmentMove<T> {

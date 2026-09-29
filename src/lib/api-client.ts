@@ -1524,3 +1524,12 @@ export function saveIndustry(input: { name: string; segments: string[]; noSegmen
 export function deleteIndustry(name: string, signal?: AbortSignal) {
   return request<{ industries: Industry[] }>(`/api/campaign-types/industries?name=${encodeURIComponent(name)}`, { method: "DELETE", signal });
 }
+
+// --- Add More Leads ------------------------------------------------------------
+
+export function previewAddLeads(input: { workspaceId: string; campaignId: string }, signal?: AbortSignal) {
+  return request<{ total: number; segments: { segment: string; count: number }[]; hitPageLimit: boolean }>(
+    "/api/campaign-types/add-preview",
+    { method: "POST", body: input, signal }
+  );
+}

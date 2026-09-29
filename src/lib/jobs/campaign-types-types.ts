@@ -416,6 +416,12 @@ export interface CampaignTypesStartPayload {
   /** Launch everything at the end. Off leaves the copies as drafts. */
   activate?: boolean;
   /**
+   * Move runs from Add More Leads: a copy a family doesn't have is simply not
+   * a destination, and leads whose segment no row covers stay in the source —
+   * both shown on the page beforehand, so neither is reported as a problem.
+   */
+  onlyExisting?: boolean;
+  /**
    * Resuming only: leads an interrupted run already moved, per original and
    * copy, so the split is finished rather than started over.
    */
