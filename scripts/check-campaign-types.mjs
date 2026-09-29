@@ -804,7 +804,7 @@ eq("moves are grouped by from → to, in the order met", segPlan.moves.map((m) =
 eq("…each move knowing its rule", segPlan.moves.map((m) => [m.segment, m.toCampaignName]), [["Insurance", "🟡 B"], [null, "🟡 C"], ["cash pay", "🟡 A"], [null, "🟡 C"], ["cash pay", "🟡 A"]]);
 eq("a lead never moves into the campaign it is in", segPlan.moves.every((m) => m.fromCampaignId !== m.toCampaignId), true);
 eq("with no empty row, leads with no segment stay put",
-  planSegmentMoves([{ campaignId: "A", leads: [L("a3", ""), L("b3")] }], RULES.slice(0, 2)).counts, { total: 2, stayed: 0, unmapped: 2, unmappedSegments: [], planned: 0, perRule: [{ segment: "cash pay", campaignId: "A", planned: 0 }, { segment: "Insurance", campaignId: "B", planned: 0 }] });
+  planSegmentMoves([{ campaignId: "A", leads: [L("a3", ""), L("b3")] }], RULES.slice(0, 2)).counts, { total: 2, stayed: 0, unmapped: 2, unmappedSegments: [], unmappedEmpty: 2, planned: 0, perRule: [{ segment: "cash pay", campaignId: "A", planned: 0 }, { segment: "Insurance", campaignId: "B", planned: 0 }] });
 eq("no rules, nothing moves", planSegmentMoves([{ campaignId: "A", leads: [L("a1", "cash pay")] }], []).moves, []);
 eq("a rule without a campaign is ignored rather than moving leads nowhere",
   planSegmentMoves([{ campaignId: "A", leads: [L("a1", "x")] }], [{ segment: "x", campaignId: "", campaignName: "" }]).counts.unmapped, 1);

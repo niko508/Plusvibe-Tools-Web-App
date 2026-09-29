@@ -75,12 +75,13 @@ export function AddLeadsPanel({
     setPicked({});
   }, [workspaceId]);
 
-  // The source's leads, counted by segment, so the plan below is about the
-  // leads that are really there.
+  // The source's leads, counted by segment — only when asked for: reading a
+  // big campaign takes a while, and the run doesn't need it.
   useEffect(() => {
     setFound(null);
     setReadError(null);
-    if (!workspaceId || !sourceId) return;
+    setReading(false);
+    if (!workspaceId || !sourceId || readTick === 0) return;
     const ctrl = new AbortController();
     setReading(true);
     previewAddLeads({ workspaceId, campaignId: sourceId }, ctrl.signal)
@@ -93,6 +94,8 @@ export function AddLeadsPanel({
       });
     return () => ctrl.abort();
   }, [workspaceId, sourceId, readTick]);
+  // A different campaign starts unread.
+  useEffect(() => setReadTick(0), [workspaceId, sourceId]);
 
   const originals = useMemo(() => campaigns.filter(isOriginal), [campaigns]);
   const source = originals.find((c) => c.id === sourceId) ?? null;
@@ -146,8 +149,7 @@ export function AddLeadsPanel({
     ...noCopies.map((f) => `"${f.campaign.name}" has no 🔵, Opt Out or Signature copies in this workspace, so its leads would have nowhere to be split to.`),
     ...families.flatMap((f) => f.ambiguous.map((n) => `More than one campaign is called "${n}". Rename one so there is no telling them apart by mistake.`)),
   ];
-  if (source && readError) problems.push(`Couldn't read the leads in "${source.name}": ${readError}`);
-  const canStart = problems.length === 0 && !starting && !!source && !!found && !reading && found.total > 0;
+  const canStart = problems.length === 0 && !starting && !!source && (!found || found.total > 0);
 
   function pickIndustry(i: Industry) {
     setIndustry(i.name);
@@ -284,8 +286,19 @@ export function AddLeadsPanel({
             <span className="flex items-center gap-2 text-[11px] text-muted-foreground" data-al-read>
               {reading ? (
                 <>
-                  <Spinner size={11} /> Reading the leads in {source.name}…
+                  <Spinner size={11} /> Reading the leads in {source.name}… (optional — you can add the leads now)
                 </>
+              ) : readError ? (
+                <span className="text-warning">
+                  Couldn&apos;t read the leads: {readError}{" "}
+                  <button type="button" className="underline" onClick={() => setReadTick((n) => n + 1)}>
+                    Try again
+                  </button>
+                </span>
+              ) : !found ? (
+                <button type="button" className="underline hover:text-foreground" onClick={() => setReadTick(1)} data-al-check>
+                  Check the leads first (optional)
+                </button>
               ) : found ? (
                 <>
                   {formatNumber(found.total)} not-contacted lead{found.total === 1 ? "" : "s"}
@@ -362,7 +375,7 @@ export function AddLeadsPanel({
         </div>
       )}
 
-      {families.length > 0 && found && (
+      {families.length > 0 && (
         <div className="space-y-2" data-al-families>
           <div className="text-xs font-medium text-muted-foreground">Campaigns that will get leads</div>
           {families.map((f) => (
@@ -370,8 +383,11 @@ export function AddLeadsPanel({
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <span className="text-sm font-medium">{f.campaign.name}</span>
                 <span className="text-xs text-muted-foreground">
-                  {formatNumber(leadsFor.get(f.campaign.id) ?? 0)} lead{(leadsFor.get(f.campaign.id) ?? 0) === 1 ? "" : "s"}
-                  {f.isSource ? " stay in this family" : " move in"}
+                  {found
+                    ? `${formatNumber(leadsFor.get(f.campaign.id) ?? 0)} lead${(leadsFor.get(f.campaign.id) ?? 0) === 1 ? "" : "s"}${f.isSource ? " stay in this family" : " move in"}`
+                    : f.isSource
+                      ? "its own segment, and leads with none or with a segment not listed"
+                      : `the ${plan.rows.filter((r) => r.familyId === f.campaign.id).map((r) => r.segment).join(", ")} leads`}
                 </span>
               </div>
               {f.copies.length === 0 ? (
@@ -420,7 +436,9 @@ export function AddLeadsPanel({
           {starting ? <Spinner /> : <MoveIcon size={16} />}
           {queued ? "Add to queue" : "Add the leads"}
         </button>
-        {queued && <span className="text-xs text-muted-foreground">A job is running. This one waits its turn.</span>}
+        <span className="text-xs text-muted-foreground">
+          {queued ? "A job is running; this one waits its turn. " : ""}It runs on the server — close the tab whenever you like. The result is in Jobs below.
+        </span>
       </div>
     </div>
   );

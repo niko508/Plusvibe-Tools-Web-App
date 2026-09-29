@@ -1036,9 +1036,21 @@ async function runSegmenting(ctx: RunCtx, rules: SegmentRule[]) {
     r.planned = planned?.planned ?? 0;
     if (r.planned === 0) r.state = "done";
   }
-  // Add More Leads showed which segments stay before it ran, so leads left
-  // in the source are what was asked for there, not a problem.
-  if (seg.unmapped > 0 && !ctx.m.payload?.onlyExisting) {
+  const src = rec.sources.find((x) => !x.arrivalsOnly);
+  if (ctx.m.payload?.onlyExisting && src) {
+    // Add More Leads keeps leads with no segment in the source's family by
+    // design. One whose segment matched no family is worth saying: where it
+    // went, so it can be moved on if that was wrong.
+    const unknown = seg.unmapped - plan.counts.unmappedEmpty;
+    if (unknown > 0) {
+      pushError(
+        rec,
+        `${unknown} lead${unknown === 1 ? "" : "s"} had a segment no family was found for${
+          seg.unmappedSegments.length ? ` (${seg.unmappedSegments.map((x) => `"${x}"`).join(", ")})` : ""
+        }, so ${unknown === 1 ? "it stayed" : "they stayed"} in "${src.campaignName}" and ${unknown === 1 ? "was" : "were"} split across its family.`
+      );
+    }
+  } else if (seg.unmapped > 0) {
     pushError(rec, describeUnmapped(seg.unmapped, seg.unmappedSegments, seg.rules));
   }
   await persist(id);

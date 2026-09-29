@@ -135,6 +135,8 @@ export interface SegmentPlan<T> {
     unmapped: number;
     /** Distinct uncovered segments, a few of them, for the report. */
     unmappedSegments: string[];
+    /** Of the unmapped, the leads with no segment at all. */
+    unmappedEmpty: number;
     planned: number;
     /** Planned per rule, in rule order. */
     perRule: { segment: string | null; campaignId: string; planned: number }[];
@@ -158,6 +160,7 @@ export function planSegmentMoves<T extends RawLead>(
   let total = 0;
   let stayed = 0;
   let unmapped = 0;
+  let unmappedEmpty = 0;
   let planned = 0;
 
   for (const { campaignId, leads } of campaigns) {
@@ -167,6 +170,7 @@ export function planSegmentMoves<T extends RawLead>(
       const rule = byKey.get(segmentKey(segment));
       if (!rule) {
         unmapped += 1;
+        if (!segment) unmappedEmpty += 1;
         if (segment && unmappedSegments.size < 8) unmappedSegments.add(segment);
         continue;
       }
@@ -176,7 +180,9 @@ export function planSegmentMoves<T extends RawLead>(
       }
       planned += 1;
       perRule.set(rule, (perRule.get(rule) ?? 0) + 1);
-      const key = `${campaignId}→${rule.campaignId}`;
+      // One move per segment, even when two segments share a campaign, so
+      // each rule's count is its own.
+      const key = `${campaignId}→${rule.campaignId}→${rule.segment === null ? "" : segmentKey(rule.segment)}`;
       let move = moves.get(key);
       if (!move) {
         move = { fromCampaignId: campaignId, toCampaignId: rule.campaignId, toCampaignName: rule.campaignName, segment: rule.segment, leads: [] };
@@ -193,6 +199,7 @@ export function planSegmentMoves<T extends RawLead>(
       stayed,
       unmapped,
       unmappedSegments: [...unmappedSegments],
+      unmappedEmpty,
       planned,
       perRule: rules.map((r) => ({ segment: r.segment, campaignId: r.campaignId, planned: perRule.get(r) ?? 0 })),
     },

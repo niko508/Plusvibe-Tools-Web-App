@@ -85,7 +85,9 @@ export function JobCard({
           </span>
           <span className="truncate text-sm font-medium">{job.label}</span>
           {job.mode === "move" && (
-            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">Move leads</span>
+            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground" data-job-kind>
+              {job.request?.onlyExisting ? "Add more leads" : "Move leads"}
+            </span>
           )}
         </div>
         <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
@@ -97,6 +99,7 @@ export function JobCard({
 
       {expanded && (
       <>
+      {job.mode === "move" && !running && !queued && <FinalAllocation job={job} />}
 
       {/* A fix run has one phase of its own: read, take the segment, move. */}
       {job.mode === "fix" && job.allocation && (
@@ -330,6 +333,58 @@ export function JobCard({
 }
 
 /** One original inside the building phase: its four steps and where its leads went. */
+/**
+ * Where every lead ended up, campaign by campaign — the answer to "what did
+ * that run do" once it has finished. Counts are what landed; a lead that could
+ * not be moved stayed in its family's original and is counted there.
+ */
+function FinalAllocation({ job }: { job: CampaignTypesJob }) {
+  const families = (job.sources ?? []).filter((s) => (s.moving?.plannedTotal ?? 0) > 0 || (s.moving?.staysInSource ?? 0) > 0);
+  if (families.length === 0) return null;
+  const rules = job.segmenting?.rules ?? [];
+  return (
+    <div className="mt-4 rounded-xl border border-border/70 p-3" data-final-allocation>
+      <div className="mb-2 text-xs font-medium">Final allocation</div>
+      <div className="space-y-3">
+        {families.map((s) => {
+          const targets = (s.moving?.targets ?? []).filter((t) => t.state !== "skipped");
+          const unmovedTotal = targets.reduce((n, t) => n + (t.unmoved ?? 0), 0);
+          const kept = (s.moving?.staysInSource ?? 0) + unmovedTotal;
+          const total = kept + targets.reduce((n, t) => n + t.moved + (t.carried ?? 0), 0);
+          const segs = rules.filter((r) => r.campaignId === s.campaignId && r.segment).map((r) => r.segment);
+          return (
+            <div key={s.campaignId} data-final-family={s.campaignId}>
+              <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
+                <span className="font-medium">
+                  {s.campaignName}
+                  {segs.length > 0 && <span className="font-normal text-muted-foreground"> · {segs.join(", ")}</span>}
+                </span>
+                <span className="tabular-nums text-muted-foreground">{formatNumber(total)} leads</span>
+              </div>
+              <ul className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
+                <li className="flex justify-between gap-2">
+                  <span className="truncate">{s.campaignName}</span>
+                  <span className="shrink-0 tabular-nums">{formatNumber(kept)}</span>
+                </li>
+                {targets.map((t) => (
+                  <li key={t.role} className={`flex justify-between gap-2 ${t.state === "error" ? "text-danger" : ""}`}>
+                    <span className="truncate">{t.name}</span>
+                    <span className="shrink-0 tabular-nums">
+                      {formatNumber(t.moved + (t.carried ?? 0))}
+                      {t.unmoved ? ` · ${formatNumber(t.unmoved)} could not be moved` : ""}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+      {(job.errors ?? []).length === 0 && <p className="mt-2 text-[11px] text-success">No problems.</p>}
+    </div>
+  );
+}
+
 function SourceBlock({ source, mode, running }: { source: SourceRun; mode: CampaignTypesJob["mode"]; running: boolean }) {
   const moving = source.moving ?? { targets: [], staysInSource: 0, processed: 0, plannedTotal: 0 };
   const targets = moving.targets ?? [];
