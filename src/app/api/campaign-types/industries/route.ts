@@ -19,12 +19,15 @@ export async function GET(request: Request) {
 export async function PUT(request: Request) {
   try {
     await requireAccountKey(request);
-    const body = (await request.json().catch(() => ({}))) as { name?: unknown; segments?: unknown; noSegment?: unknown };
+    const body = (await request.json().catch(() => ({}))) as { name?: unknown; segments?: unknown; noSegment?: unknown; families?: unknown };
     return NextResponse.json(
       await upsertIndustry({
         name: String(body.name ?? ""),
         segments: Array.isArray(body.segments) ? body.segments.map((s) => String(s ?? "")) : [],
         noSegment: typeof body.noSegment === "string" ? body.noSegment : null,
+        ...(body.families && typeof body.families === "object" && !Array.isArray(body.families)
+          ? { families: Object.fromEntries(Object.entries(body.families as Record<string, unknown>).map(([k, v]) => [k, String(v ?? "")])) }
+          : {}),
       })
     );
   } catch (err) {

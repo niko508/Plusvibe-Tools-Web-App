@@ -16,7 +16,7 @@ const eq = (label, got, want) => {
   }
 };
 
-const { isOriginal, familiesFor, planAddLeads, countSegments, monthOf, monthRecency } = await importTs("@/lib/campaign-types/add-leads");
+const { isOriginal, familiesFor, planAddLeads, countSegments, monthOf, monthRecency, familyBase } = await importTs("@/lib/campaign-types/add-leads");
 const Y = "🟡", B = "🔵";
 const oid = (unixSeconds, n) => unixSeconds.toString(16).padStart(8, "0") + n.toString(16).padStart(16, "0");
 const t = (y, m) => Math.floor(Date.UTC(y, m - 1, 1) / 1000);
@@ -45,7 +45,7 @@ console.log("--- the newest named for a segment: by the month in the name");
     { id: oid(t(2026, 8), 4), name: `${Y} Local Business (August)` },
   ];
   eq("the month in the name decides, not when it was made", familiesFor("apps", camps, sept).map((c) => c.name), [`${Y} Apps (August)`, `${Y} Apps (July)`, `${Y} Apps V2 (June)`]);
-  eq("whole words, any case", [familiesFor("APPS", camps, sept).length, familiesFor("app", camps, sept).length, familiesFor("local business", camps, sept)[0].name], [3, 0, `${Y} Local Business (August)`]);
+  eq("whole words, any case, a plural either way", [familiesFor("APPS", camps, sept).length, familiesFor("app", camps, sept).length, familiesFor("ap", camps, sept).length, familiesFor("local business", camps, sept)[0].name], [3, 3, 0, `${Y} Local Business (August)`]);
   const jan = new Date(Date.UTC(2027, 0, 10));
   const turn = [{ id: "d", name: `${Y} Apps (December)` }, { id: "j", name: `${Y} Apps (January)` }, { id: "n", name: `${Y} Apps (November)` }];
   eq("across the new year: January is newer than December", familiesFor("apps", turn, jan).map((c) => c.id), ["j", "d", "n"]);
@@ -85,6 +85,28 @@ console.log("--- what the leads carry");
   eq("…the one it couldn't place is named, with its count", /"Wholesale" \(4 leads\)/.test(p.warnings[0]), true);
   const hand = planAddLeads(src, [], originals, { wholesale: "a" }, [{ segment: "Wholesale", count: 4 }]);
   eq("…and goes where it is sent by hand", [hand.rules, hand.warnings], [[{ segment: "Wholesale", campaignId: "a", campaignName: "🟡 Apps (August)" }], []]);
+}
+
+console.log("--- plurals, and what was learned");
+{
+  const sept = new Date(Date.UTC(2026, 8, 15));
+  const camps = [
+    { id: "e", name: `${Y} eCommerce (August)` },
+    { id: "a", name: `${Y} Apps (August)` },
+    { id: "l", name: `${Y} Local Business (August)` },
+    { id: "s", name: `${Y} Services Co (August)` },
+    { id: "d", name: `${Y} D2C Brands (August)` },
+    { id: "d9", name: `${Y} D2C Brands (September)` },
+  ];
+  eq("a singular segment finds the plural name, and back", [familiesFor("app", camps, sept)[0]?.id, familiesFor("service", camps, sept)[0]?.id, familiesFor("local businesses", camps, sept)[0]?.id], ["a", "s", "l"]);
+  eq("…but not a different word", [familiesFor("ap", camps, sept).length, familiesFor("appstore", camps, sept).length], [0, 0]);
+  eq("a family's name without its marker and month", [familyBase(`${Y} Apps (August)`), familyBase(`${B} Local Business - Opt Out (August)`), familyBase("Plain")], ["Apps", "Local Business - Opt Out", "Plain"]);
+  eq("remembered: the newest campaign of that family, whatever the segment says", familiesFor("dtc", camps, sept, "D2C Brands").map((c) => c.id), ["d9", "d"]);
+  eq("…a remembered family that's gone falls back to the name", familiesFor("app", camps, sept, "Gone Family")[0]?.id, "a");
+  const src = camps[0];
+  const p = planAddLeads(src, ["dtc", "app"], camps, {}, null, { dtc: "D2C Brands" });
+  eq("the plan marks what memory found", p.rows.map((r) => [r.segment, r.familyId, r.remembered, r.auto]), [["dtc", "d9", true, true], ["app", "a", false, true]]);
+  eq("…a hand pick still wins over memory", planAddLeads(src, ["dtc"], camps, { dtc: "a" }, null, { dtc: "D2C Brands" }).rows[0].familyId, "a");
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);

@@ -36,7 +36,7 @@ async function write(list: Industry[]): Promise<void> {
 
 export class IndustryError extends Error {}
 
-export function upsertIndustry(input: { name: string; segments: string[]; noSegment?: string | null }): Promise<{ industries: Industry[]; saved: Industry }> {
+export function upsertIndustry(input: { name: string; segments: string[]; noSegment?: string | null; families?: Record<string, string> }): Promise<{ industries: Industry[]; saved: Industry }> {
   return serial(async () => {
     const r = saveIndustry(await loadIndustries(), input, Date.now());
     if (!r.saved) throw new IndustryError(r.problem ?? "Could not save the industry.");

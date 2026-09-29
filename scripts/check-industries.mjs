@@ -34,6 +34,17 @@ console.log("--- saving");
   eq("forgotten", removeIndustry(c.list, "saas").map((i) => i.name), ["eCommerce"]);
 }
 
+console.log("--- what an industry learns");
+{
+  const one = saveIndustry([], { name: "D2C", segments: ["ecommerce", "app"], families: { App: " Apps " } }, 1);
+  eq("a hand pick is kept by segment, tidied", one.saved.families, { app: "Apps" });
+  const two = saveIndustry(one.list, { name: "d2c", segments: ["ecommerce", "app", "local"] }, 2);
+  eq("saving the segments again keeps what was learned", two.saved.families, { app: "Apps" });
+  const three = saveIndustry(two.list, { name: "D2C", segments: ["app"], families: { app: "Apps V2", local: "Local Business" } }, 3);
+  eq("a new pick replaces the old one and adds to the rest", three.saved.families, { app: "Apps V2", local: "Local Business" });
+  eq("read back from the file", normalizeIndustries([{ name: "X", segments: [], families: { a: "A", b: "", c: 5 } }])[0].families, { a: "A" });
+}
+
 console.log("--- reading the file");
 {
   eq("garbage: an empty list", normalizeIndustries("x"), []);

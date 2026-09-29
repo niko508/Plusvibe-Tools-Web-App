@@ -75,19 +75,50 @@ function newer(a: [number, number, number], b: [number, number, number]): boolea
   return false;
 }
 
-const words = (s: string) =>
+const wordList = (s: string) =>
   s
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim();
+    .trim()
+    .split(" ")
+    .filter(Boolean);
 
-/** Every original whose name holds the segment as whole words, newest first. */
-export function familiesFor(segment: string, originals: CampaignLite[], now: Date = new Date()): CampaignLite[] {
-  const w = words(segment);
-  if (!w) return [];
-  const withKey = originals
-    .map((c, i) => ({ c, key: newness(c, i, now) }))
-    .filter(({ c }) => ` ${words(c.name)} `.includes(` ${w} `));
+/** One word for another, a plural either way: "app" ~ "apps", "service" ~ "services", "business" ~ "businesses". */
+function sameWord(a: string, b: string): boolean {
+  return a === b || a + "s" === b || a + "es" === b || b + "s" === a || b + "es" === a;
+}
+
+/** The segment's words, in order, somewhere in the name's — a plural either way. */
+export function nameHolds(name: string, segment: string): boolean {
+  const n = wordList(name);
+  const w = wordList(segment);
+  if (w.length === 0) return false;
+  for (let i = 0; i + w.length <= n.length; i++) if (w.every((x, j) => sameWord(x, n[i + j]))) return true;
+  return false;
+}
+
+/**
+ * A family's name without its marker or its month: "🟡 Apps (August)" →
+ * "Apps". What is remembered, so a later month's campaign is found too.
+ */
+export function familyBase(name: string): string {
+  return name
+    .replace(/^[^\p{L}\p{N}]+/u, "")
+    .replace(/\s*\([^)]*\)\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Every original named for the segment, newest first: those carrying the
+ * remembered family name when there is one, else those whose name holds the
+ * segment's words (whole words, any case, a plural either way).
+ */
+export function familiesFor(segment: string, originals: CampaignLite[], now: Date = new Date(), remembered?: string): CampaignLite[] {
+  const byMemory = remembered ? originals.filter((c) => familyBase(c.name).toLowerCase() === remembered.trim().toLowerCase()) : [];
+  const pool = byMemory.length > 0 ? byMemory : originals.filter((c) => nameHolds(c.name, segment));
+  if (pool.length === 0) return [];
+  const withKey = pool.map((c) => ({ c, key: newness(c, originals.indexOf(c), now) }));
   withKey.sort((a, b) => (newer(a.key, b.key) ? -1 : newer(b.key, a.key) ? 1 : 0));
   return withKey.map((x) => x.c);
 }
@@ -103,6 +134,8 @@ export interface AddLeadsRow {
   familyName: string | null;
   /** Found by name (true) or picked by hand (false). */
   auto: boolean;
+  /** Found through what was picked by hand for this segment before. */
+  remembered: boolean;
   /** How many originals matched the name, so "picked the newest of 3" can be said. */
   candidates: number;
   /** The family is the source's own: its leads stay and are split there. */
@@ -131,7 +164,9 @@ export function planAddLeads(
   originals: CampaignLite[],
   picked: Record<string, string> = {},
   /** What the source's leads carry, once read: segments the industry doesn't list are added. */
-  found: SegmentCount[] | null = null
+  found: SegmentCount[] | null = null,
+  /** Learned before: segment (lower-case) → family name picked for it by hand. */
+  remembered: Record<string, string> = {}
 ): AddLeadsPlan {
   const problems: string[] = [];
   if (!source) problems.push("Pick the campaign the new leads are in.");
@@ -145,10 +180,12 @@ export function planAddLeads(
     const key = segment.toLowerCase();
     if (!segment || seen.has(key)) continue;
     seen.add(key);
-    const found = familiesFor(segment, originals);
+    const memory = remembered[key];
+    const matched = familiesFor(segment, originals, new Date(), memory);
+    const byMemory = !!memory && matched.length > 0 && familyBase(matched[0].name).toLowerCase() === memory.toLowerCase();
     const hand = picked[key] ? originals.find((c) => c.id === picked[key]) : undefined;
     // The source is always an option for its own segment, even if its name doesn't say it.
-    const chosen = hand ?? (found[0] as CampaignLite | undefined);
+    const chosen = hand ?? (matched[0] as CampaignLite | undefined);
     rows.push({
       segment,
       count: countOf(key),
@@ -156,7 +193,8 @@ export function planAddLeads(
       familyId: chosen?.id ?? null,
       familyName: chosen?.name ?? null,
       auto: !hand,
-      candidates: found.length,
+      remembered: !hand && byMemory,
+      candidates: matched.length,
       isSource: !!chosen && !!source && chosen.id === source.id,
     });
   }

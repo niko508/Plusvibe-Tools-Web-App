@@ -6,7 +6,7 @@ import type { CampaignKind } from "@/lib/campaign-types/kinds";
 import type { RoleNames } from "@/lib/jobs/campaign-types-types";
 import { deriveNames } from "@/lib/campaign-types/names";
 import { ALL_COMPANION_ROLES, matchCompanions } from "@/lib/campaign-types/match";
-import { isOriginal, planAddLeads, type SegmentCount } from "@/lib/campaign-types/add-leads";
+import { familyBase, isOriginal, planAddLeads, type SegmentCount } from "@/lib/campaign-types/add-leads";
 import { findIndustry, MAX_INDUSTRY_SEGMENTS, type Industry } from "@/lib/campaign-types/industries";
 import { ApiClientError, deleteIndustry, previewAddLeads, saveIndustry, startCampaignTypes } from "@/lib/api-client";
 import { IndustryPicker } from "./industry-picker";
@@ -100,7 +100,12 @@ export function AddLeadsPanel({
   const originals = useMemo(() => campaigns.filter(isOriginal), [campaigns]);
   const source = originals.find((c) => c.id === sourceId) ?? null;
   const typed = segments.map((s) => s.trim()).filter(Boolean);
-  const plan = useMemo(() => planAddLeads(source, typed, originals, picked, found?.segments ?? null), [source, typed.join("|"), originals, picked, found]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** What this industry learned from earlier hand picks: segment → family name. */
+  const remembered = useMemo(() => findIndustry(industries, industry)?.families ?? {}, [industries, industry]);
+  const plan = useMemo(
+    () => planAddLeads(source, typed, originals, picked, found?.segments ?? null, remembered),
+    [source, typed.join("|"), originals, picked, found, remembered] // eslint-disable-line react-hooks/exhaustive-deps
+  );
   const noSegmentCount = found?.segments.find((f) => f.segment === "")?.count ?? 0;
   /** Leads each family takes, by campaign id: the source keeps whatever no row sends elsewhere. */
   const leadsFor = useMemo(() => {
@@ -159,11 +164,11 @@ export function AddLeadsPanel({
     }
   }
 
-  async function remember(name: string, allowEmpty: boolean) {
+  async function remember(name: string, allowEmpty: boolean, families?: Record<string, string>) {
     if (!name.trim() || (!allowEmpty && typed.length === 0)) return;
     setSaving(true);
     try {
-      const r = await saveIndustry({ name, segments: typed });
+      const r = await saveIndustry({ name, segments: typed, ...(families && Object.keys(families).length > 0 ? { families } : {}) });
       onIndustries(r.industries);
       setIndustry(r.saved.name);
     } catch (err) {
@@ -195,7 +200,11 @@ export function AddLeadsPanel({
         activate: false,
         onlyExisting: true,
       });
-      if (industry.trim()) void remember(industry, false);
+      // Learn from the hand picks: next time these segments find the newest
+      // campaign of the family chosen for them now.
+      const learned: Record<string, string> = {};
+      for (const r of plan.rows) if (!r.auto && r.familyName) learned[r.segment.toLowerCase()] = familyBase(r.familyName);
+      if (industry.trim()) void remember(industry, false, learned);
       await onStarted(queued);
     } catch (err) {
       setError(errMessage(err));
@@ -350,11 +359,15 @@ export function AddLeadsPanel({
                         : r.isSource
                           ? "The source's own family: these leads stay and are split here."
                           : r.familyId
-                            ? r.auto
+                            ? r.remembered
+                              ? `Remembered from last time: the newest "${familyBase(r.familyName ?? "")}" campaign.`
+                              : r.auto
                               ? r.candidates > 1
                                 ? `The newest of ${formatNumber(r.candidates)} campaigns named for it, by the month in the name.`
                                 : "Found by name."
-                              : "Picked by hand."
+                              : industry.trim()
+                                ? `Picked by hand — ${industry.trim()} will remember it when the leads are added.`
+                                : "Picked by hand."
                             : "Couldn't find a campaign named for it — these stay in the source unless you pick one."}
                     </p>
                   </div>

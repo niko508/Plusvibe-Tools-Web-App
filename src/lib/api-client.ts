@@ -1517,7 +1517,7 @@ export function fetchIndustries(signal?: AbortSignal) {
   return request<{ industries: Industry[] }>("/api/campaign-types/industries", { signal });
 }
 
-export function saveIndustry(input: { name: string; segments: string[]; noSegment?: string | null }, signal?: AbortSignal) {
+export function saveIndustry(input: { name: string; segments: string[]; noSegment?: string | null; families?: Record<string, string> }, signal?: AbortSignal) {
   return request<{ industries: Industry[]; saved: Industry }>("/api/campaign-types/industries", { method: "PUT", body: input, signal });
 }
 

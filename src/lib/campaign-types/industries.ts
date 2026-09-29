@@ -8,6 +8,7 @@
 // Pure module: the reading, the saving rules and the matching, all unit-tested.
 
 import { MAX_RULES } from "./segments";
+import { nameHolds } from "./add-leads";
 
 /** Segment rows on the page, besides the one for leads with no segment. */
 export const MAX_INDUSTRY_SEGMENTS = MAX_RULES - 1;
@@ -20,7 +21,26 @@ export interface Industry {
   segments: string[];
   /** The segment whose campaign takes the leads with no segment, if one was chosen. */
   noSegment?: string;
+  /**
+   * Learned from Add More Leads: segment (lower-case) → the family name picked
+   * for it by hand, without its marker and month ("app" → "Apps"). Next time
+   * the newest campaign of that name is found for it.
+   */
+  families?: Record<string, string>;
   updatedAt: number;
+}
+
+const MAX_FAMILIES = 60;
+
+function cleanFamilies(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>).slice(0, MAX_FAMILIES)) {
+    const seg = key(k).slice(0, MAX_NAME);
+    const fam = typeof v === "string" ? tidy(v).slice(0, 200) : "";
+    if (seg && fam) out[seg] = fam;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 const key = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
@@ -37,8 +57,9 @@ export function normalizeIndustries(raw: unknown): Industry[] {
     if (!name || seen.has(key(name))) continue;
     const segments = cleanSegments(Array.isArray(o.segments) ? o.segments : []);
     const noSegment = typeof o.noSegment === "string" ? segments.find((s) => key(s) === key(o.noSegment as string)) : undefined;
+    const families = cleanFamilies(o.families);
     seen.add(key(name));
-    out.push({ name, segments, ...(noSegment ? { noSegment } : {}), updatedAt: typeof o.updatedAt === "number" ? o.updatedAt : 0 });
+    out.push({ name, segments, ...(noSegment ? { noSegment } : {}), ...(families ? { families } : {}), updatedAt: typeof o.updatedAt === "number" ? o.updatedAt : 0 });
   }
   return out.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_INDUSTRIES);
 }
@@ -64,7 +85,7 @@ export function findIndustry(list: Industry[], name: string): Industry | undefin
  */
 export function saveIndustry(
   list: Industry[],
-  input: { name: string; segments: string[]; noSegment?: string | null },
+  input: { name: string; segments: string[]; noSegment?: string | null; families?: Record<string, string> },
   now: number
 ): { list: Industry[]; saved: Industry | null; problem?: string } {
   const name = tidy(input.name ?? "").slice(0, MAX_NAME);
@@ -73,7 +94,10 @@ export function saveIndustry(
   const segments = cleanSegments(input.segments ?? []);
   const noSegment = input.noSegment ? segments.find((s) => key(s) === key(input.noSegment!)) : undefined;
   const existing = findIndustry(list, name);
-  const saved: Industry = { name: existing?.name ?? name, segments, ...(noSegment ? { noSegment } : {}), updatedAt: now };
+  // What was learned is kept unless something new is learned: saving the
+  // segments from another tab must not forget it.
+  const families = cleanFamilies({ ...(existing?.families ?? {}), ...(input.families ?? {}) });
+  const saved: Industry = { name: existing?.name ?? name, segments, ...(noSegment ? { noSegment } : {}), ...(families ? { families } : {}), updatedAt: now };
   const rest = list.filter((i) => i !== existing);
   if (!existing && rest.length >= MAX_INDUSTRIES) return { list, saved: null, problem: `There are already ${MAX_INDUSTRIES} industries saved. Remove one first.` };
   return { list: [saved, ...rest], saved };
@@ -84,21 +108,8 @@ export function removeIndustry(list: Industry[], name: string): Industry[] {
   return found ? list.filter((i) => i !== found) : list;
 }
 
-/** "Free Trial - Everyday" → "free trial everyday": words only, for matching. */
-const words = (s: string) =>
-  s
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim();
-
-/**
- * The picked original a segment most likely belongs to: the one campaign whose
- * name contains the segment as whole words. None, or more than one, is no
- * answer — the row is left for choosing by hand.
- */
 export function matchCampaign(segment: string, campaigns: { id: string; name: string }[]): string | null {
-  const w = words(segment);
-  if (!w) return null;
-  const hits = campaigns.filter((c) => ` ${words(c.name)} `.includes(` ${w} `));
+  if (!segment.trim()) return null;
+  const hits = campaigns.filter((c) => nameHolds(c.name, segment));
   return hits.length === 1 ? hits[0].id : null;
 }
