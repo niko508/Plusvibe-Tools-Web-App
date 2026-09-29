@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ApiClientError,
   cancelOutreachSwitch,
+  clearFinishedOutreachSwitches,
   deleteOutreachSwitch,
   listOutreachSwitches,
   runOutreachSwitchNow,
@@ -71,6 +72,17 @@ export function ScheduledPanel({ onCount }: { onCount?: (waiting: number) => voi
   };
 
   const pending = rows.filter((r) => r.status === "scheduled" || r.status === "running");
+  const finished = rows.filter((r) => r.status === "done" || r.status === "error" || r.status === "cancelled");
+
+  function clearFinished() {
+    const problems = finished.filter((r) => r.status === "error").length;
+    const ask =
+      `Remove ${finished.length === 1 ? "the finished switch" : `all ${finished.length} finished switches`} from this list?` +
+      (problems > 0 ? `\n\n${problems} of them finished with problems — their notes go too.` : "") +
+      "\n\nWaiting ones stay. Nothing in Plusvibe changes.";
+    if (!window.confirm(ask)) return;
+    void act("__clear", () => clearFinishedOutreachSwitches());
+  }
   // The tab badge lives on the other side of the page, so the count it shows
   // comes from here — the one place that knows it.
   useEffect(() => {
@@ -91,6 +103,12 @@ export function ScheduledPanel({ onCount }: { onCount?: (waiting: number) => voi
                   pending.reduce((n, r) => n + r.totalInboxes, 0)
                 )} inboxes`}
           </span>
+          {finished.length > 0 && (
+            <button type="button" className="pv-btn-ghost text-xs" disabled={busy === "__clear"} onClick={clearFinished} data-clear-finished>
+              {busy === "__clear" ? <Spinner size={12} /> : null}
+              Remove finished ({formatNumber(finished.length)})
+            </button>
+          )}
           <button type="button" className="pv-btn-ghost text-xs" onClick={() => void refresh()} data-refresh-scheduled>
             <RefreshIcon size={13} />
             Refresh

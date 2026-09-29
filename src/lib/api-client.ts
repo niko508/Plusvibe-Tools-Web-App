@@ -943,6 +943,11 @@ export function deleteOutreachSwitch(id: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/outreach-switch/delete", { method: "POST", body: { id }, signal });
 }
 
+/** Removes every finished switch — done, with problems, or cancelled. */
+export function clearFinishedOutreachSwitches(signal?: AbortSignal) {
+  return request<{ removed: number }>("/api/jobs/outreach-switch/clear-finished", { method: "POST", body: {}, signal });
+}
+
 export function runOutreachSwitchNow(id: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/outreach-switch/run-now", { method: "POST", body: { id }, signal });
 }

@@ -162,6 +162,20 @@ export async function deleteSwitch(id: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * Removes every switch that has finished — done, finished with problems, or
+ * cancelled — in one save. Waiting and running ones are never touched.
+ */
+export async function deleteFinishedSwitches(): Promise<number> {
+  const all = await load();
+  const keep = all.filter((s) => s.status === "scheduled" || s.status === "running");
+  const removed = all.length - keep.length;
+  if (removed === 0) return 0;
+  all.splice(0, all.length, ...keep);
+  await save();
+  return removed;
+}
+
 /** Applies a switch now rather than waiting for its morning. */
 export async function runNow(id: string, apiKey: string): Promise<boolean> {
   const all = await load();
