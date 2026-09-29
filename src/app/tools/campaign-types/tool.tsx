@@ -24,7 +24,7 @@ import { formatNumber } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { Spinner, EmptyState } from "@/components/ui";
 import { LayersIcon, AlertIcon, ChevronDownIcon, CheckIcon, MoveIcon } from "@/components/icons";
-import { deriveNames } from "@/lib/campaign-types/names";
+import { BLUE, deriveNames, hasOptOut, hasSignature } from "@/lib/campaign-types/names";
 import { isArchived, matchCompanions, normalizeName } from "@/lib/campaign-types/match";
 import { shouldAutoResume } from "@/lib/campaign-types/resume";
 import { JobCard } from "./job-card";
@@ -263,6 +263,20 @@ export function CampaignTypesTool() {
   }, [parents, filter]);
   // In list order, whatever order they were ticked in, so the run is predictable.
   const sources = useMemo(() => parents.filter((c) => selected.includes(c.id)), [parents, selected]);
+  // Move leads: every other family's original in the workspace. A segment row
+  // may send leads to one without ticking it; only the leads it receives are
+  // split across its copies, and the leads it already has stay where they are.
+  const families = useMemo(
+    () =>
+      mode === "move"
+        ? parents.filter(
+            (c) => !selected.includes(c.id) && !isArchived(c) && !c.name.trim().startsWith(BLUE) && !hasOptOut(c.name) && !hasSignature(c.name)
+          )
+        : [],
+    [mode, parents, selected]
+  );
+  /** What a segment row can point at: the ticked originals, plus the other families on Move leads. */
+  const ruleTargets = useMemo(() => [...sources, ...families], [sources, families]);
   const roles = useMemo(() => rolesFor(kinds), [kinds]);
   // Opt Out only turns each original into its Opt Out campaign in place.
   const converting = mode === "create" && convertsOriginal(kinds);
@@ -274,27 +288,28 @@ export function CampaignTypesTool() {
   // A rule pointing at a campaign that was un-ticked is cleared: the leads
   // it names can only go to one of the originals.
   useEffect(() => {
-    setRows((prev) => prev.map((r) => (r.campaignId && !selected.includes(r.campaignId) ? { ...r, campaignId: "" } : r)));
-    setEmptyTo((prev) => (prev && !selected.includes(prev) ? "" : prev));
-  }, [selected]);
+    const ok = new Set(ruleTargets.map((c) => c.id));
+    setRows((prev) => prev.map((r) => (r.campaignId && !ok.has(r.campaignId) ? { ...r, campaignId: "" } : r)));
+    setEmptyTo((prev) => (prev && !ok.has(prev) ? "" : prev));
+  }, [ruleTargets]);
 
   // A row with a segment but no campaign yet is matched to the picked
   // original whose name contains it — once, as originals are ticked. A
   // campaign chosen by hand is never changed.
   useEffect(() => {
     if (sources.length === 0) return;
-    setRows((prev) => prev.map((r) => (r.segment.trim() && !r.campaignId ? { ...r, campaignId: matchCampaign(r.segment, sources) ?? "" } : r)));
+    setRows((prev) => prev.map((r) => (r.segment.trim() && !r.campaignId ? { ...r, campaignId: matchCampaign(r.segment, ruleTargets) ?? "" } : r)));
     const noSeg = pickedRef.current?.noSegment;
-    if (noSeg) setEmptyTo((prev) => prev || (matchCampaign(noSeg, sources) ?? ""));
-  }, [sources]);
+    if (noSeg) setEmptyTo((prev) => prev || (matchCampaign(noSeg, ruleTargets) ?? ""));
+  }, [sources, ruleTargets]);
 
   function pickIndustry(i: Industry) {
     pickedRef.current = i;
     setIndustry(i.name);
     // One added but never run has no segments yet: the rows are left as typed.
     if (i.segments.length === 0) return;
-    setRows(rowsFor(i, sources));
-    setEmptyTo(i.noSegment ? matchCampaign(i.noSegment, sources) ?? "" : "");
+    setRows(rowsFor(i, ruleTargets));
+    setEmptyTo(i.noSegment ? matchCampaign(i.noSegment, ruleTargets) ?? "" : "");
   }
 
   /** The segments in the rows, and the one whose campaign takes the no-segment leads. */
@@ -346,14 +361,16 @@ export function CampaignTypesTool() {
 
   const rules = useMemo<SegmentRule[]>(() => {
     if (noSegments) return [];
-    const nameOf = (id: string) => sources.find((s) => s.id === id)?.name ?? "";
+    const nameOf = (id: string) => ruleTargets.find((s) => s.id === id)?.name ?? "";
     const out: SegmentRule[] = rows
       .filter((r) => r.segment.trim() !== "" || r.campaignId)
       .map((r) => ({ segment: r.segment, campaignId: r.campaignId, campaignName: nameOf(r.campaignId) }));
     if (emptyTo) out.push({ segment: null, campaignId: emptyTo, campaignName: nameOf(emptyTo) });
     return out;
-  }, [rows, emptyTo, sources, noSegments]);
-  const ruleProblems = useMemo(() => validateRules(rules, sources.map((s) => s.id)), [rules, sources]);
+  }, [rows, emptyTo, ruleTargets, noSegments]);
+  const ruleProblems = useMemo(() => validateRules(rules, ruleTargets.map((s) => s.id)), [rules, ruleTargets]);
+  /** Families a row sends leads to without being ticked. */
+  const arrivalFamilies = useMemo(() => families.filter((f) => rules.some((r) => r.campaignId === f.id)), [families, rules]);
 
   // Names already taken in this workspace. The job adopts an existing campaign
   // rather than making a second one under the same name, so a re-run after an
@@ -371,7 +388,7 @@ export function CampaignTypesTool() {
 
   const previews = useMemo(
     () =>
-      sources.map((source) => {
+      [...sources, ...arrivalFamilies].map((source) => {
         const names = deriveNames(source.name);
         const rowsFor = roles.map((role) => ({
           role,
@@ -385,6 +402,7 @@ export function CampaignTypesTool() {
         const renameTaken = renameTo ? (existing.get(normalizeName(renameTo)) ?? null) : null;
         return {
           source,
+          arrivalsOnly: arrivalFamilies.includes(source),
           names,
           rows: rowsFor,
           match,
@@ -392,7 +410,7 @@ export function CampaignTypesTool() {
           renameTaken: renameTaken && renameTaken.id !== source.id ? renameTaken : null,
         };
       }),
-    [sources, roles, existing, mode, parents, converting]
+    [sources, arrivalFamilies, roles, existing, mode, parents, converting]
   );
 
   // Two originals whose copies would share a name — "X" and "🔵 X" picked
@@ -463,7 +481,12 @@ export function CampaignTypesTool() {
         mode,
         workspaceId: workspaceId!,
         workspaceName: workspaces.find((w) => w._id === workspaceId)?.name ?? "",
-        sources: previews.map((p) => ({ campaignId: p.source.id, campaignName: p.source.name, names: p.names as RoleNames })),
+        sources: previews.map((p) => ({
+          campaignId: p.source.id,
+          campaignName: p.source.name,
+          names: p.names as RoleNames,
+          ...(p.arrivalsOnly ? { arrivalsOnly: true } : {}),
+        })),
         kinds: mode === "fix" ? [] : kinds,
         rules: mode === "fix" ? [] : rules,
         segment: mode === "fix" ? fixSegment.trim() : undefined,
@@ -491,14 +514,39 @@ export function CampaignTypesTool() {
   if (!ready) return <div className="pv-card h-40 animate-pulse" />;
   if (!hasKey) return <ConnectPrompt onConnected={loadWorkspaces} />;
 
+  // Ticked originals first; on Move leads, then every other family.
+  const targetOptions = (
+    <>
+      {families.length > 0 ? (
+        <>
+          <optgroup label="Ticked originals">
+            {sources.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label="Other families — only the leads moved in are split">
+            {families.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </optgroup>
+        </>
+      ) : (
+        sources.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.name}
+          </option>
+        ))
+      )}
+    </>
+  );
   const campaignOptions = (
     <>
       <option value="">{sources.length === 0 ? "Pick the originals first…" : "Campaign…"}</option>
-      {sources.map((c) => (
-        <option key={c.id} value={c.id}>
-          {c.name}
-        </option>
-      ))}
+      {targetOptions}
     </>
   );
 
@@ -758,8 +806,9 @@ export function CampaignTypesTool() {
           ) : (
           <>
           <p className="mb-2 text-xs text-muted-foreground">
-            Before anything is built, every lead is moved to the campaign its Segment field names. Only the originals picked
-            above can be chosen. A segment on no row stays where it is.
+            {mode === "move"
+              ? "First every lead is moved to the family its Segment field names — a ticked original, or any other family in the workspace. A family that isn't ticked only has the leads it receives split across its copies; the leads it already had stay put. A segment on no row stays where it is."
+              : "Before anything is built, every lead is moved to the campaign its Segment field names. Only the originals picked above can be chosen. A segment on no row stays where it is."}
           </p>
           <div className="space-y-2">
             {rows.map((r, i) => (
@@ -797,11 +846,7 @@ export function CampaignTypesTool() {
                   aria-label="Campaign for leads with no segment"
                 >
                   <option value="">{sources.length === 0 ? "Pick the originals first…" : "Leave them where they are"}</option>
-                  {sources.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
+                  {targetOptions}
                 </select>
                 <ChevronDownIcon size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               </div>
@@ -879,7 +924,14 @@ export function CampaignTypesTool() {
             <div className="space-y-3">
               {previews.map((p) => (
                 <div key={p.source.id} data-preview-source={p.source.id}>
-                  <div className="mb-1 truncate text-xs font-medium">{p.source.name}</div>
+                  <div className="mb-1 truncate text-xs font-medium">
+                    {p.source.name}
+                    {p.arrivalsOnly && (
+                      <span className="ml-2 font-normal text-muted-foreground" data-arrivals-only>
+                        · only the leads its segment rows bring in are split; its own leads stay put
+                      </span>
+                    )}
+                  </div>
                   <div className="space-y-1.5">
                     {mode === "create" && p.renameTo && (
                       <div className="flex flex-col gap-1 rounded-lg border border-border/70 px-2.5 py-2 sm:flex-row sm:items-center sm:justify-between" data-convert-row={p.source.id}>

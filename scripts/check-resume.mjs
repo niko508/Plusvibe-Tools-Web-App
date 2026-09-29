@@ -208,5 +208,14 @@ console.log("--- when a run is picked up on its own");
   eq("…nor a later run of a different campaign", shouldAutoResume(job(), now, [other]), true);
 }
 
+console.log("--- a family that only takes the leads moved into it");
+{
+  const fam = { ...structuredClone(reported), campaignId: "apps1", campaignName: "🟡 Apps (August)", arrivalsOnly: true, arrivals: ["a@x.com", "b@y.com"] };
+  const p = resumePayload(job({ sources: [structuredClone(reported), fam], request: undefined }));
+  eq("the leads it had taken in go with the continued run", p.carryArrivals, { apps1: ["a@x.com", "b@y.com"] });
+  const none = resumePayload(job());
+  eq("…and nothing is carried when there is no such family", none.carryArrivals, undefined);
+}
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

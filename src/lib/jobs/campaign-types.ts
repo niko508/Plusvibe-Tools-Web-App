@@ -555,6 +555,10 @@ export async function createJob(apiKey: string, payload: CampaignTypesStartPaylo
       const run = newSourceRun(s, roles, mode === "create" ? "create" : "move", activate, mode === "create" && convertsOriginal(payload.kinds));
       const carried = payload.carry?.[s.campaignId] ?? {};
       for (const t of run.moving.targets) if ((carried[t.role] ?? 0) > 0) t.carried = carried[t.role];
+      if (mode === "move" && s.arrivalsOnly) {
+        run.arrivalsOnly = true;
+        run.arrivals = [...(payload.carryArrivals?.[s.campaignId] ?? [])];
+      }
       return run;
     }),
     // A fix run keeps its own progress: the sources are read and nothing else,
@@ -589,7 +593,7 @@ export async function createJob(apiKey: string, payload: CampaignTypesStartPaylo
     errors: [],
     // Kept so the run can be started again after a restart. The carry is left
     // out: it is worked out afresh from this record's own progress then.
-    request: { ...payload, carry: undefined, carryAlloc: undefined, resumedFrom: undefined },
+    request: { ...payload, carry: undefined, carryAlloc: undefined, carryArrivals: undefined, resumedFrom: undefined },
     ...(payload.resumedFrom ? { resumedFrom: payload.resumedFrom } : {}),
   };
 
@@ -1005,6 +1009,8 @@ async function runSegmenting(ctx: RunCtx, rules: SegmentRule[]) {
   // must not be read again out of B and sent somewhere else.
   const snapshot: { campaignId: string; leads: RawLead[] }[] = [];
   for (const src of rec.sources) {
+    // A family only pointed at by a row gives nothing: its own leads stay put.
+    if (src.arrivalsOnly) continue;
     check();
     const { leads, hitPageLimit, wrongStatus } = await fetchCampaignLeads(apiKey, workspaceId, src.campaignId, MAX_LEADS);
     if (hitPageLimit) {
@@ -1052,6 +1058,18 @@ async function runSegmenting(ctx: RunCtx, rules: SegmentRule[]) {
     });
     seg.moved += res.moved;
     if (rule) rule.moved += res.moved;
+    // Into a family only pointed at: remember exactly which leads arrived, so
+    // its split takes those and leaves the leads it already had alone.
+    const family = rec.sources.find((s) => s.arrivalsOnly && s.campaignId === move.toCampaignId);
+    if (family && res.moved > 0) {
+      const refused = new Set(res.unmoved.map((u) => u.email.trim().toLowerCase()));
+      const have = new Set(family.arrivals ?? []);
+      for (const l of move.leads) {
+        const e = String(l.email ?? "").trim().toLowerCase();
+        if (e && !refused.has(e)) have.add(e);
+      }
+      family.arrivals = [...have];
+    }
     if (res.unmoved.length > 0) {
       countReasons(res.unmoved, reasons);
       seg.unmoved = (seg.unmoved ?? 0) + res.unmoved.length;
@@ -1090,8 +1108,13 @@ async function runSource(
   src.phaseStates.sorting = "running";
   await persist(id);
 
-  const { leads, wrongStatus, hitPageLimit } = await fetchCampaignLeads(apiKey, workspaceId, sourceCampaignId, MAX_LEADS);
+  const fetched = await fetchCampaignLeads(apiKey, workspaceId, sourceCampaignId, MAX_LEADS);
   check();
+  const { wrongStatus, hitPageLimit } = fetched;
+  // An arrivals-only family splits the leads the segment step brought in, and
+  // nothing it held before.
+  const arrived = src.arrivalsOnly ? new Set(src.arrivals ?? []) : null;
+  const leads = arrived ? fetched.leads.filter((l) => arrived.has(String(l.email ?? "").trim().toLowerCase())) : fetched.leads;
   src.sorting.leadsFound = leads.length;
   src.sorting.hitPageLimit = hitPageLimit;
   if (hitPageLimit) {

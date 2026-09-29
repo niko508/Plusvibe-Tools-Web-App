@@ -210,6 +210,13 @@ export interface SourceRun {
   created: CreatedCampaign[];
   moving: MovingProgress;
   activation: ActivationTarget[];
+  /** Move leads only: see SourceInput.arrivalsOnly. */
+  arrivalsOnly?: boolean;
+  /**
+   * The leads the segment step moved into an arrivals-only original, by email
+   * (lower-case). Only these are split; the rest of its leads stay put.
+   */
+  arrivals?: string[];
   /**
    * Opt Out only: the original itself is turned into the Opt Out campaign —
    * the opt-out line added to its step 1, then renamed — before its 🔵 copy
@@ -326,6 +333,12 @@ export interface SourceInput {
   campaignName: string;
   /** Derived client-side and shown before starting, so sent explicitly. */
   names: RoleNames;
+  /**
+   * Move leads only: a family a segment row points at without its original
+   * being ticked. Its own leads are never read or moved — only the leads the
+   * segment step moves into it are split across its copies.
+   */
+  arrivalsOnly?: boolean;
 }
 
 /** A campaign picked to receive leads, and the part it plays in its family. */
@@ -407,6 +420,8 @@ export interface CampaignTypesStartPayload {
    * copy, so the split is finished rather than started over.
    */
   carry?: Record<string, Partial<Record<CreatedRole, number>>>;
+  /** Resuming a move run only: the leads each arrivals-only original had taken in, by campaign id. */
+  carryArrivals?: Record<string, string[]>;
   /** Resuming a fix run only: leads already moved, per destination campaign id. */
   carryAlloc?: Record<string, number>;
   /** Resuming only: the run this one continues. */

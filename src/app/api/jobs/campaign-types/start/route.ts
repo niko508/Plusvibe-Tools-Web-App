@@ -60,8 +60,11 @@ export async function POST(request: Request) {
         names[role] = String(s?.names?.[role] ?? "").trim();
         if (roles.includes(role) && !names[role]) return bad(`No name for the "${role}" campaign of "${campaignName}".`);
       }
-      sources.push({ campaignId, campaignName, names });
+      // Only a move run takes a family its rows merely point at.
+      const arrivalsOnly = body.mode === "move" && s?.arrivalsOnly === true;
+      sources.push({ campaignId, campaignName, names, ...(arrivalsOnly ? { arrivalsOnly: true } : {}) });
     }
+    if (sources.every((s) => s.arrivalsOnly)) return bad("Tick the original whose leads should be moved.");
 
     // --- a fix run --------------------------------------------------------------
     // It reads the campaigns it is given and moves one segment's leads into
@@ -123,6 +126,9 @@ export async function POST(request: Request) {
     const rules = normalizeRules(body.rules);
     const problems = validateRules(rules, sources.map((s) => s.campaignId));
     if (problems.length > 0) return bad(problems.join(" "));
+    // A family taken in only for its rows must be one some row points at.
+    const unused = sources.find((s) => s.arrivalsOnly && !rules.some((r) => r.campaignId === s.campaignId));
+    if (unused) return bad(`"${unused.campaignName}" was sent as a segment's campaign, but no row points at it.`);
     // The stored name is the picked campaign's, whatever the form sent.
     for (const r of rules) r.campaignName = sources.find((s) => s.campaignId === r.campaignId)?.campaignName ?? r.campaignName;
 

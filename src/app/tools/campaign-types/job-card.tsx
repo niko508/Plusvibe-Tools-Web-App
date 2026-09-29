@@ -340,6 +340,11 @@ function SourceBlock({ source, mode, running }: { source: SourceRun; mode: Campa
     <div className="rounded-xl border border-border/70 p-2.5" data-source-block={source.campaignId}>
       <div className="mb-2 flex items-center gap-2">
         <span className="truncate text-xs font-medium">{source.campaignName}</span>
+        {source.arrivalsOnly && (
+          <span className="shrink-0 text-[11px] text-muted-foreground" data-arrivals-only>
+            only the {formatNumber(source.arrivals?.length ?? 0)} lead{(source.arrivals?.length ?? 0) === 1 ? "" : "s"} moved in
+          </span>
+        )}
         {source.convert?.state === "done" && source.convert.renamed && (
           <span className="truncate text-[11px] text-muted-foreground" data-renamed-to>
             → {source.convert.to}

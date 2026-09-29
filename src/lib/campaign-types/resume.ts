@@ -145,6 +145,10 @@ export function resumePayload(job: CampaignTypesJob): CampaignTypesStartPayload 
     const total = add(earlier, movedSoFar(s, job.errors));
     if (Object.keys(total).length > 0) carry[s.campaignId] = total;
   }
+  // The leads the segment step had already moved into a family only pointed
+  // at: they are no longer in the original, so the new run can't find them again.
+  const carryArrivals: Record<string, string[]> = {};
+  for (const s of job.sources) if (s.arrivalsOnly && (s.arrivals?.length ?? 0) > 0) carryArrivals[s.campaignId] = s.arrivals!;
   return {
     mode,
     workspaceId,
@@ -156,6 +160,7 @@ export function resumePayload(job: CampaignTypesJob): CampaignTypesStartPayload 
       job.segmenting.rules.map((r) => ({ segment: r.segment, campaignId: r.campaignId, campaignName: r.campaignName })),
     activate: base?.activate ?? (mode === "create" && job.sources.some((s) => s.phaseStates.activating !== "skipped")),
     ...(Object.keys(carry).length > 0 ? { carry } : {}),
+    ...(Object.keys(carryArrivals).length > 0 ? { carryArrivals } : {}),
   };
 }
 
