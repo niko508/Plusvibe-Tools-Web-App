@@ -44,6 +44,7 @@ export function FollowUpsTool() {
   const [workspacesLoading, setWorkspacesLoading] = useState(false);
   const [campaigns, setCampaigns] = useState<CampaignSummary[] | null>(null);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [campaignId, setCampaignId] = useState("");
   const [offer, setOffer] = useState("");
   const [waitTime, setWaitTime] = useState("3");
@@ -108,6 +109,26 @@ export function FollowUpsTool() {
   useEffect(() => {
     if (workspaceId) void loadCampaigns(workspaceId);
   }, [workspaceId, loadCampaigns]);
+
+  // Re-reads the campaign list, keeping the picked campaign (and its preview)
+  // if it is still there, so a campaign made in Plusvibe meanwhile shows up.
+  async function handleRefresh() {
+    if (!workspaceId || refreshing) return;
+    setRefreshing(true);
+    setError(null);
+    try {
+      const { campaigns: list } = await fetchCampaigns({ workspace_id: workspaceId });
+      setCampaigns(list);
+      if (campaignId && !list.some((c) => c.id === campaignId && c.campaignType !== "subseq")) {
+        setCampaignId("");
+        setPlan(null);
+      }
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   // --- Derived -------------------------------------------------------------
   // Sub-sequences are separate campaign records; follow-ups go on the parent.
@@ -241,9 +262,22 @@ export function FollowUpsTool() {
               </div>
 
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-                  Campaign
-                </label>
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <label className="text-xs font-medium text-muted-foreground">
+                    Campaign
+                  </label>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1 text-xs text-muted-foreground transition hover:text-foreground disabled:opacity-50"
+                    onClick={handleRefresh}
+                    disabled={!workspaceId || refreshing || campaignsLoading}
+                    title="Re-read the campaign list from Plusvibe"
+                    data-refresh-campaigns
+                  >
+                    {refreshing ? <Spinner size={12} /> : <RefreshIcon size={12} />}
+                    Refresh
+                  </button>
+                </div>
                 <div className="relative">
                   <select
                     className="pv-input appearance-none pr-9"
