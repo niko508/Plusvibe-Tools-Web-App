@@ -16,7 +16,7 @@ const eq = (label, got, want) => {
   }
 };
 
-const { groupOf, figuresFrom, compareOptOut, checkRange } = await importTs("@/lib/reply-rates/opt-out");
+const { groupOf, figuresFrom, compareOptOut, checkRange, compareByWorkspace } = await importTs("@/lib/reply-rates/opt-out");
 const { parseVariationStats } = await importTs("@/lib/winning-variants/plan");
 const Y = "🟡", B = "🔵";
 
@@ -65,6 +65,33 @@ eq("backwards, future, missing", [checkRange("2026-09-30", "2026-09-01", "2026-1
   "The end date is in the future.",
   "Pick both dates.",
 ]);
+
+console.log("--- workspace by workspace");
+{
+  const w = (ws, name, contacted, positive) => ({ workspaceId: ws, workspaceName: ws.toUpperCase(), campaignId: ws + name, name, contacted, positive });
+  const rows = [
+    // A: Opt Out clearly ahead.
+    w("a", "X - Opt Out", 10000, 60), w("a", "X", 10000, 20),
+    // B: No Opt Out clearly ahead.
+    w("b", "Y - Opt Out", 10000, 15), w("b", "Y", 10000, 50),
+    // C: close.
+    w("c", "Z - Opt Out", 1000, 11), w("c", "Z", 1000, 10),
+    // D: too few.
+    w("d", "Q - Opt Out", 500, 2), w("d", "Q", 500, 1),
+    // E: only No Opt Out sent.
+    w("e", "R - Opt Out", 0, 0), w("e", "R", 800, 6),
+    // F: nothing sent.
+    w("f", "S", 0, 0),
+    // G: Opt Out ahead by more than A.
+    w("g", "T - Opt Out", 20000, 140), w("g", "T", 20000, 40),
+  ];
+  const by = compareByWorkspace(rows);
+  eq("one row per workspace, clear winners first, biggest gap first", by.map((x) => [x.workspaceId, x.verdict]), [
+    ["g", "optOut"], ["a", "optOut"], ["b", "noOptOut"], ["c", "even"], ["d", "too-few"], ["e", "one-group"], ["f", "none"],
+  ]);
+  eq("each with its own figures", (({ optOut, noOptOut }) => [optOut.positive, noOptOut.positive, optOut.contacted])(by[2]), [15, 50, 10000]);
+  eq("the workspaces add up to the whole", [by.reduce((n, x) => n + x.optOut.positive + x.noOptOut.positive, 0), compareOptOut(rows).optOut.positive + compareOptOut(rows).noOptOut.positive], [355, 355]);
+}
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

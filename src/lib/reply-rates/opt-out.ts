@@ -114,3 +114,56 @@ export function checkRange(start: string, end: string, today: string): { start: 
   if (end > today) return { problem: "The end date is in the future." };
   return { start, end };
 }
+
+// --- Workspace by workspace -----------------------------------------------------
+
+/**
+ * What one workspace says:
+ *   optOut / noOptOut   that group is clearly ahead — the gap per lead holds
+ *                       at 95% confidence
+ *   even                both sent and got replies, but no clear winner
+ *   too-few             too few positive replies to say
+ *   one-group           only one group sent anything
+ *   none                nothing was sent
+ */
+export type WorkspaceVerdict = "optOut" | "noOptOut" | "even" | "too-few" | "one-group" | "none";
+
+export interface WorkspaceComparison extends OptOutComparison {
+  workspaceId: string;
+  workspaceName: string;
+  verdict: WorkspaceVerdict;
+}
+
+export function verdictOf(c: OptOutComparison): WorkspaceVerdict {
+  if (c.optOut.contacted === 0 && c.noOptOut.contacted === 0) return "none";
+  if (c.difference === null) return "one-group";
+  if (c.confidence === "too-few") return "too-few";
+  if (c.confidence === "likely") return c.difference > 0 ? "optOut" : "noOptOut";
+  return "even";
+}
+
+const VERDICT_ORDER: WorkspaceVerdict[] = ["optOut", "noOptOut", "even", "too-few", "one-group", "none"];
+
+/**
+ * Every workspace's own comparison: clear winners first, the biggest gaps in
+ * positive replies at the top of each kind.
+ */
+export function compareByWorkspace(rows: CampaignFigures[]): WorkspaceComparison[] {
+  const byWs = new Map<string, CampaignFigures[]>();
+  for (const r of rows) {
+    const list = byWs.get(r.workspaceId) ?? [];
+    list.push(r);
+    byWs.set(r.workspaceId, list);
+  }
+  return [...byWs.values()]
+    .map((list) => {
+      const c = compareOptOut(list);
+      return { ...c, workspaceId: list[0].workspaceId, workspaceName: list[0].workspaceName, verdict: verdictOf(c) };
+    })
+    .sort(
+      (a, b) =>
+        VERDICT_ORDER.indexOf(a.verdict) - VERDICT_ORDER.indexOf(b.verdict) ||
+        Math.abs(b.optOut.positive - b.noOptOut.positive) - Math.abs(a.optOut.positive - a.noOptOut.positive) ||
+        a.workspaceName.localeCompare(b.workspaceName)
+    );
+}

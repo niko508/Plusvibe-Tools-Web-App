@@ -9,7 +9,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Workspace } from "@/lib/plusvibe-types";
 import { ApiClientError, fetchOptOutRates, fetchWorkspaces } from "@/lib/api-client";
-import { compareOptOut, groupOf, MIN_POSITIVE, type CampaignFigures, type GroupTotals } from "@/lib/reply-rates/opt-out";
+import {
+  compareByWorkspace,
+  compareOptOut,
+  groupOf,
+  MIN_POSITIVE,
+  type CampaignFigures,
+  type GroupTotals,
+  type WorkspaceComparison,
+  type WorkspaceVerdict,
+} from "@/lib/reply-rates/opt-out";
 import { useApiKey } from "@/lib/use-api-key";
 import { formatNumber } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
@@ -96,6 +105,8 @@ export function ReplyRatesTool() {
   }
 
   const result = useMemo(() => (rows ? compareOptOut(rows) : null), [rows]);
+  const byWorkspace = useMemo(() => (rows ? compareByWorkspace(rows) : []), [rows]);
+  const [hideQuiet, setHideQuiet] = useState(true);
   const listed = useMemo(
     () =>
       (rows ?? [])
@@ -243,6 +254,8 @@ export function ReplyRatesTool() {
             {running && <span className="ml-1 text-xs text-muted-foreground">— still reading, so these will move.</span>}
           </div>
 
+          {byWorkspace.length > 1 && <ByWorkspace rows={byWorkspace} hideQuiet={hideQuiet} onHideQuiet={setHideQuiet} />}
+
           <div className="pv-card overflow-hidden p-0">
             <button
               type="button"
@@ -309,6 +322,91 @@ export function ReplyRatesTool() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+const VERDICT: Record<WorkspaceVerdict, { label: string; className: string }> = {
+  optOut: { label: "Opt Out clearly ahead", className: "bg-success/10 text-success" },
+  noOptOut: { label: "No Opt Out clearly ahead", className: "bg-accent/10 text-accent" },
+  even: { label: "No clear winner", className: "bg-muted text-muted-foreground" },
+  "too-few": { label: "Too few replies to tell", className: "bg-muted text-muted-foreground" },
+  "one-group": { label: "Only one group sent", className: "bg-muted text-muted-foreground" },
+  none: { label: "Nothing sent", className: "bg-muted text-muted-foreground" },
+};
+
+/**
+ * Each workspace's own Opt Out vs No Opt Out, so one where either side is
+ * clearly winning stands out from the overall number. Clear winners first.
+ */
+function ByWorkspace({ rows, hideQuiet, onHideQuiet }: { rows: WorkspaceComparison[]; hideQuiet: boolean; onHideQuiet: (v: boolean) => void }) {
+  const shown = hideQuiet ? rows.filter((r) => r.verdict !== "none") : rows;
+  const counts = { optOut: rows.filter((r) => r.verdict === "optOut").length, noOptOut: rows.filter((r) => r.verdict === "noOptOut").length };
+  const cell = (t: GroupTotals) => (
+    <>
+      <span className="font-medium tabular-nums">{formatNumber(t.positive)}</span>
+      <span className="block text-[11px] text-muted-foreground tabular-nums">
+        {formatNumber(t.contacted)} leads · {pct(t.rate)}
+      </span>
+    </>
+  );
+  return (
+    <div className="pv-card overflow-hidden p-0" data-by-workspace>
+      <div className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-3">
+        <div className="text-sm font-medium">
+          By workspace{" "}
+          <span className="font-normal text-muted-foreground">
+            · Opt Out clearly ahead in {formatNumber(counts.optOut)}, No Opt Out in {formatNumber(counts.noOptOut)}
+          </span>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input type="checkbox" checked={hideQuiet} onChange={(e) => onHideQuiet(e.target.checked)} />
+          Hide workspaces that sent nothing
+        </label>
+      </div>
+      <div className="overflow-x-auto border-t border-border">
+        <table className="w-full min-w-[680px] text-xs">
+          <thead className="bg-muted/50 text-muted-foreground">
+            <tr>
+              <th className="px-3 py-2 text-left font-medium">Workspace</th>
+              <th className="px-3 py-2 text-right font-medium">Opt Out positive</th>
+              <th className="px-3 py-2 text-right font-medium">No Opt Out positive</th>
+              <th className="px-3 py-2 text-right font-medium">Difference</th>
+              <th className="px-3 py-2 text-left font-medium">Verdict</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {shown.map((r) => {
+              const diff = r.optOut.positive - r.noOptOut.positive;
+              const v = VERDICT[r.verdict];
+              const clear = r.verdict === "optOut" || r.verdict === "noOptOut";
+              return (
+                <tr key={r.workspaceId} className={clear ? "bg-muted/20" : ""} data-ws-row={r.workspaceId} data-verdict={r.verdict}>
+                  <td className="px-3 py-2 font-medium">{r.workspaceName}</td>
+                  <td className="px-3 py-2 text-right">{cell(r.optOut)}</td>
+                  <td className="px-3 py-2 text-right">{cell(r.noOptOut)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    <span className="font-medium">{diff > 0 ? `+${formatNumber(diff)}` : formatNumber(diff)}</span>
+                    {r.difference !== null && (
+                      <span className="block text-[11px] text-muted-foreground">
+                        {r.difference > 0 ? "+" : ""}
+                        {r.difference.toFixed(2)} pts per lead
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${v.className}`}>{v.label}</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
+        Difference is Opt Out minus No Opt Out. &ldquo;Clearly ahead&rdquo; means the gap per lead emailed holds at 95% confidence
+        in that workspace on its own — a workspace with few sends rarely gets there.
+      </p>
     </div>
   );
 }
