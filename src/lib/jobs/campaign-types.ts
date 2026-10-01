@@ -438,7 +438,12 @@ function newSourceRun(src: SourceInput, roles: CreatedRole[], mode: "create" | "
     role,
     name: src.names[role],
     state: "pending" as const,
-    ...(mode === "create" && OPT_OUT_ROLES.includes(role) ? { optOut: { state: "pending" as const, applied: [], alreadyPresent: [] } } : {}),
+    // Turned into Opt Out, the original passes its opt-out line on to the
+    // Signature copies; it is written to them as well, in case one was already
+    // there without it.
+    ...(mode === "create" && (OPT_OUT_ROLES.includes(role) || (convert && SIGNATURE_ROLES.includes(role)))
+      ? { optOut: { state: "pending" as const, applied: [], alreadyPresent: [] } }
+      : {}),
     ...(mode === "create" && SIGNATURE_ROLES.includes(role)
       ? { signature: { state: "pending" as const, applied: [], alreadyPresent: [], missing: [] } }
       : {}),

@@ -728,12 +728,23 @@ eq("the types read as a list", describeKinds(["signature", "default"]), "Default
 console.log("--- Opt Out only");
 {
   const { toggleKinds, convertsOriginal, DEFAULT_KINDS } = kindsMod;
-  const { deriveNames } = await importTs("@/lib/campaign-types/names");
+  const { deriveNames, runNames } = await importTs("@/lib/campaign-types/names");
+  const r = runNames("🟡 Financial - Platform (August)", true);
+  eq("with Signature: the Signature copies are named from the Opt Out name",
+    [r.optOut, r.blueOptOut, r.signature, r.blueSignature],
+    ["🟡 Financial - Platform - Opt Out (August)", "🔵 Financial - Platform - Opt Out (August)", "🟡 Financial - Platform - Opt Out - Signature (August)", "🔵 Financial - Platform - Opt Out - Signature (August)"]);
+  eq("…an original already called Opt Out gets the same", runNames("🟡 Financial - Platform - Opt Out (August)", true).signature, "🟡 Financial - Platform - Opt Out - Signature (August)");
+  eq("…and a run that converts nothing names them as before", runNames("🟡 Financial - Platform (August)", false), deriveNames("🟡 Financial - Platform (August)"));
   eq("Opt Out only makes the 🔵 Opt Out copy alone", rolesFor(["optOutOnly"]), ["blueOptOut"]);
-  eq("…and stands alone: sent with the others, it is the one kept", normalizeKinds(["default", "optOutOnly", "signature"]), ["optOutOnly"]);
+  eq("…sent with Default or With Opt Out, those are dropped", normalizeKinds(["default", "optOutOnly", "optOut"]), ["optOutOnly"]);
+  eq("…but With Signature goes with it", normalizeKinds(["default", "optOutOnly", "signature"]), ["signature", "optOutOnly"]);
+  eq("…making the 🔵 Opt Out copy and both Signature copies", rolesFor(["signature", "optOutOnly"]), ["blueOptOut", "signature", "blueSignature"]);
   eq("…and says the originals are converted", [convertsOriginal(["optOutOnly"]), convertsOriginal(DEFAULT_KINDS)], [true, false]);
   eq("ticking it clears the three", toggleKinds(["default", "optOut", "signature"], "optOutOnly"), ["optOutOnly"]);
-  eq("ticking one of the three clears it", toggleKinds(["optOutOnly"], "signature"), ["signature"]);
+  eq("ticking Default or With Opt Out clears it", [toggleKinds(["optOutOnly"], "default"), toggleKinds(["signature", "optOutOnly"], "optOut")], [["default"], ["optOut", "signature"]]);
+  eq("ticking With Signature keeps it", toggleKinds(["optOutOnly"], "signature"), ["signature", "optOutOnly"]);
+  eq("…and unticking Signature leaves it alone", toggleKinds(["signature", "optOutOnly"], "signature"), ["optOutOnly"]);
+  eq("…while unticking it goes back to the three", toggleKinds(["signature", "optOutOnly"], "optOutOnly"), ["default", "optOut", "signature"]);
   eq("unticking it goes back to the three, not to nothing", toggleKinds(["optOutOnly"], "optOutOnly"), ["default", "optOut", "signature"]);
   eq("the three still tick and untick as before", [toggleKinds(["default", "optOut"], "optOut"), toggleKinds(["signature"], "default")], [["default"], ["default", "signature"]]);
   const n = deriveNames("🟡 SaaS - GEO - Sales Led (August)");

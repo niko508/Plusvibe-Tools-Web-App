@@ -24,7 +24,7 @@ import { formatNumber } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { Spinner, EmptyState } from "@/components/ui";
 import { LayersIcon, AlertIcon, ChevronDownIcon, CheckIcon, MoveIcon } from "@/components/icons";
-import { deriveNames } from "@/lib/campaign-types/names";
+import { runNames } from "@/lib/campaign-types/names";
 import { isArchived, matchCompanions, normalizeName } from "@/lib/campaign-types/match";
 import { shouldAutoResume } from "@/lib/campaign-types/resume";
 import { JobCard } from "./job-card";
@@ -398,7 +398,7 @@ export function CampaignTypesTool() {
   const previews = useMemo(
     () =>
       sources.map((source) => {
-        const names = deriveNames(source.name);
+        const names = runNames(source.name, converting);
         const rowsFor = roles.map((role) => ({
           role,
           name: names[role],
@@ -915,7 +915,10 @@ export function CampaignTypesTool() {
               <span>
                 Opt Out only changes the originals themselves — including the campaigns your segments point to: step 1 of each gets the
                 current opt-out line (old opt-out text is swapped for it, variants that already have it are left alone) and each is renamed
-                to its Opt Out name. Only the 🔵 Opt Out copies are created. It can&apos;t be combined with the other types.
+                to its Opt Out name.{" "}
+                {kinds.includes("signature")
+                  ? "Then the 🔵 Opt Out copies and the Signature copies are made from it, so the Signature ones carry the opt-out line too and are named “… - Opt Out - Signature”."
+                  : "Only the 🔵 Opt Out copies are created. With Signature can be ticked beside it, for Signature copies that carry the opt-out line too."}
               </span>
             </p>
           )}
@@ -934,7 +937,7 @@ export function CampaignTypesTool() {
             <h3 className="mb-1 text-sm font-medium">
               {mode === "create"
                 ? converting
-                  ? `${sources.length === 1 ? "The original is" : `${sources.length} originals are`} turned into Opt Out, and ${formatNumber(toCreate)} 🔵 cop${toCreate === 1 ? "y is" : "ies are"} created`
+                  ? `${sources.length === 1 ? "The original is" : `${sources.length} originals are`} turned into Opt Out, and ${formatNumber(toCreate)} ${kinds.includes("signature") ? "" : "🔵 "}cop${toCreate === 1 ? "y is" : "ies are"} created`
                   : `${formatNumber(toCreate)} campaign${toCreate === 1 ? "" : "s"} will be created from ${sources.length === 1 ? "this original" : `${sources.length} originals`}`
                 : foundCount === 0
                   ? "None of the copies are in this workspace"

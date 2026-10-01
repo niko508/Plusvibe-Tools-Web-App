@@ -117,6 +117,23 @@ export function hasSignature(name: string): boolean {
   return hasMarker(name, SIGNATURE);
 }
 
+/**
+ * The names for a run. When the originals are turned into Opt Out (Opt Out
+ * only), the Signature copies are made from the converted original and carry
+ * its opt-out line, so they are named from its Opt Out name:
+ *
+ *   🟡 Tree Removal (August)  ->  🟡 Tree Removal - Opt Out (August)        (the original, renamed)
+ *                                 🔵 Tree Removal - Opt Out (August)
+ *                                 🟡 Tree Removal - Opt Out - Signature (August)
+ *                                 🔵 Tree Removal - Opt Out - Signature (August)
+ */
+export function runNames(sourceName: string, convert: boolean): DerivedNames {
+  const names = deriveNames(sourceName);
+  if (!convert) return names;
+  const converted = deriveNames(names.optOut);
+  return { ...names, signature: converted.signature, blueSignature: converted.blueSignature };
+}
+
 export function deriveNames(sourceName: string): DerivedNames {
   // The 🔵 copies are named from the bare name: a blue circle replaces a
   // yellow one rather than following it. The plain copies mirror the source,

@@ -7,8 +7,10 @@
 //   With Signature  a copy whose step 1 signs off with the signature, plus its 🔵
 //   Opt Out only    no plain copies: the ORIGINAL gets the opt-out line on
 //                   step 1 and is renamed to its Opt Out name, then its 🔵 Opt
-//                   Out copy is made from it. It stands alone — it can't be
-//                   combined with the other three.
+//                   Out copy is made from it. It goes with With Signature and
+//                   nothing else: the Signature copies are then made from the
+//                   converted original, so they carry the opt-out line too, and
+//                   are named "… - Opt Out - Signature (August)".
 //
 // The original campaign is the plain Default, so picking Default creates one
 // campaign and the other two create two each. A type left out is simply not
@@ -37,7 +39,7 @@ export const KIND_HINTS: Record<CampaignKind, string> = {
   default: "The original, plus a 🔵 copy for its Microsoft leads.",
   optOut: "A copy with the opt-out line on step 1, and its 🔵 copy.",
   signature: "A copy whose step 1 signs off with the signature, and its 🔵 copy.",
-  optOutOnly: "No new plain campaign: the original gets the opt-out line on step 1 and is renamed to Opt Out, plus its 🔵 Opt Out copy.",
+  optOutOnly: "No new plain campaign: the original gets the opt-out line on step 1 and is renamed to Opt Out, plus its 🔵 Opt Out copy. Goes with With Signature.",
 };
 
 /** The copies each type creates. */
@@ -52,15 +54,18 @@ export function isKind(v: unknown): v is CampaignKind {
   return v === "default" || v === "optOut" || v === "signature" || v === "optOutOnly";
 }
 
+/** The one type that goes with Opt Out only. */
+const WITH_OPT_OUT_ONLY: CampaignKind = "signature";
+
 /**
  * Whatever was sent, as a de-duplicated list in the fixed order. Opt Out only
- * stands alone: sent with anything else, it is the one kept, since it is the
- * one that changes the original.
+ * goes with With Signature alone: sent with Default or With Opt Out, those are
+ * dropped, since Opt Out only is the one that changes the original.
  */
 export function normalizeKinds(raw: unknown): CampaignKind[] {
   const set = new Set<CampaignKind>();
   if (Array.isArray(raw)) for (const v of raw) if (isKind(v)) set.add(v);
-  if (set.has("optOutOnly")) return ["optOutOnly"];
+  if (set.has("optOutOnly")) return KIND_ORDER.filter((k) => set.has(k) && (k === "optOutOnly" || k === WITH_OPT_OUT_ONLY));
   return KIND_ORDER.filter((k) => set.has(k));
 }
 
@@ -69,7 +74,11 @@ export function convertsOriginal(kinds: CampaignKind[]): boolean {
   return kinds.includes("optOutOnly");
 }
 
-/** The kinds after ticking or unticking one card: Opt Out only and the three exclude each other. */
+/**
+ * The kinds after ticking or unticking one card. Ticking Opt Out only clears
+ * the three; With Signature can then be ticked beside it. Ticking Default or
+ * With Opt Out clears Opt Out only.
+ */
 export function toggleKinds(prev: CampaignKind[], kind: CampaignKind): CampaignKind[] {
   if (prev.includes(kind)) {
     const left = prev.filter((k) => k !== kind);
@@ -77,6 +86,7 @@ export function toggleKinds(prev: CampaignKind[], kind: CampaignKind): CampaignK
     return kind === "optOutOnly" ? [...DEFAULT_KINDS] : left;
   }
   if (kind === "optOutOnly") return ["optOutOnly"];
+  if (prev.includes("optOutOnly") && kind === WITH_OPT_OUT_ONLY) return normalizeKinds([...prev, kind]);
   return KIND_ORDER.filter((k) => k !== "optOutOnly" && (k === kind || prev.includes(k)));
 }
 

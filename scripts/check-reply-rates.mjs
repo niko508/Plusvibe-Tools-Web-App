@@ -22,6 +22,7 @@ const Y = "🟡", B = "🔵";
 
 console.log("--- the groups, by name");
 eq("Opt Out, 🟡 or 🔵, any case", [`${Y} eCommerce - Opt Out (August)`, `${B} Apps - Opt Out (August)`, "Local - opt out (July)"].map(groupOf), ["optOut", "optOut", "optOut"]);
+eq("Opt Out - Signature counts as Opt Out", [`${Y} Financial - Platform - Opt Out - Signature (August)`, `${B} Financial - Platform - Opt Out - Signature (August)`].map(groupOf), ["optOut", "optOut"]);
 eq("everything else is No Opt Out — Signature included", [`${Y} eCommerce (August)`, `${B} Apps (August)`, `${Y} Apps - Signature (August)`, "Optout Co (August)"].map(groupOf), ["noOptOut", "noOptOut", "noOptOut", "noOptOut"]);
 
 console.log("--- a campaign's figures");
