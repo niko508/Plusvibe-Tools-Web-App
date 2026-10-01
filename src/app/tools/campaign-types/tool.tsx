@@ -479,10 +479,6 @@ export function CampaignTypesTool() {
     setRows((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   }
 
-  function addRow() {
-    setRows((prev) => (prev.length < MAX_SEGMENTS ? [...prev, emptyRow()] : prev));
-  }
-
   /** Takes a row out; the last one left is only cleared, so there is always a row to type in. */
   function removeRow(i: number) {
     setRows((prev) => (prev.length > 1 ? prev.filter((_, j) => j !== i) : [emptyRow()]));
@@ -858,11 +854,6 @@ export function CampaignTypesTool() {
                 </button>
               </div>
             ))}
-            {rows.length < MAX_SEGMENTS && (
-              <button type="button" className="pv-btn-ghost px-2 py-1 text-xs" onClick={addRow} data-add-segment>
-                + Add segment
-              </button>
-            )}
             <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]" data-segment-row="empty">
               <div className="pv-input flex items-center text-sm text-muted-foreground">Leads with no segment</div>
               <div className="relative">
