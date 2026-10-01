@@ -1533,3 +1533,16 @@ export function previewAddLeads(input: { workspaceId: string; campaignId: string
     { method: "POST", body: input, signal }
   );
 }
+
+// --- Analyze Positive Reply Rates ------------------------------------------------
+
+export function fetchOptOutRates(
+  input: { workspaceId: string; workspaceName: string; start: string; end: string },
+  signal?: AbortSignal
+) {
+  return request<{ campaigns: import("@/lib/reply-rates/opt-out").CampaignFigures[]; errors: string[] }>("/api/reply-rates/opt-out", {
+    method: "POST",
+    body: input,
+    signal,
+  });
+}

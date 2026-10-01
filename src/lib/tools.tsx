@@ -170,6 +170,16 @@ export const TOOLS: Tool[] = [
     Icon: SparklesIcon,
   },
   {
+    slug: "reply-rates",
+    name: "Analyze Positive Reply Rates",
+    tagline: "Opt Out vs No Opt Out: which campaigns turn more leads positive",
+    description:
+      "Pick a date range and one workspace or all of them. Every campaign is put in a group by its name — Opt Out, or No Opt Out — and the two groups' positive reply rates, positive replies per lead emailed, are put side by side, with whether the gap is big enough to trust.",
+    status: "active",
+    color: "violet",
+    Icon: GaugeIcon,
+  },
+  {
     slug: "copy-campaign",
     name: "Copy Campaign to Other Workspace",
     tagline: "Move a campaign's copy across, on another campaign's settings",
