@@ -745,8 +745,9 @@ console.log("--- Opt Out only");
 // --- sorting by segment ---------------------------------------------------------
 console.log("--- segments");
 const segMod = await importTs("@/lib/campaign-types/segments");
-const { segmentOf, segmentKey, validateRules, normalizeRules, planSegmentMoves, describeRule, describeUnmapped, nearestRule, MAX_RULES } = segMod;
-eq("four rows: three segments and the empty one", MAX_RULES, 4);
+const { segmentOf, segmentKey, validateRules, normalizeRules, planSegmentMoves, describeRule, describeUnmapped, nearestRule, MAX_RULES, MAX_SEGMENTS, DEFAULT_SEGMENT_ROWS } = segMod;
+eq("the form starts with three segment rows and adds up to ten, plus the empty one", [DEFAULT_SEGMENT_ROWS, MAX_SEGMENTS, MAX_RULES], [3, 10, 11]);
+eq("four segments and the empty one pass", validateRules(["a", "b", "c", "d"].map((x, i) => ({ segment: x, campaignId: "S" + i, campaignName: x })).concat([{ segment: null, campaignId: "S0", campaignName: "a" }]), ["S0", "S1", "S2", "S3"]), []);
 eq("the segment is read off the lead, trimmed", segmentOf({ email: "a@x.com", segment: "  cash pay " }), "cash pay");
 eq("…whatever the key's case", segmentOf({ Segment: "insurance" }), "insurance");
 eq("…or where the API puts custom fields", [segmentOf({ custom_variables: { segment: "vip" } }), segmentOf({ payload: { segment: "vip" } })], ["vip", "vip"]);

@@ -17,7 +17,7 @@ import {
   ApiClientError,
 } from "@/lib/api-client";
 import { DEFAULT_KINDS, KIND_HINTS, KIND_LABELS, KIND_ORDER, convertsOriginal, rolesFor, toggleKinds, type CampaignKind } from "@/lib/campaign-types/kinds";
-import { MAX_RULES, validateRules, type SegmentRule } from "@/lib/campaign-types/segments";
+import { DEFAULT_SEGMENT_ROWS, MAX_SEGMENTS, validateRules, type SegmentRule } from "@/lib/campaign-types/segments";
 import { ALLOC_ROLE_LABELS, classifyDestinations } from "@/lib/campaign-types/allocate";
 import { useApiKey } from "@/lib/use-api-key";
 import { formatNumber } from "@/lib/format";
@@ -37,8 +37,6 @@ import { useGeneralSettings } from "@/lib/general-settings/use-general-settings"
 const POLL_MS = 2000;
 const JOBS_OPEN_KEY = "pv_ct_jobs_open";
 const NO_SEGMENTS_KEY = "pv_ct_no_segments";
-/** Segment rows, besides the one for leads with no segment. */
-const SEGMENT_ROWS = MAX_RULES - 1;
 
 const ROLE_LABELS: Record<CreatedRole, string> = {
   blue: "Microsoft leads",
@@ -53,12 +51,18 @@ interface SegmentRow {
   campaignId: string;
 }
 
-const emptyRows = (): SegmentRow[] => Array.from({ length: SEGMENT_ROWS }, () => ({ segment: "", campaignId: "" }));
+const emptyRow = (): SegmentRow => ({ segment: "", campaignId: "" });
+const emptyRows = (n = DEFAULT_SEGMENT_ROWS): SegmentRow[] => Array.from({ length: n }, emptyRow);
 
-/** A saved industry's segments in the rows, each beside the one picked original its name points to. */
+/**
+ * A saved industry's segments in the rows, each beside the one picked original
+ * its name points to: as many rows as it has segments, and never fewer than
+ * the usual three.
+ */
 function rowsFor(industry: Industry | undefined, campaigns: { id: string; name: string }[]): SegmentRow[] {
-  const rows = emptyRows();
-  industry?.segments.slice(0, SEGMENT_ROWS).forEach((segment, i) => {
+  const segments = industry?.segments.slice(0, MAX_SEGMENTS) ?? [];
+  const rows = emptyRows(Math.max(DEFAULT_SEGMENT_ROWS, segments.length));
+  segments.forEach((segment, i) => {
     rows[i] = { segment, campaignId: matchCampaign(segment, campaigns) ?? "" };
   });
   return rows;
@@ -456,6 +460,15 @@ export function CampaignTypesTool() {
     setRows((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   }
 
+  function addRow() {
+    setRows((prev) => (prev.length < MAX_SEGMENTS ? [...prev, emptyRow()] : prev));
+  }
+
+  /** Takes a row out; the last one left is only cleared, so there is always a row to type in. */
+  function removeRow(i: number) {
+    setRows((prev) => (prev.length > 1 ? prev.filter((_, j) => j !== i) : [emptyRow()]));
+  }
+
   async function handleStart() {
     if (!canStart || startLock.current) return;
     startLock.current = true;
@@ -794,7 +807,7 @@ export function CampaignTypesTool() {
           </p>
           <div className="space-y-2">
             {rows.map((r, i) => (
-              <div key={i} className="grid gap-2 sm:grid-cols-[1fr_1fr]" data-segment-row={i + 1}>
+              <div key={i} className="grid grid-cols-[1fr_auto] gap-2 sm:grid-cols-[1fr_1fr_auto]" data-segment-row={i + 1}>
                 <input
                   type="text"
                   className="pv-input text-sm"
@@ -803,7 +816,7 @@ export function CampaignTypesTool() {
                   onChange={(e) => setRow(i, { segment: e.target.value })}
                   aria-label={`Segment ${i + 1}`}
                 />
-                <div className="relative">
+                <div className="relative col-span-2 row-start-2 sm:col-span-1 sm:row-start-auto">
                   <select
                     className="pv-input appearance-none pr-9 text-sm"
                     value={r.campaignId}
@@ -815,9 +828,23 @@ export function CampaignTypesTool() {
                   </select>
                   <ChevronDownIcon size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 </div>
+                <button
+                  type="button"
+                  className="col-start-2 row-start-1 flex w-9 items-center justify-center rounded-xl text-lg leading-none text-muted-foreground hover:bg-muted hover:text-foreground sm:col-start-3"
+                  onClick={() => removeRow(i)}
+                  aria-label={`Remove segment ${i + 1}`}
+                  title="Remove this segment"
+                >
+                  ×
+                </button>
               </div>
             ))}
-            <div className="grid gap-2 sm:grid-cols-[1fr_1fr]" data-segment-row="empty">
+            {rows.length < MAX_SEGMENTS && (
+              <button type="button" className="pv-btn-ghost px-2 py-1 text-xs" onClick={addRow} data-add-segment>
+                + Add segment
+              </button>
+            )}
+            <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]" data-segment-row="empty">
               <div className="pv-input flex items-center text-sm text-muted-foreground">Leads with no segment</div>
               <div className="relative">
                 <select
@@ -836,6 +863,7 @@ export function CampaignTypesTool() {
                 </select>
                 <ChevronDownIcon size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               </div>
+              <span className="hidden w-9 sm:block" aria-hidden />
             </div>
           </div>
           {ruleProblems.length > 0 && (

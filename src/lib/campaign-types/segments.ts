@@ -19,8 +19,12 @@ type RawLead = Record<string, unknown>;
 /** The lead field, as Plusvibe names it. Matched case-insensitively. */
 export const SEGMENT_FIELD = "segment";
 
-/** The most rules the form offers: three segments and the empty one. */
-export const MAX_RULES = 4;
+/** The most segment rows the form offers; it starts with DEFAULT_SEGMENT_ROWS and "+ Add segment" adds more. */
+export const MAX_SEGMENTS = 10;
+/** The segment rows shown before any is added or an industry fills them in. */
+export const DEFAULT_SEGMENT_ROWS = 3;
+/** The most rules the form sends: every segment row and the one for leads with no segment. */
+export const MAX_RULES = MAX_SEGMENTS + 1;
 
 /**
  * The most a run takes. Add More Leads sends one rule per segment it finds in

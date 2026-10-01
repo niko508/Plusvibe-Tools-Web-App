@@ -7,11 +7,11 @@
 //
 // Pure module: the reading, the saving rules and the matching, all unit-tested.
 
-import { MAX_RULES } from "./segments";
+import { MAX_SEGMENTS } from "./segments";
 import { nameHolds } from "./add-leads";
 
-/** Segment rows on the page, besides the one for leads with no segment. */
-export const MAX_INDUSTRY_SEGMENTS = MAX_RULES - 1;
+/** Segments saved per industry: as many as the page has rows for. */
+export const MAX_INDUSTRY_SEGMENTS = MAX_SEGMENTS;
 export const MAX_INDUSTRIES = 300;
 const MAX_NAME = 80;
 

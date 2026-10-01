@@ -7,7 +7,8 @@ import type { RoleNames } from "@/lib/jobs/campaign-types-types";
 import { deriveNames } from "@/lib/campaign-types/names";
 import { ALL_COMPANION_ROLES, matchCompanions } from "@/lib/campaign-types/match";
 import { familyBase, isOriginal, planAddLeads, type SegmentCount } from "@/lib/campaign-types/add-leads";
-import { findIndustry, MAX_INDUSTRY_SEGMENTS, type Industry } from "@/lib/campaign-types/industries";
+import { findIndustry, type Industry } from "@/lib/campaign-types/industries";
+import { DEFAULT_SEGMENT_ROWS, MAX_SEGMENTS } from "@/lib/campaign-types/segments";
 import { ApiClientError, deleteIndustry, previewAddLeads, saveIndustry, startCampaignTypes } from "@/lib/api-client";
 import { IndustryPicker } from "./industry-picker";
 import { formatNumber } from "@/lib/format";
@@ -56,7 +57,7 @@ export function AddLeadsPanel({
 }) {
   const [sourceId, setSourceId] = useState("");
   const [industry, setIndustry] = useState("");
-  const [segments, setSegments] = useState<string[]>(() => Array(MAX_INDUSTRY_SEGMENTS).fill(""));
+  const [segments, setSegments] = useState<string[]>(() => Array(DEFAULT_SEGMENT_ROWS).fill(""));
   /** Families picked by hand, by segment (lower-case). */
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -159,7 +160,8 @@ export function AddLeadsPanel({
   function pickIndustry(i: Industry) {
     setIndustry(i.name);
     if (i.segments.length > 0) {
-      setSegments(Array.from({ length: MAX_INDUSTRY_SEGMENTS }, (_, k) => i.segments[k] ?? ""));
+      const saved = i.segments.slice(0, MAX_SEGMENTS);
+      setSegments(Array.from({ length: Math.max(DEFAULT_SEGMENT_ROWS, saved.length) }, (_, k) => saved[k] ?? ""));
       setPicked({});
     }
   }
@@ -271,16 +273,37 @@ export function AddLeadsPanel({
           <div className="mb-1.5 text-xs font-medium text-muted-foreground">Segments</div>
           <div className="space-y-1.5">
             {segments.map((s, i) => (
-              <input
-                key={i}
-                type="text"
-                className="pv-input text-sm"
-                placeholder={`Segment ${i + 1}`}
-                value={s}
-                onChange={(e) => setSegments((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
-                aria-label={`Segment ${i + 1}`}
-              />
+              <div key={i} className="flex gap-1.5" data-al-segment-row={i + 1}>
+                <input
+                  type="text"
+                  className="pv-input text-sm"
+                  placeholder={`Segment ${i + 1}`}
+                  value={s}
+                  onChange={(e) => setSegments((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
+                  aria-label={`Segment ${i + 1}`}
+                />
+                <button
+                  type="button"
+                  className="flex w-9 shrink-0 items-center justify-center rounded-xl text-lg leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
+                  // The last one left is only cleared, so there is always a row to type in.
+                  onClick={() => setSegments((prev) => (prev.length > 1 ? prev.filter((_, j) => j !== i) : [""]))}
+                  aria-label={`Remove segment ${i + 1}`}
+                  title="Remove this segment"
+                >
+                  ×
+                </button>
+              </div>
             ))}
+            {segments.length < MAX_SEGMENTS && (
+              <button
+                type="button"
+                className="pv-btn-ghost px-2 py-1 text-xs"
+                onClick={() => setSegments((prev) => (prev.length < MAX_SEGMENTS ? [...prev, ""] : prev))}
+                data-al-add-segment
+              >
+                + Add segment
+              </button>
+            )}
           </div>
           {(findIndustry(industries, industry)?.segments.length ?? 0) > 0 && typed.length > 0 && (
             <p className="mt-1.5 text-[11px] text-muted-foreground">Filled in from the industry; change them here if this batch differs.</p>
