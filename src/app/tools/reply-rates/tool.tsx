@@ -100,7 +100,7 @@ export function ReplyRatesTool() {
     () =>
       (rows ?? [])
         .filter((r) => showAll || r.contacted > 0 || r.positive > 0)
-        .sort((a, b) => (groupOf(a.name) === groupOf(b.name) ? b.contacted - a.contacted : groupOf(a.name) === "optOut" ? -1 : 1)),
+        .sort((a, b) => (groupOf(a.name) === groupOf(b.name) ? b.positive - a.positive || b.contacted - a.contacted : groupOf(a.name) === "optOut" ? -1 : 1)),
     [rows, showAll]
   );
 
@@ -214,10 +214,20 @@ export function ReplyRatesTool() {
               </span>
             ) : (
               <>
-                <span className="font-medium">
+                <span className="font-medium" data-count-verdict>
+                  {result.optOut.positive === result.noOptOut.positive
+                    ? `Both got ${formatNumber(result.optOut.positive)} positive replies`
+                    : `Opt Out got ${formatNumber(Math.abs(result.optOut.positive - result.noOptOut.positive))} ${
+                        result.optOut.positive > result.noOptOut.positive ? "more" : "fewer"
+                      } positive replies (${formatNumber(result.optOut.positive)} vs ${formatNumber(result.noOptOut.positive)})`}
+                  {result.optOut.contacted === result.noOptOut.contacted
+                    ? `, from the same ${formatNumber(result.optOut.contacted)} leads emailed.`
+                    : `, from ${formatNumber(result.optOut.contacted)} vs ${formatNumber(result.noOptOut.contacted)} leads emailed.`}
+                </span>{" "}
+                <span className="text-muted-foreground">
                   {result.difference === 0
-                    ? "The two rates are the same."
-                    : `Opt Out is ${Math.abs(result.difference).toFixed(2)} points ${result.difference > 0 ? "higher" : "lower"}${
+                    ? "Per lead emailed, the two rates are the same."
+                    : `Per lead emailed, Opt Out's rate is ${Math.abs(result.difference).toFixed(2)} points ${result.difference > 0 ? "higher" : "lower"}${
                         result.relative !== null ? ` (${result.relative > 0 ? "+" : ""}${result.relative}%)` : ""
                       }.`}
                 </span>{" "}
@@ -259,8 +269,8 @@ export function ReplyRatesTool() {
                         {scope === ALL && <th className="px-3 py-2 text-left font-medium">Workspace</th>}
                         <th className="px-3 py-2 text-left font-medium">Campaign</th>
                         <th className="px-3 py-2 text-left font-medium">Group</th>
+                        <th className="px-3 py-2 text-right font-medium">Positive replies</th>
                         <th className="px-3 py-2 text-right font-medium">Leads emailed</th>
-                        <th className="px-3 py-2 text-right font-medium">Positive</th>
                         <th className="px-3 py-2 text-right font-medium">Rate</th>
                       </tr>
                     </thead>
@@ -270,8 +280,8 @@ export function ReplyRatesTool() {
                           {scope === ALL && <td className="px-3 py-1.5 text-muted-foreground">{r.workspaceName}</td>}
                           <td className="px-3 py-1.5">{r.name}</td>
                           <td className="px-3 py-1.5">{groupOf(r.name) === "optOut" ? "Opt Out" : "No Opt Out"}</td>
+                          <td className="px-3 py-1.5 text-right font-medium tabular-nums">{formatNumber(r.positive)}</td>
                           <td className="px-3 py-1.5 text-right tabular-nums">{formatNumber(r.contacted)}</td>
-                          <td className="px-3 py-1.5 text-right tabular-nums">{formatNumber(r.positive)}</td>
                           <td className="px-3 py-1.5 text-right tabular-nums">{pct(r.contacted > 0 ? (r.positive / r.contacted) * 100 : null)}</td>
                         </tr>
                       ))}
@@ -307,12 +317,12 @@ function GroupCard({ title, totals, accent, ...rest }: { title: string; totals: 
   return (
     <div className={`pv-card p-4 sm:p-5 ${accent ? "border-accent/40" : ""}`} {...rest}>
       <div className="text-xs font-medium text-muted-foreground">{title}</div>
-      <div className="mt-1 text-3xl font-semibold tabular-nums" data-rate>
-        {pct(totals.rate)}
+      <div className="mt-1 text-3xl font-semibold tabular-nums" data-positive>
+        {formatNumber(totals.positive)}
       </div>
-      <div className="mt-1 text-xs text-muted-foreground">
-        {formatNumber(totals.positive)} positive repl{totals.positive === 1 ? "y" : "ies"} from {formatNumber(totals.contacted)} lead
-        {totals.contacted === 1 ? "" : "s"} emailed
+      <div className="text-sm">positive repl{totals.positive === 1 ? "y" : "ies"}</div>
+      <div className="mt-1.5 text-xs text-muted-foreground" data-rate>
+        from {formatNumber(totals.contacted)} lead{totals.contacted === 1 ? "" : "s"} emailed · {pct(totals.rate)} rate
       </div>
       <div className="mt-0.5 text-xs text-muted-foreground">
         {formatNumber(totals.campaigns)} campaign{totals.campaigns === 1 ? "" : "s"} · {formatNumber(totals.sending)} sent in the range

@@ -15,8 +15,8 @@ export default function ReplyRatesPage() {
         <div className="py-8">
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Analyze Positive Reply Rates</h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground sm:text-base">
-            Pick a date range and compare the positive reply rate between groups of campaigns. The rate is positive replies
-            per lead emailed.
+            Pick a date range and compare how many positive replies groups of campaigns got — and, beside it, the rate per
+            lead emailed.
           </p>
         </div>
         <ReplyRatesTool />
