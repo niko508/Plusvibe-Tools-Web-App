@@ -68,6 +68,19 @@ function rowsFor(industry: Industry | undefined, campaigns: { id: string; name: 
   return rows;
 }
 
+/**
+ * One segment row per picked original (three at least, ten at most). Rows are
+ * added to reach that; only empty rows at the end are taken away, so nothing
+ * typed is lost when an original is un-ticked.
+ */
+function fitRows(rows: SegmentRow[], originals: number): SegmentRow[] {
+  const want = Math.min(MAX_SEGMENTS, Math.max(DEFAULT_SEGMENT_ROWS, originals));
+  if (rows.length < want) return [...rows, ...emptyRows(want - rows.length)];
+  let end = rows.length;
+  while (end > want && !rows[end - 1].segment.trim() && !rows[end - 1].campaignId) end--;
+  return end === rows.length ? rows : rows.slice(0, end);
+}
+
 export function CampaignTypesTool() {
   const { hasKey, ready } = useApiKey();
   // Re-renders when General Settings arrive, for the pool tag names below.
@@ -280,8 +293,14 @@ export function CampaignTypesTool() {
 
   // A rule pointing at a campaign that was un-ticked is cleared: the leads
   // it names can only go to one of the originals.
+  // And there is a row for every original picked.
   useEffect(() => {
-    setRows((prev) => prev.map((r) => (r.campaignId && !selected.includes(r.campaignId) ? { ...r, campaignId: "" } : r)));
+    setRows((prev) =>
+      fitRows(
+        prev.map((r) => (r.campaignId && !selected.includes(r.campaignId) ? { ...r, campaignId: "" } : r)),
+        selected.length
+      )
+    );
     setEmptyTo((prev) => (prev && !selected.includes(prev) ? "" : prev));
   }, [selected]);
 
@@ -300,7 +319,7 @@ export function CampaignTypesTool() {
     setIndustry(i.name);
     // One added but never run has no segments yet: the rows are left as typed.
     if (i.segments.length === 0) return;
-    setRows(rowsFor(i, sources));
+    setRows(fitRows(rowsFor(i, sources), sources.length));
     setEmptyTo(i.noSegment ? matchCampaign(i.noSegment, sources) ?? "" : "");
   }
 
