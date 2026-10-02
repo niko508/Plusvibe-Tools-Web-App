@@ -140,7 +140,11 @@ export function BlockedDomainsTool() {
   // Home leads with what was blocked — inboxes and whole domains, newest
   // first. Waiting ones have their own section above; passed and the rest are
   // folded away, since there is nothing to do about them.
-  const onHome = inboxJobs.filter((j) => j.hiddenAt === undefined && j.status !== "queued" && j.status !== "working");
+  // An inbox deleted with Delete inbox (or Delete all) leaves Home with it:
+  // that click was the decision. One the automation deleted on its own stays
+  // until removed, so it is seen. Either way it stays on Blocked Inboxes.
+  const deletedByYou = (j: (typeof inboxJobs)[number]) => j.status === "deleted" && !j.autoDeleted;
+  const onHome = inboxJobs.filter((j) => j.hiddenAt === undefined && j.status !== "queued" && j.status !== "working" && !deletedByYou(j));
   const blockedFeed = [
     ...onHome
       .filter((j) => isBlocked(j) && j.status !== "awaiting_confirmation")
