@@ -1,10 +1,10 @@
 "use client";
 
-// Analyze Positive Reply Rates. One section for now — Opt Out vs No Opt Out —
-// with room for more beside it.
+// Analyze Positive Reply Rates: Opt Out vs No Opt Out, and Step 1 vs Step 2.
 //
 // The figures are read workspace by workspace, so "All workspaces" shows how
-// far it has got and can be stopped; nothing is written anywhere.
+// far it has got and can be stopped; nothing is written anywhere. One read
+// serves both sections, so switching between them reads nothing again.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Workspace } from "@/lib/plusvibe-types";
@@ -24,6 +24,14 @@ import { formatNumber } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { EmptyState, Spinner } from "@/components/ui";
 import { AlertIcon, ChevronDownIcon, GaugeIcon } from "@/components/icons";
+import { StepsSection } from "./steps-section";
+
+type Section = "opt-out" | "steps";
+const SECTIONS: [Section, string][] = [
+  ["opt-out", "Opt Out vs No Opt Out"],
+  ["steps", "Step 1 vs Step 2"],
+];
+const SECTION_KEY = "pv_rr_section";
 
 const ALL = "__all";
 const PRESETS = [7, 14, 30, 90] as const;
@@ -39,6 +47,23 @@ const pct = (n: number | null) => (n === null ? "—" : `${n.toFixed(2)}%`);
 
 export function ReplyRatesTool() {
   const { hasKey, ready } = useApiKey();
+  const [section, setSectionState] = useState<Section>("opt-out");
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(SECTION_KEY);
+      if (saved === "steps" || saved === "opt-out") setSectionState(saved);
+    } catch {
+      // storage unavailable: start on the first section
+    }
+  }, []);
+  const setSection = (s: Section) => {
+    setSectionState(s);
+    try {
+      localStorage.setItem(SECTION_KEY, s);
+    } catch {
+      // not remembered, no harm
+    }
+  };
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [loadingWs, setLoadingWs] = useState(false);
   const [scope, setScope] = useState(ALL);
@@ -121,17 +146,35 @@ export function ReplyRatesTool() {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap gap-2" role="tablist" aria-label="Section">
-        <button type="button" role="tab" aria-selected className="pv-chip pv-chip-active" data-section="opt-out">
-          Opt Out vs No Opt Out
-        </button>
+        {SECTIONS.map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={section === id}
+            className={`pv-chip ${section === id ? "pv-chip-active" : "hover:text-foreground"}`}
+            onClick={() => setSection(id)}
+            data-section={id}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       <div className="pv-card space-y-4 p-4 sm:p-5">
-        <p className="text-xs text-muted-foreground">
-          Every campaign counts, by its name: one with &ldquo;Opt Out&rdquo; in it is <strong>Opt Out</strong>, every other —
-          plain, 🔵 and Signature alike — is <strong>No Opt Out</strong>. The rate is positive replies per lead emailed:
-          leads emailed is what step 1 sent in the range, positive replies are counted over every step.
-        </p>
+        {section === "opt-out" ? (
+          <p className="text-xs text-muted-foreground">
+            Every campaign counts, by its name: one with &ldquo;Opt Out&rdquo; in it is <strong>Opt Out</strong>, every other —
+            plain, 🔵 and Signature alike — is <strong>No Opt Out</strong>. The rate is positive replies per lead emailed:
+            leads emailed is what step 1 sent in the range, positive replies are counted over every step.
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Every campaign counts. Its positive replies are split by the step Plusvibe puts them on: <strong>step 1</strong>, the
+            first email, against <strong>step 2</strong>, the first follow-up. Beside each count is its rate per email that step
+            sent, since fewer leads reach step 2. Both sections come from the same read.
+          </p>
+        )}
         <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
           <div>
             <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="rr-scope">
@@ -212,6 +255,10 @@ export function ReplyRatesTool() {
 
       {result && rows && (rows.length > 0 || !running) && (
         <div className="space-y-4" data-result>
+          {section === "steps" ? (
+            <StepsSection rows={rows} running={running} allWorkspaces={scope === ALL} />
+          ) : (
+          <>
           <div className="grid gap-3 sm:grid-cols-2">
             <GroupCard title="Opt Out" totals={result.optOut} accent data-group="optOut" />
             <GroupCard title="No Opt Out" totals={result.noOptOut} data-group="noOptOut" />
@@ -311,6 +358,8 @@ export function ReplyRatesTool() {
               </div>
             )}
           </div>
+          </>
+          )}
 
           {errors.length > 0 && (
             <div className="space-y-1 text-xs text-warning" data-read-errors>

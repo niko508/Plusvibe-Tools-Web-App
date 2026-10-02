@@ -172,9 +172,9 @@ export const TOOLS: Tool[] = [
   {
     slug: "reply-rates",
     name: "Analyze Positive Reply Rates",
-    tagline: "Opt Out vs No Opt Out: which campaigns turn more leads positive",
+    tagline: "Opt Out vs No Opt Out, and Step 1 vs Step 2: where the positive replies come from",
     description:
-      "Pick a date range and one workspace or all of them. Every campaign is put in a group by its name — Opt Out, or No Opt Out — and the two groups' positive reply rates, positive replies per lead emailed, are put side by side, with whether the gap is big enough to trust.",
+      "Pick a date range and one workspace or all of them. Opt Out vs No Opt Out puts every campaign in a group by its name and sets the two groups' positive replies side by side; Step 1 vs Step 2 counts how many positive replies came from the first email and how many from the first follow-up. Each with its rate and whether the gap is big enough to trust.",
     status: "active",
     color: "violet",
     Icon: GaugeIcon,

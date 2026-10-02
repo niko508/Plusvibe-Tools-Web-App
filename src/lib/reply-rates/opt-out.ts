@@ -26,24 +26,43 @@ export interface CampaignFigures {
   contacted: number;
   /** Positive replies in the range, every step. */
   positive: number;
+  /**
+   * Each step's own figures in sequence order — [0] is step 1 — for Step 1 vs
+   * Step 2. Absent from figures read before steps were kept.
+   */
+  steps?: StepFigures[];
+}
+
+export interface StepFigures {
+  /** Plusvibe's step number. */
+  step: number;
+  /** Emails this step sent in the range. */
+  sent: number;
+  /** Positive replies Plusvibe puts on this step. */
+  positive: number;
 }
 
 export function groupOf(name: string): OptOutGroup {
   return hasOptOut(name) ? "optOut" : "noOptOut";
 }
 
-/** A campaign's figures from its variation stats: the first step's sends, every step's positive replies. */
-export function figuresFrom(stats: StatsByStep): { contacted: number; positive: number } {
-  const steps = [...stats.keys()].sort((a, b) => a - b);
-  let contacted = 0;
-  let positive = 0;
-  steps.forEach((step, i) => {
-    for (const v of stats.get(step)!.values()) {
-      if (i === 0) contacted += v.sent;
-      positive += v.positiveReplies;
-    }
-  });
-  return { contacted, positive };
+/**
+ * A campaign's figures from its variation stats: the first step's sends, every
+ * step's positive replies, and each step on its own.
+ */
+export function figuresFrom(stats: StatsByStep): { contacted: number; positive: number; steps: StepFigures[] } {
+  const steps = [...stats.keys()]
+    .sort((a, b) => a - b)
+    .map((step) => {
+      let sent = 0;
+      let positive = 0;
+      for (const v of stats.get(step)!.values()) {
+        sent += v.sent;
+        positive += v.positiveReplies;
+      }
+      return { step, sent, positive };
+    });
+  return { contacted: steps[0]?.sent ?? 0, positive: steps.reduce((n, s) => n + s.positive, 0), steps };
 }
 
 export interface GroupTotals {
@@ -88,22 +107,35 @@ function totals(rows: CampaignFigures[]): GroupTotals {
   };
 }
 
+export interface Gap {
+  /** a's rate minus b's, in points; null unless both have a rate. */
+  difference: number | null;
+  /** The same as a share of b's rate: +25 means a quarter higher. */
+  relative: number | null;
+  confidence: "likely" | "unclear" | "too-few" | null;
+}
+
+/** How far apart two groups' rates are, and whether that could be chance (two-proportion test). */
+export function gapBetween(a: GroupTotals, b: GroupTotals): Gap {
+  if (a.rate === null || b.rate === null) return { difference: null, relative: null, confidence: null };
+  const difference = round2(a.rate - b.rate);
+  const relative = b.rate > 0 ? Math.round((difference / b.rate) * 1000) / 10 : null;
+  let confidence: Gap["confidence"];
+  if (a.positive < MIN_POSITIVE || b.positive < MIN_POSITIVE) confidence = "too-few";
+  else {
+    const p1 = a.positive / a.contacted;
+    const p2 = b.positive / b.contacted;
+    const p = (a.positive + b.positive) / (a.contacted + b.contacted);
+    const se = Math.sqrt(p * (1 - p) * (1 / a.contacted + 1 / b.contacted));
+    confidence = se > 0 && Math.abs(p1 - p2) / se >= 1.96 ? "likely" : "unclear";
+  }
+  return { difference, relative, confidence };
+}
+
 export function compareOptOut(rows: CampaignFigures[]): OptOutComparison {
   const optOut = totals(rows.filter((r) => groupOf(r.name) === "optOut"));
   const noOptOut = totals(rows.filter((r) => groupOf(r.name) === "noOptOut"));
-  if (optOut.rate === null || noOptOut.rate === null) return { optOut, noOptOut, difference: null, relative: null, confidence: null };
-  const difference = round2(optOut.rate - noOptOut.rate);
-  const relative = noOptOut.rate > 0 ? Math.round((difference / noOptOut.rate) * 1000) / 10 : null;
-  let confidence: OptOutComparison["confidence"];
-  if (optOut.positive < MIN_POSITIVE || noOptOut.positive < MIN_POSITIVE) confidence = "too-few";
-  else {
-    const p1 = optOut.positive / optOut.contacted;
-    const p2 = noOptOut.positive / noOptOut.contacted;
-    const p = (optOut.positive + noOptOut.positive) / (optOut.contacted + noOptOut.contacted);
-    const se = Math.sqrt(p * (1 - p) * (1 / optOut.contacted + 1 / noOptOut.contacted));
-    confidence = se > 0 && Math.abs(p1 - p2) / se >= 1.96 ? "likely" : "unclear";
-  }
-  return { optOut, noOptOut, difference, relative, confidence };
+  return { optOut, noOptOut, ...gapBetween(optOut, noOptOut) };
 }
 
 /** A range of whole days, oldest first, "YYYY-MM-DD"; null with the problem when it doesn't read. */

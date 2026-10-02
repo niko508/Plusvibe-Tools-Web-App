@@ -31,8 +31,12 @@ console.log("--- a campaign's figures");
     { step: 2, variations: [{ variation: "A", sent: 900, pos_reply: 3 }] },
     { step: 1, variations: [{ variation: "A", sent: 500, pos_reply: 4 }, { variation: "B", sent: 480, pos_reply: 1, is_del: true }] },
   ]);
-  eq("leads emailed: step 1's sends, every variant; positive: every step", figuresFrom(stats), { contacted: 980, positive: 8 });
-  eq("nothing sent: zeros", figuresFrom(parseVariationStats([])), { contacted: 0, positive: 0 });
+  eq("leads emailed: step 1's sends, every variant; positive: every step; each step on its own, in order", figuresFrom(stats), {
+    contacted: 980,
+    positive: 8,
+    steps: [{ step: 1, sent: 980, positive: 5 }, { step: 2, sent: 900, positive: 3 }],
+  });
+  eq("nothing sent: zeros", figuresFrom(parseVariationStats([])), { contacted: 0, positive: 0, steps: [] });
 }
 
 console.log("--- the comparison");
@@ -92,6 +96,32 @@ console.log("--- workspace by workspace");
   ]);
   eq("each with its own figures", (({ optOut, noOptOut }) => [optOut.positive, noOptOut.positive, optOut.contacted])(by[2]), [15, 50, 10000]);
   eq("the workspaces add up to the whole", [by.reduce((n, x) => n + x.optOut.positive + x.noOptOut.positive, 0), compareOptOut(rows).optOut.positive + compareOptOut(rows).noOptOut.positive], [355, 355]);
+}
+
+console.log("--- Step 1 vs Step 2");
+{
+  const { compareSteps, compareStepsByWorkspace, stepsVerdictOf } = await importTs("@/lib/reply-rates/steps");
+  const st = (ws, name, steps) => ({ workspaceId: ws, workspaceName: ws.toUpperCase(), campaignId: `${ws}-${name}`, name, contacted: steps[0]?.[0] ?? 0, positive: steps.reduce((n, s) => n + s[1], 0), steps: steps.map(([sent, positive], i) => ({ step: i + 1, sent, positive })) });
+  const rows = [
+    st("a", "X (August)", [[10000, 60], [8000, 30], [6000, 4]]),
+    st("a", "Y - Opt Out (August)", [[5000, 20], [4000, 10]]),
+    st("b", "Z (August)", [[3000, 6]]),
+    st("b", "Quiet (August)", []),
+  ];
+  const r = compareSteps(rows);
+  eq("each step's positive replies and sends, over every campaign that has it", [r.step1, r.step2], [
+    { campaigns: 3, sending: 3, contacted: 18000, positive: 86, rate: 0.48 },
+    { campaigns: 2, sending: 2, contacted: 12000, positive: 40, rate: 0.33 },
+  ]);
+  eq("step 3 and later counted apart; step 1's share of the two", [r.later, r.step1Share], [4, 68.3]);
+  eq("the gap per email sent — at z ≈ 1.9, not yet past 95%", [r.difference, r.confidence], [0.15, "unclear"]);
+  eq("…a wider gap holds", compareSteps([st("a", "X", [[18000, 120], [12000, 40]])]).confidence, "likely");
+  eq("nothing sent: nothing to say", stepsVerdictOf(compareSteps([st("q", "Q", [[0, 0], [0, 0]])])), "none");
+  eq("no step 2 anywhere: only one step sent", stepsVerdictOf(compareSteps([st("q", "Q", [[1000, 9]])])), "one-step");
+  eq("figures read before steps were kept count as nothing", compareSteps([{ workspaceId: "w", workspaceName: "W", campaignId: "c", name: "C", contacted: 100, positive: 3 }]).step1.positive, 0);
+  const by = compareStepsByWorkspace([...rows, st("c", "F (August)", [[2000, 6], [2000, 40]])]);
+  eq("by workspace: step 2 clearly ahead first, then step 1, then the rest", by.map((w) => [w.workspaceId, w.verdict]), [["c", "step2"], ["a", "step1"], ["b", "one-step"]]);
+  eq("…each with its own counts", by.map((w) => [w.step1.positive, w.step2.positive]), [[6, 40], [80, 40], [6, 0]]);
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
