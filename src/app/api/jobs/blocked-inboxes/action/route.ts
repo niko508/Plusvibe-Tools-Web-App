@@ -3,7 +3,6 @@ import { requireAccountKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import {
   confirmAllInboxes,
-  recheckPassedInboxes,
   confirmInbox,
   dismissInbox,
   hideInboxDomain,
@@ -17,7 +16,6 @@ export const dynamic = "force-dynamic";
 // POST /api/jobs/blocked-inboxes/action
 // Body: { action: "confirm" | "dismiss" | "remove", jobId }
 //     | { action: "confirm-all" }
-//     | { action: "recheck-passed" }      — every passed inbox judged again on the saved rule
 //     | { action: "check", email }   — run one inbox by hand, as Clay would
 //     | { action: "tenant-block", domain } — block a whole domain by hand
 //     | { action: "hide-domain", domain }  — take a domain's card off Home
@@ -40,8 +38,6 @@ export async function POST(request: Request) {
       }
       case "confirm-all":
         return NextResponse.json({ ok: true, deleting: await confirmAllInboxes() });
-      case "recheck-passed":
-        return NextResponse.json({ ok: true, queued: await recheckPassedInboxes() });
       case "check": {
         const r = await intakeInbox({ email: body.email, source: "manual" });
         if (r.outcome === "invalid") return NextResponse.json({ error: r.reason }, { status: 400 });

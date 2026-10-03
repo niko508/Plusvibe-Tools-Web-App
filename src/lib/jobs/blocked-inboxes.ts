@@ -429,28 +429,6 @@ function backInLine(rec: BlockedInboxJob, now: number) {
   rec.updatedAt = now;
 }
 
-/**
- * Every inbox that passed — on the rule of the day it was judged — judged
- * again now, on fresh figures and the rule as saved, as if Clay had sent it.
- * Only each address's latest record counts. Returns how many went in line.
- */
-export async function recheckPassedInboxes(): Promise<number> {
-  await loadOnce();
-  const latest = new Map<string, BlockedInboxJob>();
-  for (const r of records.values()) {
-    const had = latest.get(r.email);
-    if (!had || r.createdAt > had.createdAt) latest.set(r.email, r);
-  }
-  const passed = [...latest.values()].filter((r) => r.status === "passed");
-  const now = Date.now();
-  for (const r of passed) {
-    backInLine(r, now);
-    await persist(r.id);
-    enqueue(r.id, "run");
-  }
-  return passed.length;
-}
-
 // --- Finding the inbox -------------------------------------------------------
 
 async function domainsGrid(): Promise<string[][] | null> {

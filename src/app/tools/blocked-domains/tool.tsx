@@ -6,15 +6,6 @@ import { isBlocked } from "@/lib/jobs/blocked-inboxes-types";
 import { blockedDomains } from "@/lib/blocked-inboxes/domains";
 import {
   fetchBlockedDomains,
-  confirmBlockedDomain,
-  dismissBlockedDomain,
-  rearmBlockedDomain,
-  rejudgeBlockedDomain,
-  restoreBlockedDomainInboxes,
-  undoBlockedDomainWriteOff,
-  deleteStoppedBlockedDomainInboxes,
-  listBlockedDomainGoogleInboxes,
-  deleteBlockedDomainJob,
   blockedInboxAction,
   ApiClientError,
 } from "@/lib/api-client";
@@ -23,8 +14,6 @@ import { ConnectPrompt } from "@/components/connect-prompt";
 import { EmptyState, Spinner } from "@/components/ui";
 import { AlertIcon, ChevronDownIcon, FireIcon } from "@/components/icons";
 import { formatNumber } from "@/lib/format";
-import { needsYou, stoppedCount } from "@/lib/blocked-domains/triage";
-import { JobCard } from "./job-card";
 import { InboxCard } from "./inbox-card";
 import { BlockedDomainsList, BlockedInboxesView } from "./blocked-lists";
 import { StatsView } from "./stats-view";
@@ -55,14 +44,11 @@ export function BlockedDomainsTool() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [recentShown, setRecentShown] = useState(RECENT);
-  const [oldOpen, setOldOpen] = useState(false);
   const [passedOpen, setPassedOpen] = useState(false);
   const [otherOpen, setOtherOpen] = useState(false);
   const [passedShown, setPassedShown] = useState(RECENT);
   const [otherShown, setOtherShown] = useState(RECENT);
   const [confirmingAll, setConfirmingAll] = useState(false);
-  const [rechecking, setRechecking] = useState(false);
-  const [recheckNote, setRecheckNote] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
@@ -120,31 +106,6 @@ export function BlockedDomainsTool() {
     }
   }
 
-  // Every passed inbox judged again on the rule as saved, on fresh figures.
-  async function recheckPassed(count: number) {
-    const auto = !!view?.settings.autoDelete;
-    const ok = window.confirm(
-      `Judge all ${count} passed inbox${count === 1 ? "" : "es"} again on the current rule? Each is read afresh, as if Clay had sent it. ` +
-        (auto
-          ? "Auto-delete is ON, so any that fail are stopped and deleted straight away. "
-          : "Any that fail are stopped now; their deletion waits for you. ") +
-        "Microsoft deletions count towards their domain's cancellation as usual."
-    );
-    if (!ok) return;
-    setRechecking(true);
-    setRecheckNote(null);
-    setError(null);
-    try {
-      const r = await blockedInboxAction({ action: "recheck-passed" });
-      setRecheckNote(`${formatNumber(r.queued ?? 0)} in line — results land here as each is judged.`);
-    } catch (err) {
-      setError(errMessage(err));
-    } finally {
-      setRechecking(false);
-      await refresh();
-    }
-  }
-
   if (!ready) return <div className="pv-card h-40 animate-pulse" />;
   if (!hasKey) return <ConnectPrompt onConnected={refresh} />;
 
@@ -181,32 +142,9 @@ export function BlockedDomainsTool() {
       .map((d) => ({ kind: "domain" as const, key: `domain:${d.domain}`, at: d.cancelledAt ?? d.notActiveAt ?? d.cancelRequestedAt ?? d.updatedAt, d })),
   ].sort((a, b) => b.at - a.at);
   const passedJobs = onHome.filter((j) => j.status === "passed");
-  // Taken off Home or not, every passed inbox can be judged again.
-  const passedAll = inboxJobs.filter((j) => j.status === "passed").length;
   const otherJobs = onHome.filter((j) => !isBlocked(j) && j.status !== "passed");
   const otherErrors = otherJobs.filter((j) => j.status === "error" || j.status === "interrupted").length;
 
-  // The domain-level runs from before the move to inboxes. Kept: some still
-  // have stopped inboxes waiting to be deleted.
-  const oldWaiting = domainJobs.filter(needsYou);
-  const oldRest = domainJobs.filter((j) => !needsYou(j));
-  const oldStopped = oldWaiting.reduce((n, j) => n + stoppedCount(j), 0);
-  const oldCard = (job: (typeof domainJobs)[number]) => (
-    <JobCard
-      key={job.id}
-      job={job}
-      busy={busyId === job.id}
-      onConfirm={(id) => withBusy(id, () => confirmBlockedDomain(id))}
-      onDismiss={(id) => withBusy(id, () => dismissBlockedDomain(id))}
-      onRearm={(id) => withBusy(id, () => rearmBlockedDomain(id))}
-      onRemove={(id) => withBusy(id, () => deleteBlockedDomainJob(id))}
-      onRejudge={(id) => withBusy(id, () => rejudgeBlockedDomain({ jobId: id }))}
-      onRestore={(id, dailyLimit) => withBusy(id, () => restoreBlockedDomainInboxes(id, dailyLimit))}
-      onUndoWriteOff={(id) => withBusy(id, () => undoBlockedDomainWriteOff(id))}
-      onDeleteStopped={(id) => withBusy(id, () => deleteStoppedBlockedDomainInboxes(id))}
-      onListGoogle={(id) => withBusy(id, () => listBlockedDomainGoogleInboxes(id))}
-    />
-  );
   const inboxCard = (job: (typeof inboxJobs)[number]) => (
     <InboxCard
       key={job.id}
@@ -387,27 +325,13 @@ export function BlockedDomainsTool() {
             )
           )}
 
-          {(passedJobs.length > 0 || passedAll > 0) && (
+          {passedJobs.length > 0 && (
             <Fold
               id="passed"
               title={`Passed Inboxes (${formatNumber(passedJobs.length)})`}
-              note={recheckNote && inLine + checkingNow > 0 ? recheckNote : "Within the rule, or not judged: nothing was done to them."}
+              note="Within the rule, or not judged: nothing was done to them."
               open={passedOpen}
               onToggle={() => setPassedOpen((v) => !v)}
-              action={
-                passedAll > 0 && (
-                  <button
-                    type="button"
-                    className="pv-btn-ghost px-2.5 py-1 text-xs disabled:opacity-50"
-                    disabled={rechecking}
-                    onClick={() => recheckPassed(passedAll)}
-                    title="Judge every passed inbox again on the rule as saved on Settings"
-                    data-recheck-passed
-                  >
-                    {rechecking ? <Spinner size={12} /> : null} Re-check {formatNumber(passedAll)} on the current rule
-                  </button>
-                )
-              }
             >
               {passedJobs.slice(0, passedShown).map(inboxCard)}
               {passedJobs.length > passedShown && (
@@ -440,33 +364,6 @@ export function BlockedDomainsTool() {
             </Fold>
           )}
 
-          {domainJobs.length > 0 && (
-            <div className="space-y-3 border-t border-border pt-5" data-old-runs>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  className="flex items-center gap-1.5 text-sm font-semibold"
-                  onClick={() => setOldOpen((v) => !v)}
-                  aria-expanded={oldOpen}
-                >
-                  <ChevronDownIcon size={16} className={`transition-transform ${oldOpen ? "" : "-rotate-90"}`} />
-                  Earlier domain-level runs ({formatNumber(domainJobs.length)})
-                </button>
-                <span className="text-xs text-muted-foreground">
-                  From before the automation moved to single inboxes. Nothing new is added here and nothing is scheduled.
-                  {oldStopped > 0
-                    ? ` ${formatNumber(oldStopped)} stopped inbox${oldStopped === 1 ? "" : "es"} on ${formatNumber(oldWaiting.length)} domain${oldWaiting.length === 1 ? "" : "s"} can still be deleted.`
-                    : ""}
-                </span>
-              </div>
-              {oldOpen && (
-                <div className="space-y-3">
-                  {oldWaiting.map(oldCard)}
-                  {oldRest.map(oldCard)}
-                </div>
-              )}
-            </div>
-          )}
         </>
       )}
     </div>
