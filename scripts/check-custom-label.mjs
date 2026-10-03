@@ -156,5 +156,23 @@ eq(
   true
 );
 
+// --- removing -----------------------------------------------------------------
+
+{
+  const L = (id, key, name, isSystem = false) => ({ id, key, name, isSystem });
+  const labels = [
+    L("a1", "HOT_LEAD", "🔥 Hot lead"),
+    L("a2", "MEETING_BOOKED_1", "🤑 meeting booked"),
+    L(null, "MEETING_BOOKED", "Meeting Booked", true),
+    L("a3", "HOTLEAD", "Hotlead"),
+  ];
+  eq("the picked keys, by key only: a similar name is left alone", cl.pickForDeletion(labels, ["HOT_LEAD"]).remove, [{ id: "a1", key: "HOT_LEAD", name: "🔥 Hot lead" }]);
+  eq("several at once", cl.pickForDeletion(labels, ["HOT_LEAD", "MEETING_BOOKED_1"]).remove.map((r) => r.id), ["a1", "a2"]);
+  eq("a built-in is never deleted, and is reported", cl.pickForDeletion(labels, ["MEETING_BOOKED"]), { remove: [], builtIn: ["Meeting Booked"] });
+  eq("a key the workspace doesn't have: nothing", cl.pickForDeletion(labels, ["NOPE"]), { remove: [], builtIn: [] });
+  eq("a custom label with no id can't be deleted, so is left alone", cl.pickForDeletion([L(null, "X", "X")], ["X"]).remove, []);
+  eq("blank keys ignored", cl.pickForDeletion(labels, ["  ", ""]).remove, []);
+}
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

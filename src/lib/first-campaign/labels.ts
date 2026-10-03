@@ -13,7 +13,7 @@ import type { SpecLabel } from "@/lib/first-campaign/blueprint";
 import { normalizeLabelName } from "@/lib/lead-labels/normalize";
 import type { WorkspaceLabel } from "@/lib/lead-labels/normalize";
 
-// The name-comparison rule is shared with the bulk "Add Custom Label" action,
+// The name-comparison rule is shared with the bulk "Add/Remove Custom Label" action,
 // so it lives in one place and is re-exported here for the existing callers.
 export { normalizeLabelName };
 export type { WorkspaceLabel };

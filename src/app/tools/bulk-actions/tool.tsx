@@ -23,6 +23,7 @@ import {
 import { TOOL_COLORS, type ToolColor } from "@/lib/tools";
 import { AddWebhook } from "./add-webhook";
 import { AddLabel } from "./add-label";
+import { RemoveLabels } from "./remove-label";
 import { AddField } from "./add-field";
 import { PauseCampaigns } from "./pause-campaigns";
 import { AddTags } from "./add-tags";
@@ -56,9 +57,9 @@ const ACTIONS: BulkAction[] = [
   },
   {
     id: "add-label",
-    name: "Add Custom Label",
+    name: "Add/Remove Custom Label",
     description:
-      "Create the same custom lead label — emoji and all — in every selected workspace, skipping any that already have it.",
+      "Create the same custom lead label — emoji and all — in every selected workspace, or delete custom labels from them. Workspaces that already have it, or don't, are skipped.",
     color: "amber",
     Icon: TagIcon,
     ready: true,
@@ -201,7 +202,7 @@ export function BulkActionsTool() {
           )}
 
           {action === "add-label" && (
-            <AddLabel
+            <CustomLabels
               workspaces={workspaces}
               selected={selected}
               loading={loading}
@@ -314,6 +315,36 @@ function ActionMenu({ onPick }: { onPick: (id: ActionId) => void }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/** Add/Remove Custom Label: the same workspaces, either way. */
+function CustomLabels(props: { workspaces: Workspace[]; selected: Set<string>; loading: boolean }) {
+  const [mode, setMode] = useState<"add" | "remove">("add");
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Add or remove">
+        {(
+          [
+            ["add", "Add a label"],
+            ["remove", "Remove labels"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={mode === id}
+            className={`pv-chip ${mode === id ? "pv-chip-active" : "hover:text-foreground"}`}
+            onClick={() => setMode(id)}
+            data-label-mode={id}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {mode === "add" ? <AddLabel {...props} /> : <RemoveLabels {...props} />}
     </div>
   );
 }

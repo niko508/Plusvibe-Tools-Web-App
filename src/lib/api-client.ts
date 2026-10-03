@@ -1173,6 +1173,30 @@ export function addLeadLabelToWorkspaces(
   });
 }
 
+export interface RemoveLabelResult {
+  workspaceId: string;
+  workspaceName: string;
+  outcome: "removed" | "absent" | "error";
+  labels: string[];
+  builtIn?: string[];
+  reason?: string;
+}
+
+export interface RemoveLabelsResponse {
+  dryRun: boolean;
+  keys: string[];
+  results: RemoveLabelResult[];
+  totals: { removed: number; labels: number; absent: number; errors: number };
+}
+
+/** Deletes the custom lead labels with these keys from every workspace given. */
+export function removeLeadLabelsFromWorkspaces(
+  params: { workspaces: { id: string; name: string }[]; keys: string[]; dryRun?: boolean },
+  signal?: AbortSignal
+) {
+  return request<RemoveLabelsResponse>("/api/bulk-actions/lead-labels", { method: "DELETE", body: params, signal });
+}
+
 export interface BulkFieldResult {
   workspaceId: string;
   workspaceName: string;

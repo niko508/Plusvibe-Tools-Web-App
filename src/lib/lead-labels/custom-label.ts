@@ -135,3 +135,38 @@ export function classifyWorkspace(
   }
   return { action: "create" };
 }
+
+// --- Removing ------------------------------------------------------------------
+
+/** A label as one workspace lists it, with the id deleting it needs. */
+export interface DeletableLabel {
+  /** Null for system labels: they have no id and can't be deleted. */
+  id: string | null;
+  key: string;
+  name: string;
+  isSystem: boolean;
+}
+
+/** At most this many labels are removed in one run (Plusvibe takes 100 ids per call). */
+export const MAX_REMOVE_LABELS = 50;
+
+/**
+ * Which of one workspace's labels go, for the keys picked. A label is matched
+ * on its key — the stable reference Plusvibe uses everywhere — never on a
+ * similar name, since deleting also detaches it from every lead carrying it.
+ * Built-in labels are never deleted, even if their key is asked for.
+ */
+export function pickForDeletion(
+  labels: DeletableLabel[],
+  keys: string[]
+): { remove: { id: string; key: string; name: string }[]; builtIn: string[] } {
+  const wanted = new Set(keys.map((k) => k.trim()).filter(Boolean));
+  const remove: { id: string; key: string; name: string }[] = [];
+  const builtIn: string[] = [];
+  for (const l of labels) {
+    if (!wanted.has(l.key)) continue;
+    if (l.isSystem || !l.id) builtIn.push(l.name || l.key);
+    else if (!remove.some((r) => r.id === l.id)) remove.push({ id: l.id, key: l.key, name: l.name || l.key });
+  }
+  return { remove, builtIn };
+}

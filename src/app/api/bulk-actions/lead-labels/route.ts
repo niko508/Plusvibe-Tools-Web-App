@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
-import { plusvibeGet, plusvibePost, resolveApiKey } from "@/lib/plusvibe-server";
+import { plusvibeDelete, plusvibeGet, plusvibePost, resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { acquireSlot } from "@/lib/jobs/rate-limit";
 import { labelEventType, type LeadLabel } from "@/lib/webhooks/config";
 import type { WorkspaceLabel } from "@/lib/lead-labels/normalize";
 import {
   classifyWorkspace,
+  MAX_REMOVE_LABELS,
+  pickForDeletion,
   isSentiment,
   validateLabelName,
   type LabelOutcome,
@@ -270,6 +272,110 @@ export async function POST(request: Request) {
         created: results.filter((r) => r.outcome === "created").length,
         already: results.filter((r) => r.outcome === "already").length,
         conflict: results.filter((r) => r.outcome === "conflict").length,
+        errors: results.filter((r) => r.outcome === "error").length,
+      },
+    });
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+// DELETE /api/bulk-actions/lead-labels
+// Body: { workspaces: [{ id, name }], keys: string[], dryRun? }
+//
+// Deletes the picked custom lead labels, by key, from each selected
+// workspace. Built-in labels are never deleted. A workspace without any of
+// them is skipped, not failed. Plusvibe detaches a deleted label from every
+// lead, webhook and subsequence trigger that carried it, so the preview is
+// what to look at first.
+
+interface RemoveResult {
+  workspaceId: string;
+  workspaceName: string;
+  outcome: "removed" | "absent" | "error";
+  /** The labels deleted (or that would be). */
+  labels: string[];
+  /** Asked-for keys that are built-in here, so left alone. */
+  builtIn?: string[];
+  reason?: string;
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const apiKey = resolveApiKey(request);
+    const body = (await request.json()) as { workspaces?: IncomingWorkspace[]; keys?: unknown; dryRun?: boolean };
+    const workspaces = (body.workspaces ?? [])
+      .map((w) => ({ id: String(w?.id ?? ""), name: String(w?.name ?? "") }))
+      .filter((w) => w.id);
+    if (workspaces.length === 0) return NextResponse.json({ error: "Pick at least one workspace." }, { status: 400 });
+    if (workspaces.length > MAX_CREATE_WORKSPACES) {
+      return NextResponse.json({ error: `Too many workspaces (${workspaces.length}); the limit is ${MAX_CREATE_WORKSPACES}.` }, { status: 400 });
+    }
+    const keys = Array.isArray(body.keys) ? [...new Set(body.keys.map((k) => String(k ?? "").trim()).filter(Boolean))] : [];
+    if (keys.length === 0) return NextResponse.json({ error: "Pick at least one label to remove." }, { status: 400 });
+    if (keys.length > MAX_REMOVE_LABELS) {
+      return NextResponse.json({ error: `At most ${MAX_REMOVE_LABELS} labels at a time (asked for ${keys.length}).` }, { status: 400 });
+    }
+    const dryRun = body.dryRun === true;
+    const results: RemoveResult[] = [];
+
+    for (const ws of workspaces) {
+      let pick: ReturnType<typeof pickForDeletion>;
+      try {
+        await acquireSlot();
+        const data = await plusvibeGet<unknown>({ apiKey, path: "/workspace-settings/lead-labels", query: { workspace_id: ws.id } });
+        pick = pickForDeletion(
+          asLabelArray(data).map((l) => ({
+            id: typeof l.id === "string" && l.id ? l.id : null,
+            key: String(l.key ?? ""),
+            name: String(l.name ?? ""),
+            isSystem: l.is_system === 1,
+          })),
+          keys
+        );
+      } catch (err) {
+        results.push({ workspaceId: ws.id, workspaceName: ws.name, outcome: "error", labels: [], reason: `Could not read its labels: ${message(err)}. Nothing was deleted.` });
+        continue;
+      }
+      const builtIn = pick.builtIn.length > 0 ? { builtIn: pick.builtIn } : {};
+      if (pick.remove.length === 0) {
+        results.push({ workspaceId: ws.id, workspaceName: ws.name, outcome: "absent", labels: [], ...builtIn });
+        continue;
+      }
+      const names = pick.remove.map((r) => r.name);
+      if (dryRun) {
+        results.push({ workspaceId: ws.id, workspaceName: ws.name, outcome: "removed", labels: names, ...builtIn });
+        continue;
+      }
+      try {
+        await acquireSlot();
+        const res = await plusvibeDelete<Record<string, unknown>>({
+          apiKey,
+          path: "/workspace-settings/lead-labels/delete",
+          body: { workspace_id: ws.id, ids: pick.remove.map((r) => r.id) },
+        });
+        const deleted = typeof res?.deleted_count === "number" ? res.deleted_count : names.length;
+        results.push({
+          workspaceId: ws.id,
+          workspaceName: ws.name,
+          outcome: "removed",
+          labels: names,
+          ...builtIn,
+          ...(deleted < names.length ? { reason: `Plusvibe reported ${deleted} of ${names.length} deleted.` } : {}),
+        });
+      } catch (err) {
+        results.push({ workspaceId: ws.id, workspaceName: ws.name, outcome: "error", labels: names, reason: message(err) });
+      }
+    }
+
+    return NextResponse.json({
+      dryRun,
+      keys,
+      results,
+      totals: {
+        removed: results.filter((r) => r.outcome === "removed").length,
+        labels: results.reduce((n, r) => n + (r.outcome === "removed" ? r.labels.length : 0), 0),
+        absent: results.filter((r) => r.outcome === "absent").length,
         errors: results.filter((r) => r.outcome === "error").length,
       },
     });
