@@ -61,6 +61,8 @@ export function BlockedDomainsTool() {
   const [passedShown, setPassedShown] = useState(RECENT);
   const [otherShown, setOtherShown] = useState(RECENT);
   const [confirmingAll, setConfirmingAll] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
+  const [recheckNote, setRecheckNote] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
@@ -118,6 +120,31 @@ export function BlockedDomainsTool() {
     }
   }
 
+  // Every passed inbox judged again on the rule as saved, on fresh figures.
+  async function recheckPassed(count: number) {
+    const auto = !!view?.settings.autoDelete;
+    const ok = window.confirm(
+      `Judge all ${count} passed inbox${count === 1 ? "" : "es"} again on the current rule? Each is read afresh, as if Clay had sent it. ` +
+        (auto
+          ? "Auto-delete is ON, so any that fail are stopped and deleted straight away. "
+          : "Any that fail are stopped now; their deletion waits for you. ") +
+        "Microsoft deletions count towards their domain's cancellation as usual."
+    );
+    if (!ok) return;
+    setRechecking(true);
+    setRecheckNote(null);
+    setError(null);
+    try {
+      const r = await blockedInboxAction({ action: "recheck-passed" });
+      setRecheckNote(`${formatNumber(r.queued ?? 0)} in line — results land here as each is judged.`);
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setRechecking(false);
+      await refresh();
+    }
+  }
+
   if (!ready) return <div className="pv-card h-40 animate-pulse" />;
   if (!hasKey) return <ConnectPrompt onConnected={refresh} />;
 
@@ -154,6 +181,8 @@ export function BlockedDomainsTool() {
       .map((d) => ({ kind: "domain" as const, key: `domain:${d.domain}`, at: d.cancelledAt ?? d.notActiveAt ?? d.cancelRequestedAt ?? d.updatedAt, d })),
   ].sort((a, b) => b.at - a.at);
   const passedJobs = onHome.filter((j) => j.status === "passed");
+  // Taken off Home or not, every passed inbox can be judged again.
+  const passedAll = inboxJobs.filter((j) => j.status === "passed").length;
   const otherJobs = onHome.filter((j) => !isBlocked(j) && j.status !== "passed");
   const otherErrors = otherJobs.filter((j) => j.status === "error" || j.status === "interrupted").length;
 
@@ -358,13 +387,27 @@ export function BlockedDomainsTool() {
             )
           )}
 
-          {passedJobs.length > 0 && (
+          {(passedJobs.length > 0 || passedAll > 0) && (
             <Fold
               id="passed"
               title={`Passed Inboxes (${formatNumber(passedJobs.length)})`}
-              note="Within the rule, or not judged: nothing was done to them."
+              note={recheckNote && inLine + checkingNow > 0 ? recheckNote : "Within the rule, or not judged: nothing was done to them."}
               open={passedOpen}
               onToggle={() => setPassedOpen((v) => !v)}
+              action={
+                passedAll > 0 && (
+                  <button
+                    type="button"
+                    className="pv-btn-ghost px-2.5 py-1 text-xs disabled:opacity-50"
+                    disabled={rechecking}
+                    onClick={() => recheckPassed(passedAll)}
+                    title="Judge every passed inbox again on the rule as saved on Settings"
+                    data-recheck-passed
+                  >
+                    {rechecking ? <Spinner size={12} /> : null} Re-check {formatNumber(passedAll)} on the current rule
+                  </button>
+                )
+              }
             >
               {passedJobs.slice(0, passedShown).map(inboxCard)}
               {passedJobs.length > passedShown && (
@@ -455,12 +498,15 @@ function Fold({
   warn,
   open,
   onToggle,
+  action,
   children,
 }: {
   id: string;
   title: string;
   note: string;
   warn?: boolean;
+  /** Shown at the end of the header line. */
+  action?: ReactNode;
   open: boolean;
   onToggle: () => void;
   children: ReactNode;
@@ -473,6 +519,7 @@ function Fold({
           {title}
         </button>
         <span className={`text-xs ${warn ? "text-warning" : "text-muted-foreground"}`}>{note}</span>
+        {action && <span className="ml-auto">{action}</span>}
       </div>
       {open && <div className="space-y-3">{children}</div>}
     </div>

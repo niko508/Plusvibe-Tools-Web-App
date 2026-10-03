@@ -388,21 +388,7 @@ export async function intakeInbox(args: { email: unknown; bounceReason?: string;
     // Judged before and not blocked: judged again on fresh figures, on the
     // same record, keeping what it said last time.
     rec = existing;
-    if (rec.verdict && rec.figures && rec.rates && rec.judgedAt) {
-      rec.history = [
-        { at: rec.judgedAt, verdict: rec.verdict, sent: rec.figures.sent, bounceRate: rec.rates.bounceRate, oooReplyRate: rec.rates.oooReplyRate },
-        ...(rec.history ?? []),
-      ].slice(0, MAX_INBOX_HISTORY);
-    }
-    rec.status = "queued";
-    rec.hiddenAt = undefined;
-    rec.errors = [];
-    rec.overruled = undefined;
-    rec.reasons = undefined;
-    rec.humanFigures = undefined;
-    rec.humanRates = undefined;
-    rec.sendingLongEnough = undefined;
-    rec.updatedAt = now;
+    backInLine(rec, now);
     if (args.bounceReason) rec.bounceReason = args.bounceReason.slice(0, 500);
   } else {
     rec = {
@@ -422,6 +408,47 @@ export async function intakeInbox(args: { email: unknown; bounceReason?: string;
   await persist(rec.id);
   enqueue(rec.id, "run");
   return { outcome: "accepted", job: rec };
+}
+
+/** A record judged before, put back in line: what it said last time goes into its history. */
+function backInLine(rec: BlockedInboxJob, now: number) {
+  if (rec.verdict && rec.figures && rec.rates && rec.judgedAt) {
+    rec.history = [
+      { at: rec.judgedAt, verdict: rec.verdict, sent: rec.figures.sent, bounceRate: rec.rates.bounceRate, oooReplyRate: rec.rates.oooReplyRate },
+      ...(rec.history ?? []),
+    ].slice(0, MAX_INBOX_HISTORY);
+  }
+  rec.status = "queued";
+  rec.hiddenAt = undefined;
+  rec.errors = [];
+  rec.overruled = undefined;
+  rec.reasons = undefined;
+  rec.humanFigures = undefined;
+  rec.humanRates = undefined;
+  rec.sendingLongEnough = undefined;
+  rec.updatedAt = now;
+}
+
+/**
+ * Every inbox that passed — on the rule of the day it was judged — judged
+ * again now, on fresh figures and the rule as saved, as if Clay had sent it.
+ * Only each address's latest record counts. Returns how many went in line.
+ */
+export async function recheckPassedInboxes(): Promise<number> {
+  await loadOnce();
+  const latest = new Map<string, BlockedInboxJob>();
+  for (const r of records.values()) {
+    const had = latest.get(r.email);
+    if (!had || r.createdAt > had.createdAt) latest.set(r.email, r);
+  }
+  const passed = [...latest.values()].filter((r) => r.status === "passed");
+  const now = Date.now();
+  for (const r of passed) {
+    backInLine(r, now);
+    await persist(r.id);
+    enqueue(r.id, "run");
+  }
+  return passed.length;
 }
 
 // --- Finding the inbox -------------------------------------------------------
