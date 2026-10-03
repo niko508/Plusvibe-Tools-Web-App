@@ -3,7 +3,7 @@
 // Clay sends the sender inbox it saw bouncing. From there:
 //
 //   1 find the inbox — its workspace, its provider
-//   2 read its last 14 days and judge it on its tier (lib/blocked-inboxes/rules)
+//   2 read its last 7 and 14 days and judge it on the rule (lib/blocked-inboxes/rules)
 //   3 blocked → sending and warmup stopped straight away; a Google inbox is
 //     listed on 🛑 Google Inboxes to Cancel
 //   4 deleted — at once with Auto-delete on, or when someone confirms
@@ -22,7 +22,7 @@
 // What each domain has had done is kept in InboxDomainState, the deletion
 // count among it.
 
-import type { InboxFigures, InboxRates, InboxVerdict } from "@/lib/blocked-inboxes/rules";
+import type { InboxFigures, InboxRates, InboxVerdict, RemovalRule } from "@/lib/blocked-inboxes/rules";
 import type { ProviderBucket } from "@/lib/plusvibe-providers";
 
 export type { InboxFigures, InboxRates, InboxVerdict, ProviderBucket };
@@ -85,18 +85,30 @@ export interface BlockedInboxJob {
   /** What Plusvibe called it: GOOGLE_WORKSPACE, MICROSOFT365, … */
   providerRaw?: string;
 
-  /** The days judged, as the API dates them. */
+  /**
+   * The days judged, as the API dates them. On the OOO / human reply rule
+   * (removalRule set) this is the OOO window; on the older tiers, the one
+   * 14-day window everything was read over.
+   */
   window?: { start: string; end: string };
   figures?: InboxFigures;
   rates?: InboxRates;
   verdict?: InboxVerdict;
-  /** "46+ sends" */
+  /** The OOO / human reply rule it was judged on, as it stood then; absent on the older tiers. */
+  removalRule?: RemovalRule;
+  /** The human reply window and its figures (removal rule). */
+  humanWindow?: { start: string; end: string };
+  humanFigures?: InboxFigures;
+  humanRates?: InboxRates;
+  /** Whether it had been sending long enough; null when that couldn't be read (removal rule). */
+  sendingLongEnough?: boolean | null;
+  /** Older tiers: "46+ sends". Also "tenant blocked" / "domain cancelled" on a cancellation. */
   tier?: string;
-  /** "bounce > 10% or OOO reply rate < 1.5%" */
+  /** The rule it was judged on, in words. */
   rule?: string;
   /** What failed, when blocked. */
   reasons?: string[];
-  /** Set when a human reply rate kept a Google inbox that would be blocked. */
+  /** Why it was kept although part of the rule matched, or why it wasn't judged. */
   overruled?: string;
   /** Earlier judgements, newest first. */
   history?: InboxJudgementRecord[];

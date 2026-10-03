@@ -63,7 +63,23 @@ export function InboxCard({
         <span className="shrink-0 text-xs text-muted-foreground">{relativeTime(job.judgedAt ?? job.createdAt)}</span>
       </div>
 
-      {f && r && (
+      {f && r && job.removalRule && (
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4" data-figures>
+          <Figure label={`Sent · last ${job.removalRule.oooDays} days`} value={formatNumber(f.sent)} sub={`${formatNumber(f.contacted)} leads contacted`} />
+          <Figure label={`OOO reply rate · ${job.removalRule.oooDays} days`} value={`${r.oooReplyRate}%`} sub={`${formatNumber(f.replies + f.oooReplies)} incl. out-of-office`} />
+          <Figure
+            label={`Human reply rate · ${job.removalRule.humanDays} days`}
+            value={job.humanRates ? `${job.humanRates.humanReplyRate}%` : "—"}
+            sub={job.humanFigures ? `${formatNumber(job.humanFigures.replies)} of ${formatNumber(job.humanFigures.contacted)} contacted` : "couldn't be read"}
+          />
+          <Figure
+            label={`Sending ${job.removalRule.minSendingDays}+ days`}
+            value={job.removalRule.minSendingDays === 0 ? "—" : job.sendingLongEnough === true ? "Yes" : job.sendingLongEnough === false ? "No" : "Unknown"}
+            sub={job.removalRule.minSendingDays === 0 ? "not checked" : `sends ${job.removalRule.minSendingDays}+ days ago`}
+          />
+        </div>
+      )}
+      {f && r && !job.removalRule && (
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4" data-figures>
           <Figure label={`Sent · last 14 days`} value={formatNumber(f.sent)} sub={job.tier ?? ""} />
           <Figure label="Bounce rate" value={`${r.bounceRate}%`} sub={`${formatNumber(f.bounces)} bounced of ${formatNumber(f.sent)} sent`} />
@@ -72,7 +88,12 @@ export function InboxCard({
         </div>
       )}
 
-      {job.rule && (
+      {job.rule && job.removalRule && (
+        <p className="mt-2 text-xs text-muted-foreground" data-rule>
+          Rule: removed when the {job.rule}.
+        </p>
+      )}
+      {job.rule && !job.removalRule && (
         <p className="mt-2 text-xs text-muted-foreground" data-rule>
           Rule for {PROVIDER_LABELS[job.provider ?? "other"]} at {job.tier}: blocked when {job.rule}.
         </p>
@@ -119,7 +140,7 @@ export function InboxCard({
       )}
       {job.history && job.history.length > 0 && (
         <p className="mt-1 text-[11px] text-muted-foreground">
-          Judged before: {job.history.map((h) => `${h.verdict} at ${h.sent} sent, ${h.bounceRate}% bounce`).join(" · ")}
+          Judged before: {job.history.map((h) => `${h.verdict} at ${h.sent} sent, ${h.oooReplyRate}% OOO`).join(" · ")}
         </p>
       )}
 

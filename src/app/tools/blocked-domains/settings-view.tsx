@@ -1,77 +1,22 @@
 "use client";
 
 // The Settings tab: how Clay reaches the automation, whether blocked inboxes
-// are deleted without asking, and the rules they are judged on — which can be
+// are deleted without asking, and the rule they are judged on — which can be
 // changed here.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { BlockedDomainsView } from "@/lib/jobs/blocked-domains-types";
-import {
-  DEFAULT_RULES,
-  JUDGE_WINDOW_DAYS,
-  MAX_TIERS,
-  coverageNotes,
-  validateRules,
-  type InboxRules,
-} from "@/lib/blocked-inboxes/rules";
+import { DEFAULT_REMOVAL_RULE, JUDGE_WINDOW_DAYS, MAX_WINDOW_DAYS, validateRemovalRule, type RemovalRule } from "@/lib/blocked-inboxes/rules";
 import { blockedInboxAction, setBlockedDomainSettings } from "@/lib/api-client";
 import { copyToClipboard } from "@/lib/clipboard";
 import { Spinner } from "@/components/ui";
-import { AlertIcon, CheckIcon, ChevronDownIcon, CopyIcon, FireIcon, GaugeIcon, TrashIcon } from "@/components/icons";
+import { AlertIcon, CheckIcon, CopyIcon, FireIcon, GaugeIcon, TrashIcon } from "@/components/icons";
 
-type Side = "microsoft" | "google";
-/**
- * A tier as the form holds it: numbers as typed. Each tier is its own range —
- * `to` empty for "and up", equal to `min` for a single count — and the rows
- * are tried top to bottom.
- */
-interface DraftTier {
-  /** Exactly one send count, a range, or a start and everything above it. */
-  mode: RangeMode;
-  min: string;
-  /** Only read for a range. */
-  to: string;
-  maxBounceRate: string;
-  minOooReplyRate: string;
-  humanReplyOverrule: string;
-}
-type Draft = Record<Side, DraftTier[]>;
-type RangeMode = "exact" | "range" | "up";
-const MODES: { id: RangeMode; label: string }[] = [
-  { id: "exact", label: "Exactly" },
-  { id: "range", label: "From–to" },
-  { id: "up", label: "And up" },
-];
-/** The "to" a tier actually has: its own for a range, "from" when exact, none for "and up". */
-const effectiveTo = (t: DraftTier) => (t.mode === "exact" ? t.min : t.mode === "up" ? "" : t.to);
-
-const str = (n: number | undefined | null) => (n === undefined || n === null ? "" : String(n));
-const draftSide = (tiers: InboxRules["microsoft"]): DraftTier[] =>
-  tiers.map((t) => ({
-    mode: t.max === null ? "up" : t.max === t.min ? "exact" : "range",
-    min: str(t.min),
-    to: str(t.max),
-    maxBounceRate: str(t.maxBounceRate),
-    minOooReplyRate: str(t.minOooReplyRate),
-    humanReplyOverrule: str(t.humanReplyOverrule),
-  }));
-const toDraft = (r: InboxRules): Draft => ({ microsoft: draftSide(r.microsoft), google: draftSide(r.google) });
-/** What is sent: empty optional fields left out, so "not checked" stays that. */
-const fromDraft = (d: Draft) => {
-  const side = (tiers: DraftTier[]) =>
-    tiers.map((t) => ({
-      min: t.min,
-      // Always sent, so the server reads each tier as its own range.
-      // A range with its "to" left empty is still asked for one, not
-      // quietly turned into "and up".
-      max: t.mode === "up" ? null : t.mode === "exact" ? t.min : t.to.trim() === "" ? "missing" : t.to,
-      maxBounceRate: t.maxBounceRate,
-      ...(t.minOooReplyRate.trim() ? { minOooReplyRate: t.minOooReplyRate } : {}),
-      ...(t.humanReplyOverrule.trim() ? { humanReplyOverrule: t.humanReplyOverrule } : {}),
-    }));
-  return { microsoft: side(d.microsoft), google: side(d.google) };
-};
-const same = (a: InboxRules, b: InboxRules) => JSON.stringify(a) === JSON.stringify(b);
+/** The rule as the form holds it: numbers as typed. */
+type RuleDraft = Record<keyof RemovalRule, string>;
+const RULE_KEYS: (keyof RemovalRule)[] = ["oooDays", "maxOooRate", "humanDays", "maxHumanRate", "minSendingDays"];
+const toRuleDraft = (r: RemovalRule): RuleDraft => Object.fromEntries(RULE_KEYS.map((k) => [k, String(r[k])])) as RuleDraft;
+const sameRule = (a: RemovalRule, b: RemovalRule) => RULE_KEYS.every((k) => a[k] === b[k]);
 
 export function SettingsView({
   view,
@@ -82,11 +27,6 @@ export function SettingsView({
   onChanged: () => Promise<void> | void;
   onError: (message: string) => void;
 }) {
-  const saved = view?.settings.inboxRules ?? DEFAULT_RULES;
-  const [draft, setDraft] = useState<Draft>(() => toDraft(saved));
-  const [touched, setTouched] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [savedNote, setSavedNote] = useState(false);
   const [togglingAuto, setTogglingAuto] = useState(false);
   const [copied, setCopied] = useState(false);
   const [checkEmail, setCheckEmail] = useState("");
@@ -95,22 +35,6 @@ export function SettingsView({
   const [blockDomain, setBlockDomain] = useState("");
   const [blocking, setBlocking] = useState(false);
   const [blockNote, setBlockNote] = useState<string | null>(null);
-
-  // Follow what the server holds until someone starts editing.
-  useEffect(() => {
-    if (!touched) setDraft(toDraft(saved));
-  }, [saved, touched]);
-
-  const checked = useMemo(() => validateRules(fromDraft(draft)), [draft]);
-  const notes = useMemo(
-    () =>
-      checked.rules
-        ? { microsoft: coverageNotes(checked.rules.microsoft, "Microsoft"), google: coverageNotes(checked.rules.google, "Google") }
-        : { microsoft: [], google: [] },
-    [checked]
-  );
-  const dirty = !!checked.rules && !same(checked.rules, saved);
-  const isDefault = !!checked.rules && same(checked.rules, DEFAULT_RULES);
 
   const url = typeof window !== "undefined" ? `${window.location.origin}/api/hooks/blocked-domain` : "/api/hooks/blocked-domain";
   const readiness = view?.readiness;
@@ -125,75 +49,6 @@ export function SettingsView({
       ].filter(Boolean as unknown as (v: unknown) => v is string)
     : [];
   const storage = readiness?.jobStorage;
-
-  const change = (side: Side, fn: (tiers: DraftTier[]) => DraftTier[]) => {
-    setTouched(true);
-    setSavedNote(false);
-    setDraft((d) => ({ ...d, [side]: fn(d[side].map((t) => ({ ...t }))) }));
-  };
-  const edit = (side: Side, i: number, key: keyof DraftTier, value: string) =>
-    change(side, (tiers) => {
-      const t = tiers[i];
-      if (key === "mode") {
-        t.mode = value as RangeMode;
-        // Turning a single count into a range starts it as that count to itself.
-        if (t.mode === "range" && t.to.trim() === "") t.to = t.min;
-      } else {
-        t[key] = value;
-      }
-      return tiers;
-    });
-  // A new tier starts where the covered sends end, or empty to fill in; its
-  // rule is copied from the tier it lands below. Move it where it belongs.
-  const addTier = (side: Side) =>
-    change(side, (tiers) => {
-      const last = tiers[tiers.length - 1];
-      // A new tier is one exact send count to fill in, placed at the bottom;
-      // switch it to a range or "and up", and move it where it belongs.
-      return [
-        ...tiers,
-        {
-          mode: "exact",
-          min: "",
-          to: "",
-          maxBounceRate: last?.maxBounceRate ?? "10",
-          minOooReplyRate: last?.minOooReplyRate ?? "",
-          humanReplyOverrule: last?.humanReplyOverrule ?? "",
-        },
-      ];
-    });
-  const removeTier = (side: Side, i: number) => change(side, (tiers) => tiers.filter((_, j) => j !== i));
-  // Moving a tier moves all of it — its range and its rule. Order is what
-  // decides between two tiers that cover the same sends: the higher one wins.
-  const moveTier = (side: Side, i: number, by: -1 | 1) =>
-    change(side, (tiers) => {
-      const j = i + by;
-      if (j < 0 || j >= tiers.length) return tiers;
-      [tiers[i], tiers[j]] = [tiers[j], tiers[i]];
-      return tiers;
-    });
-  const sortTiers = (side: Side) =>
-    change(side, (tiers) =>
-      [...tiers].sort((a, b) => {
-        const num = (v: string, open: number) => (v.trim() === "" || !Number.isFinite(Number(v)) ? open : Number(v));
-        return num(a.min, 0) - num(b.min, 0) || num(effectiveTo(a), Infinity) - num(effectiveTo(b), Infinity);
-      })
-    );
-
-  async function saveRules() {
-    if (!checked.rules) return;
-    setSaving(true);
-    try {
-      await setBlockedDomainSettings({ inboxRules: checked.rules });
-      setTouched(false);
-      setSavedNote(true);
-      await onChanged();
-    } catch (err) {
-      onError(err instanceof Error ? err.message : "Could not save the rules.");
-    } finally {
-      setSaving(false);
-    }
-  }
 
   async function toggleAuto() {
     setTogglingAuto(true);
@@ -246,52 +101,7 @@ export function SettingsView({
 
   return (
     <div className="space-y-5" data-settings>
-      {/* The rules */}
-      <section className="pv-card p-4 sm:p-6" data-rules-editor>
-        <h2 className="text-base font-semibold">The rules</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Each inbox Clay sends is judged on its own last {JUDGE_WINDOW_DAYS} days, on the tier its send count falls in. Bounce
-          rate is over everything sent; reply rates are over unique leads contacted, and the OOO reply rate counts
-          out-of-office replies too. Leave a box empty (“off”) to not check that figure. Each tier is its own range of sends —
-          exactly one number, from–to, or a number and up. Tiers are tried top to bottom and
-          the first that covers an inbox&apos;s sends is used, so a narrow tier above a wide one is an exception to it — ↑ ↓ move a
-          whole tier. Sends no tier covers aren&apos;t judged. An inbox that is neither Microsoft nor Google is left alone. Changes
-          apply to inboxes judged from now on.
-        </p>
-        <TierTable side="microsoft" title="Microsoft (Azure)" tiers={draft.microsoft} notes={notes.microsoft} onEdit={edit} onAdd={addTier} onRemove={removeTier} onMove={moveTier} onSort={sortTiers} />
-        <TierTable side="google" title="Google" tiers={draft.google} notes={notes.google} onEdit={edit} onAdd={addTier} onRemove={removeTier} onMove={moveTier} onSort={sortTiers} />
-
-        {checked.problems.length > 0 && (
-          <ul className="mt-4 space-y-1 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning" data-problems>
-            {checked.problems.map((p) => (
-              <li key={p} className="flex gap-2">
-                <AlertIcon size={14} className="mt-0.5 shrink-0" /> {p}
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <button type="button" className="pv-btn-primary disabled:opacity-50" data-save-rules disabled={!dirty || saving} onClick={saveRules}>
-            {saving ? <Spinner size={14} /> : null} Save rules
-          </button>
-          <button
-            type="button"
-            className="pv-btn-ghost disabled:opacity-50"
-            data-reset-rules
-            disabled={isDefault}
-            onClick={() => {
-              setTouched(true);
-              setSavedNote(false);
-              setDraft(toDraft(DEFAULT_RULES));
-            }}
-          >
-            Reset to defaults
-          </button>
-          <span className="text-xs text-muted-foreground" data-rules-state>
-            {savedNote ? "Saved — inboxes are judged on these from now on." : dirty ? "Unsaved changes." : isDefault ? "Using the defaults." : "Saved."}
-          </span>
-        </div>
-      </section>
+      <RuleEditor view={view} onChanged={onChanged} onError={onError} />
 
       <DomainEndings view={view} onChanged={onChanged} onError={onError} />
 
@@ -428,6 +238,146 @@ export function SettingsView({
         )}
       </section>
     </div>
+  );
+}
+
+/**
+ * The one rule every inbox Clay sends is judged on, Microsoft and Google
+ * alike: no replies of any kind over the OOO window, or out-of-office replies
+ * but no human ones over the human window once it has been sending long enough.
+ */
+function RuleEditor({
+  view,
+  onChanged,
+  onError,
+}: {
+  view: BlockedDomainsView | null;
+  onChanged: () => Promise<void> | void;
+  onError: (message: string) => void;
+}) {
+  const saved = view?.settings.removalRule ?? DEFAULT_REMOVAL_RULE;
+  const [draft, setDraft] = useState<RuleDraft>(() => toRuleDraft(saved));
+  const [touched, setTouched] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedNote, setSavedNote] = useState(false);
+
+  // Follow what the server holds until someone starts editing.
+  useEffect(() => {
+    if (!touched) setDraft(toRuleDraft(saved));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(saved), touched]);
+
+  const checked = validateRemovalRule(draft);
+  const dirty = !!checked.rule && !sameRule(checked.rule, saved);
+  const isDefault = !!checked.rule && sameRule(checked.rule, DEFAULT_REMOVAL_RULE);
+  const set = (k: keyof RemovalRule, v: string) => {
+    setTouched(true);
+    setSavedNote(false);
+    setDraft((d) => ({ ...d, [k]: v }));
+  };
+  const field = (k: keyof RemovalRule, label: string, kind: "days" | "pct") => (
+    <input
+      type="number"
+      inputMode={kind === "days" ? "numeric" : "decimal"}
+      min={kind === "days" ? (k === "minSendingDays" ? 0 : 1) : 0}
+      max={kind === "days" ? MAX_WINDOW_DAYS : 100}
+      step={kind === "days" ? 1 : 0.1}
+      className="pv-input mx-1 inline-block w-16 py-1 text-center text-xs tabular-nums"
+      value={draft[k]}
+      aria-label={label}
+      data-rule-field={k}
+      onChange={(e) => set(k, e.target.value)}
+    />
+  );
+  const d = checked.rule ?? DEFAULT_REMOVAL_RULE;
+
+  async function save() {
+    if (!checked.rule) return;
+    setSaving(true);
+    try {
+      await setBlockedDomainSettings({ removalRule: checked.rule });
+      setTouched(false);
+      setSavedNote(true);
+      await onChanged();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Could not save the rule.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="pv-card p-4 sm:p-6" data-rules-editor>
+      <h2 className="text-base font-semibold">The rule</h2>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Every inbox Clay sends is judged on its own figures — the same rule for Microsoft (Azure) and Google. Reply rates are
+        over unique leads contacted; the OOO reply rate counts out-of-office replies as well as people&apos;s. An inbox that
+        is neither Microsoft nor Google is left alone. Changes apply to inboxes judged from now on.
+      </p>
+
+      <ol className="mt-4 space-y-3 text-sm">
+        <li className="rounded-xl border border-border p-3" data-rule-one>
+          <div className="text-xs font-medium text-muted-foreground">1 · No replies at all</div>
+          <div className="mt-1.5 leading-8">
+            Removed when its OOO reply rate over the last
+            {field("oooDays", "OOO window in days", "days")}
+            days is at or under
+            {field("maxOooRate", "Highest OOO reply rate that removes an inbox", "pct")}%.
+          </div>
+        </li>
+        <li className="rounded-xl border border-border p-3" data-rule-two>
+          <div className="text-xs font-medium text-muted-foreground">2 · Out-of-office replies, but nobody answers</div>
+          <div className="mt-1.5 leading-8">
+            Otherwise, removed when its human reply rate over the last
+            {field("humanDays", "Human reply window in days", "days")}
+            days is at or under
+            {field("maxHumanRate", "Highest human reply rate that removes an inbox", "pct")}% — once it has been sending for at least
+            {field("minSendingDays", "Days it must have been sending", "days")}
+            days.
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            &ldquo;Sending for at least {d.minSendingDays} days&rdquo; means it had campaign sends {d.minSendingDays} or more days ago — the
+            date it was added to Plusvibe would count its warmup too. When that, or its human reply rate, can&apos;t be read,
+            it is kept.
+          </p>
+        </li>
+      </ol>
+      <p className="mt-3 text-xs text-muted-foreground">
+        An inbox that sent nothing in the last {d.oooDays} days has no OOO reply rate, so it isn&apos;t judged. There is no
+        minimum number of sends and no bounce check.
+      </p>
+
+      {checked.problems.length > 0 && (
+        <ul className="mt-4 space-y-1 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning" data-problems>
+          {checked.problems.map((p) => (
+            <li key={p} className="flex gap-2">
+              <AlertIcon size={14} className="mt-0.5 shrink-0" /> {p}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <button type="button" className="pv-btn-primary disabled:opacity-50" data-save-rules disabled={!dirty || saving} onClick={save}>
+          {saving ? <Spinner size={14} /> : null} Save rule
+        </button>
+        <button
+          type="button"
+          className="pv-btn-ghost disabled:opacity-50"
+          data-reset-rules
+          disabled={isDefault || saving}
+          onClick={() => {
+            setTouched(true);
+            setSavedNote(false);
+            setDraft(toRuleDraft(DEFAULT_REMOVAL_RULE));
+          }}
+        >
+          Reset to defaults
+        </button>
+        <span className="text-xs text-muted-foreground" data-rules-state>
+          {savedNote ? "Saved — inboxes are judged on this from now on." : dirty ? "Unsaved changes." : isDefault ? "Using the defaults." : checked.rule ? "Saved." : ""}
+        </span>
+      </div>
+    </section>
   );
 }
 
@@ -581,146 +531,3 @@ function DomainEndings({
     </section>
   );
 }
-
-function TierTable({
-  side,
-  title,
-  tiers,
-  onEdit,
-  onAdd,
-  onRemove,
-  onMove,
-  onSort,
-  notes,
-}: {
-  side: Side;
-  title: string;
-  tiers: DraftTier[];
-  notes: string[];
-  onSort: (side: Side) => void;
-  onEdit: (side: Side, i: number, key: keyof DraftTier, value: string) => void;
-  onAdd: (side: Side) => void;
-  onRemove: (side: Side, i: number) => void;
-  onMove: (side: Side, i: number, by: -1 | 1) => void;
-}) {
-  const num = (i: number, key: keyof DraftTier, label: string, suffix: string, placeholder = "") => (
-    <span className="inline-flex items-center gap-1">
-      <input
-        type="number"
-        inputMode="decimal"
-        min={0}
-        max={key === "min" || key === "to" ? undefined : 100}
-        step={key === "min" || key === "to" ? 1 : 0.1}
-        className={`pv-input ${key === "to" ? "w-24" : "w-20"} py-1 text-xs tabular-nums`}
-        value={tiers[i][key]}
-        placeholder={placeholder}
-        aria-label={`${title} tier ${i + 1}: ${label}`}
-        data-tier={`${side}-${i}-${key}`}
-        onChange={(e) => onEdit(side, i, key, e.target.value)}
-      />
-      <span className="text-muted-foreground">{suffix}</span>
-    </span>
-  );
-
-  return (
-    <div className="mt-5" data-tier-table={side}>
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <span className="flex items-center gap-3">
-          <button type="button" className="text-xs text-muted-foreground underline disabled:opacity-50" data-sort-tiers={side} disabled={tiers.length < 2} onClick={() => onSort(side)}>
-            Sort by sends
-          </button>
-          <button type="button" className="text-xs text-muted-foreground underline disabled:opacity-50" data-add-tier={side} disabled={tiers.length >= MAX_TIERS} onClick={() => onAdd(side)}>
-            Add a tier
-          </button>
-        </span>
-      </div>
-      <div className="mt-2 overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="text-left text-muted-foreground">
-              <th className="pb-2 pr-3 font-medium">Sends in the window</th>
-              <th className="pb-2 pr-3 font-medium">Blocked when bounce is over</th>
-              <th className="pb-2 pr-3 font-medium">…or OOO reply rate is under</th>
-              <th className="pb-2 pr-3 font-medium">Kept anyway when human reply rate is over</th>
-              <th className="pb-2" />
-            </tr>
-          </thead>
-          <tbody>
-            {tiers.map((t, i) => (
-              <tr key={i} className="border-t border-border align-middle">
-                <td className="whitespace-nowrap py-2 pr-3">
-                  <span className="inline-flex items-center gap-1.5">
-                    <select
-                      className="pv-input w-24 py-1 text-xs"
-                      value={t.mode}
-                      aria-label={`${title} tier ${i + 1}: kind of range`}
-                      data-tier-mode={`${side}-${i}`}
-                      onChange={(e) => onEdit(side, i, "mode", e.target.value)}
-                    >
-                      {MODES.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </select>
-                    {num(i, "min", t.mode === "exact" ? "sends" : "from sends", "", t.mode === "exact" ? "sends" : "from")}
-                    {t.mode === "range" && (
-                      <>
-                        <span className="text-muted-foreground">to</span>
-                        {num(i, "to", "to sends", "", "to")}
-                      </>
-                    )}
-                    {t.mode === "up" && <span className="text-muted-foreground">and up</span>}
-                  </span>
-                </td>
-                <td className="py-2 pr-3">{num(i, "maxBounceRate", "bounce over", "%")}</td>
-                <td className="py-2 pr-3">{num(i, "minOooReplyRate", "OOO reply rate under", "%", "off")}</td>
-                <td className="py-2 pr-3">{num(i, "humanReplyOverrule", "human reply rate over", "%", "off")}</td>
-                <td className="whitespace-nowrap py-2 text-right">
-                  <span className="inline-flex items-center gap-2">
-                    <button
-                      type="button"
-                      className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-                      aria-label={`Move ${title} tier ${i + 1} up`}
-                      title="Move this tier up: it is tried before the ones below it"
-                      data-move-up={`${side}-${i}`}
-                      disabled={i === 0}
-                      onClick={() => onMove(side, i, -1)}
-                    >
-                      <ChevronDownIcon size={14} className="rotate-180" />
-                    </button>
-                    <button
-                      type="button"
-                      className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-                      aria-label={`Move ${title} tier ${i + 1} down`}
-                      title="Move this tier down"
-                      data-move-down={`${side}-${i}`}
-                      disabled={i === tiers.length - 1}
-                      onClick={() => onMove(side, i, 1)}
-                    >
-                      <ChevronDownIcon size={14} />
-                    </button>
-                    {tiers.length > 1 && (
-                      <button type="button" className="text-muted-foreground hover:text-danger" aria-label={`Remove ${title} tier ${i + 1}`} onClick={() => onRemove(side, i)}>
-                        <TrashIcon size={14} />
-                      </button>
-                    )}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {notes.length > 0 && (
-        <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground" data-tier-notes={side}>
-          {notes.map((n) => (
-            <li key={n}>· {n}</li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-

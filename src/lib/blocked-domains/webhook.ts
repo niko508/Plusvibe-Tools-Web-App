@@ -9,7 +9,7 @@ import type { BlockedInboxJob } from "@/lib/jobs/blocked-inboxes-types";
 //
 // Called when a bounce shows one of our sender inboxes may be blocked.
 // Body: { email, bounceReason?, source? } — the SENDER inbox, which is judged
-// on its own last 14 days. (It used to take a domain; a body with only a
+// on its own reply rates. (It used to take a domain; a body with only a
 // domain is refused with a message saying what to send instead.)
 //
 // Authenticated with a shared secret rather than the Plusvibe key: Clay should

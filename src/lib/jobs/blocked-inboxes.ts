@@ -28,7 +28,7 @@ import { deleteInbox, fetchInboxStats, listInboxes, listWorkspaces, quarantineIn
 import type { Workspace } from "@/lib/plusvibe-types";
 import { loadSettings } from "@/lib/blocked-domains/settings";
 import { lookupRegistrar } from "@/lib/blocked-domains/registrar";
-import { JUDGE_WINDOW_DAYS, describeRule, describeTier, judgeInbox, ratesOf } from "@/lib/blocked-inboxes/rules";
+import { JUDGE_WINDOW_DAYS, describeRemovalRule, judgeInbox, ratesOf, type InboxFigures } from "@/lib/blocked-inboxes/rules";
 import { isLastOnDomain, planCancellation, shouldCancel } from "@/lib/blocked-inboxes/domain-endings";
 import { bucketOf } from "@/lib/plusvibe-providers";
 import { daysAgo, toApiDate } from "@/lib/format";
@@ -120,6 +120,9 @@ function serverApiKey(): string | null {
 }
 
 // --- Persistence -----------------------------------------------------------
+
+/** How far back "was it sending before the last N days" looks. */
+const SENDING_LOOKBACK_DAYS = 120;
 
 const fileFor = (id: string) => path.join(RECORDS_DIR, `${id}.json`);
 
@@ -396,6 +399,9 @@ export async function intakeInbox(args: { email: unknown; bounceReason?: string;
     rec.errors = [];
     rec.overruled = undefined;
     rec.reasons = undefined;
+    rec.humanFigures = undefined;
+    rec.humanRates = undefined;
+    rec.sendingLongEnough = undefined;
     rec.updatedAt = now;
     if (args.bounceReason) rec.bounceReason = args.bounceReason.slice(0, 500);
   } else {
@@ -583,32 +589,59 @@ async function runInbox(id: string) {
     if (!rec.domainHost && !rec.registrar) rec.registrar = (await registrarOf(rec.domain)) ?? undefined;
     await persist(id);
 
-    // 2. Its last 14 days.
-    const window = { start: toApiDate(daysAgo(JUDGE_WINDOW_DAYS - 1)), end: toApiDate(new Date()) };
+    // 2. Its figures, on the rule as saved on the Settings tab: the OOO
+    //    window, the human reply window, and whether it was already sending
+    //    before the last N days.
+    const settings = await loadSettings();
+    const rule = settings.removalRule;
+    const lastDays = (n: number) => ({ start: toApiDate(daysAgo(n - 1)), end: toApiDate(new Date()) });
+    const read = async (range: { start: string; end: string }) => {
+      const { rows, errors } = await fetchInboxStats(apiKey, found.workspaceId, [found.inbox], range);
+      const row = rows.find((r) => r.id === found.inbox.id || r.email === rec.email) ?? rows[0];
+      const figures: InboxFigures | null = row
+        ? { sent: row.sent, bounces: row.bounces ?? 0, contacted: row.contacted, replies: row.replies, oooReplies: row.oooReplies }
+        : null;
+      return { figures, errors };
+    };
+    const window = lastDays(rule.oooDays);
     rec.window = window;
-    const { rows, errors } = await fetchInboxStats(apiKey, found.workspaceId, [found.inbox], window);
-    const row = rows.find((r) => r.id === found.inbox.id || r.email === rec.email) ?? rows[0];
-    if (!row) {
+    const ooo = await read(window);
+    if (!ooo.figures) {
       // Deleting on no figures would be deleting on a guess.
       rec.status = "error";
       rec.judgedAt = Date.now();
-      for (const e of errors) pushError(rec, e);
-      pushError(rec, `Could not read ${rec.email}'s last ${JUDGE_WINDOW_DAYS} days, so it was not judged and nothing was done.`);
+      for (const e of ooo.errors) pushError(rec, e);
+      pushError(rec, `Could not read ${rec.email}'s last ${rule.oooDays} days, so it was not judged and nothing was done.`);
       rec.updatedAt = Date.now();
       await persist(id);
       return;
     }
-    rec.figures = { sent: row.sent, bounces: row.bounces ?? 0, contacted: row.contacted, replies: row.replies, oooReplies: row.oooReplies };
+    rec.figures = ooo.figures;
+    // The human reply window, unless it is the same days.
+    const humanWindow = lastDays(rule.humanDays);
+    const human = rule.humanDays === rule.oooDays ? ooo : await read(humanWindow);
+    // Sending long enough: any sends in the 120 days before the last N. No
+    // figures there with no error means nothing was sent; an error means it
+    // can't be told — and either way the inbox is kept on that half of the rule.
+    let sendingLongEnough: boolean | null = true;
+    if (rule.minSendingDays > 0) {
+      const before = await read({ start: toApiDate(daysAgo(rule.minSendingDays + SENDING_LOOKBACK_DAYS)), end: toApiDate(daysAgo(rule.minSendingDays)) });
+      sendingLongEnough = before.figures ? before.figures.sent > 0 : before.errors.length > 0 ? null : false;
+    }
 
-    // 3. Judge it, on the rules as saved on the Settings tab.
-    const settings = await loadSettings();
-    const j = judgeInbox(rec.provider, rec.figures, settings.inboxRules);
+    // 3. Judge it.
+    const j = judgeInbox(rec.provider, { ooo: ooo.figures, human: human.figures, sendingLongEnough }, rule);
+    rec.removalRule = { ...rule };
     rec.rates = j.rates;
+    rec.humanWindow = humanWindow;
+    rec.humanFigures = human.figures ?? undefined;
+    rec.humanRates = j.humanRates;
+    rec.sendingLongEnough = rule.minSendingDays > 0 ? sendingLongEnough : undefined;
     rec.verdict = j.verdict;
-    rec.tier = j.tier ? describeTier(j.tier) : undefined;
-    rec.rule = j.tier ? describeRule(j.tier) : undefined;
+    rec.tier = undefined;
+    rec.rule = describeRemovalRule(rule);
     rec.reasons = j.reasons;
-    rec.overruled = j.overruled ?? j.notJudged;
+    rec.overruled = j.kept ?? j.notJudged;
     rec.judgedAt = Date.now();
     if (j.verdict !== "block") {
       rec.status = j.verdict === "untouched" ? "untouched" : "passed";

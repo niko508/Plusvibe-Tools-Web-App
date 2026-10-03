@@ -1,38 +1,23 @@
-// Judging one sender inbox on its last 14 days.
+// Judging one sender inbox Clay sent.
 //
-// Blocked Domains used to act on whole domains, and a flagged domain turned
-// out not to mean much: plenty kept replying. So the automation now takes the
-// one inbox Clay saw bouncing, reads that inbox's own last 14 days, and blocks
-// it only if its own figures say so.
+// The same rule for Microsoft (Azure) and Google. An inbox is removed when:
 //
-// The bar depends on how much the inbox has sent: a handful of sends proves
-// little, so a small sender is blocked only when nearly everything bounced,
-// and the bar tightens as the volume grows.
+//   1. its OOO reply rate over the last 7 days is 0%, or
+//   2. its OOO reply rate is above that, but its human reply rate over the
+//      last 14 days is 0% — and it has been sending for at least 14 days.
 //
-//   Bounce rate        bounces ÷ everything sent
 //   Human reply rate   replies ÷ unique leads contacted
 //   OOO reply rate     (replies + out-of-office) ÷ unique leads contacted
 //
-// Microsoft (Azure)            Google
-//   under 15   bounce > 75%      under 15   bounce > 75%
-//   15–29      bounce > 50%      15–49      bounce > 50%
-//   30–45      bounce > 25%      50–100     bounce > 10% or OOO < 2%
-//   46+        bounce > 10%      101+       bounce > 5%  or OOO < 2%
-//              or OOO < 1.5%
+// "Sending for at least 14 days" is read off the inbox's own sends: it had
+// campaign sends 14 or more days ago. The date it was added to Plusvibe would
+// count its warmup too. An inbox that sent nothing in the last 7 days has no
+// OOO reply rate, so it isn't judged. Any other kind of inbox is recorded and
+// never touched.
 //
-// For Google on the two top tiers, a human reply rate above 1% overrules: an
-// inbox people are actually answering stays, whatever else its figures say.
-// Any other kind of inbox is recorded and never touched.
-//
-// Those are the defaults. The tiers are edited on the tool's Settings tab and
-// stored with its other settings; validateRules is what stands between that
-// form and the rules an inbox is deleted on.
-//
-// Each tier is its own range of sends — "from" to "to", open-ended when "to"
-// is empty, a single count when they are equal — and the list is read top to
-// bottom: the first tier whose range holds an inbox's sends is the one it is
-// judged on. So a narrow tier above a wide one carves an exception out of it,
-// and a send count no tier covers isn't judged at all.
+// The numbers — both windows, both rates, the 14 days — are the defaults;
+// they are edited on the tool's Settings tab, and validateRemovalRule is what
+// stands between that form and the rule an inbox is deleted on.
 //
 // Pure module — no API — so all of it is unit-tested.
 
@@ -56,169 +41,90 @@ export interface InboxRates {
 }
 
 export type InboxVerdict =
-  /** Fails its tier: stopped, then deleted (or waiting to be). */
+  /** Fails the rule: stopped, then deleted (or waiting to be). */
   | "block"
-  /** Within its tier. Nothing is done. */
+  /** Within the rule, or not judged. Nothing is done. */
   | "pass"
   /** Neither Microsoft nor Google: recorded, never touched. */
   | "untouched";
 
-export interface Tier {
-  /** Inclusive send range. `max` null means no upper end. */
-  min: number;
-  max: number | null;
-  /** Blocked when the bounce rate is ABOVE this. */
-  maxBounceRate: number;
-  /** Blocked when the OOO reply rate is BELOW this. Absent: not checked. */
-  minOooReplyRate?: number;
-  /** Not blocked, whatever else, when the human reply rate is ABOVE this. */
-  humanReplyOverrule?: number;
+export interface RemovalRule {
+  /** The OOO reply rate is read over this many days, today included. */
+  oooDays: number;
+  /** Removed when the OOO reply rate is at or under this, in %. */
+  maxOooRate: number;
+  /** The human reply rate is read over this many days. */
+  humanDays: number;
+  /** …and removed when the human reply rate is at or under this, in %… */
+  maxHumanRate: number;
+  /** …once it has been sending for at least this many days. */
+  minSendingDays: number;
 }
 
-export interface InboxRules {
-  microsoft: Tier[];
-  google: Tier[];
-}
+export const DEFAULT_REMOVAL_RULE: RemovalRule = { oooDays: 7, maxOooRate: 0, humanDays: 14, maxHumanRate: 0, minSendingDays: 14 };
 
-export const MICROSOFT_TIERS: Tier[] = [
-  { min: 0, max: 14, maxBounceRate: 75 },
-  { min: 15, max: 29, maxBounceRate: 50 },
-  { min: 30, max: 45, maxBounceRate: 25 },
-  { min: 46, max: null, maxBounceRate: 10, minOooReplyRate: 1.5 },
-];
-
-export const GOOGLE_TIERS: Tier[] = [
-  { min: 0, max: 14, maxBounceRate: 75 },
-  { min: 15, max: 49, maxBounceRate: 50 },
-  { min: 50, max: 100, maxBounceRate: 10, minOooReplyRate: 2, humanReplyOverrule: 1 },
-  { min: 101, max: null, maxBounceRate: 5, minOooReplyRate: 2, humanReplyOverrule: 1 },
-];
-
-export const DEFAULT_RULES: InboxRules = { microsoft: MICROSOFT_TIERS, google: GOOGLE_TIERS };
-
+/** The window a Microsoft domain's remaining inboxes are judged on when it is cancelled. */
 export const JUDGE_WINDOW_DAYS = 14;
-export const MAX_TIERS = 8;
+export const MAX_WINDOW_DAYS = 90;
 
-const isPct = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 100;
 const asNum = (v: unknown): number | undefined =>
   v === undefined || v === null || v === "" ? undefined : typeof v === "number" ? v : Number(v);
+const isPct = (n: number | undefined): n is number => n !== undefined && Number.isFinite(n) && n >= 0 && n <= 100;
+const isDays = (n: number | undefined, min: number): n is number => n !== undefined && Number.isInteger(n) && n >= min && n <= MAX_WINDOW_DAYS;
 
-/**
- * Checks a set of tiers from the Settings form. Each tier is a range of sends:
- * a whole-number "from", and a "to" at or above it — or none, for "and up".
- * Their order is kept: it is the order they are tried in. Every problem is
- * named; nothing half-valid is ever saved.
- *
- * A list with no "to" anywhere is the older shape, where each tier ran up to
- * the next one's start: it is read that way, sorted by start.
- */
-export function validateRules(input: unknown): { rules: InboxRules | null; problems: string[] } {
+/** Checks the rule from the Settings form. Every problem is named; nothing half-valid is saved. */
+export function validateRemovalRule(input: unknown): { rule: RemovalRule | null; problems: string[] } {
   const src = (input ?? {}) as Record<string, unknown>;
   const problems: string[] = [];
-  const side = (key: "microsoft" | "google", label: string): Tier[] => {
-    const raw = Array.isArray(src[key]) ? (src[key] as Record<string, unknown>[]) : [];
-    if (raw.length === 0) {
-      problems.push(`${label}: add at least one tier.`);
-      return [];
-    }
-    if (raw.length > MAX_TIERS) problems.push(`${label}: at most ${MAX_TIERS} tiers.`);
-    const legacy = raw.every((t) => t && typeof t === "object" && !("max" in t));
-    const tiers: Tier[] = [];
-    raw.forEach((t, i) => {
-      const n = i + 1;
-      const min = asNum(t.min) ?? (i === 0 && legacy ? 0 : undefined);
-      if (min === undefined || !Number.isInteger(min) || min < 0) problems.push(`${label} tier ${n}: "from" must be a whole number of sends.`);
-      const max = legacy ? null : asNum(t.max);
-      if (max !== undefined && max !== null && (!Number.isInteger(max) || max < 0)) {
-        problems.push(`${label} tier ${n}: "to" must be a whole number of sends.`);
-      } else if (max !== undefined && max !== null && min !== undefined && max < min) {
-        problems.push(`${label} tier ${n}: "to" (${max}) is below "from" (${min}).`);
-      }
-      const bounce = asNum(t.maxBounceRate);
-      if (!isPct(bounce)) problems.push(`${label} tier ${n}: the bounce rate must be a percentage from 0 to 100.`);
-      const ooo = asNum(t.minOooReplyRate);
-      if (ooo !== undefined && !isPct(ooo)) problems.push(`${label} tier ${n}: the OOO reply rate must be a percentage from 0 to 100, or empty.`);
-      const human = asNum(t.humanReplyOverrule);
-      if (human !== undefined && !isPct(human)) problems.push(`${label} tier ${n}: the human reply rate must be a percentage from 0 to 100, or empty.`);
-      tiers.push({
-        min: min ?? 0,
-        max: max ?? null,
-        maxBounceRate: bounce ?? 0,
-        ...(ooo !== undefined ? { minOooReplyRate: ooo } : {}),
-        ...(human !== undefined ? { humanReplyOverrule: human } : {}),
-      });
-    });
-    if (legacy) {
-      tiers.sort((a, b) => a.min - b.min);
-      for (let i = 0; i < tiers.length - 1; i++) {
-        if (tiers[i + 1].min === tiers[i].min) problems.push(`${label}: two tiers start at ${tiers[i].min} sends.`);
-        tiers[i].max = Math.max(tiers[i].min, tiers[i + 1].min - 1);
-      }
-    }
-    return tiers;
-  };
-  const rules = { microsoft: side("microsoft", "Microsoft"), google: side("google", "Google") };
-  return problems.length > 0 ? { rules: null, problems } : { rules, problems };
+  const oooDays = asNum(src.oooDays);
+  const maxOooRate = asNum(src.maxOooRate);
+  const humanDays = asNum(src.humanDays);
+  const maxHumanRate = asNum(src.maxHumanRate);
+  const minSendingDays = asNum(src.minSendingDays);
+  if (!isDays(oooDays, 1)) problems.push(`The OOO window must be a whole number of days from 1 to ${MAX_WINDOW_DAYS}.`);
+  if (!isPct(maxOooRate)) problems.push("The OOO reply rate must be a percentage from 0 to 100.");
+  if (!isDays(humanDays, 1)) problems.push(`The human reply window must be a whole number of days from 1 to ${MAX_WINDOW_DAYS}.`);
+  if (!isPct(maxHumanRate)) problems.push("The human reply rate must be a percentage from 0 to 100.");
+  if (!isDays(minSendingDays, 0)) problems.push(`How long it has been sending must be a whole number of days from 0 to ${MAX_WINDOW_DAYS}.`);
+  if (problems.length > 0) return { rule: null, problems };
+  return { rule: { oooDays: oooDays!, maxOooRate: maxOooRate!, humanDays: humanDays!, maxHumanRate: maxHumanRate!, minSendingDays: minSendingDays! }, problems };
 }
 
-const inTier = (t: Tier, sent: number) => sent >= t.min && (t.max === null || sent <= t.max);
-const rangeText = (a: number, b: number | null) => (b === null ? `${a}+` : a === b ? `${a}` : `${a}–${b}`);
-
-/**
- * What the form should point out about a valid set: send counts two tiers
- * both cover (the higher one is used), tiers nothing ever reaches, and send
- * counts no tier covers. None of these is wrong — they are how exceptions and
- * "don't judge" are made — but each should be meant.
- */
-export function coverageNotes(tiers: Tier[], label: string): string[] {
-  const notes: string[] = [];
-  tiers.forEach((t, i) => {
-    const above = tiers.slice(0, i);
-    // Every send count of t already taken by a single tier above it?
-    const hidden = above.some((a) => a.min <= t.min && (a.max === null || (t.max !== null && a.max >= t.max)));
-    if (hidden) {
-      notes.push(`${label} tier ${i + 1} (${rangeText(t.min, t.max)} sends) is never used: a tier above it covers all of its sends.`);
-      return;
-    }
-    const clash = above.findIndex((a) => a.min <= (t.max ?? Infinity) && t.min <= (a.max ?? Infinity));
-    if (clash >= 0) {
-      const a = above[clash];
-      const lo = Math.max(a.min, t.min);
-      const hi = a.max === null ? t.max : t.max === null ? a.max : Math.min(a.max, t.max);
-      notes.push(`${label} tiers ${clash + 1} and ${i + 1} both cover ${rangeText(lo, hi)} sends: tier ${clash + 1}, being higher, is used there.`);
-    }
-  });
-  // Gaps: walk the ranges in order of their start.
-  const ranges = [...tiers].sort((a, b) => a.min - b.min);
-  let next = 0;
-  for (const r of ranges) {
-    if (r.min > next) {
-      const one = r.min - 1 === next;
-      notes.push(`${label}: ${rangeText(next, r.min - 1)} sends ${one ? "isn't" : "aren't"} covered by any tier, so ${one ? "that inbox isn't" : "those inboxes aren't"} judged.`);
-    }
-    if (r.max === null) return notes;
-    next = Math.max(next, r.max + 1);
-  }
-  notes.push(`${label}: ${next}+ sends aren't covered by any tier, so those inboxes aren't judged.`);
-  return notes;
+/** The rule read back from disk: anything unreadable falls back to the defaults, whole. */
+export function normalizeRemovalRule(input: unknown): RemovalRule {
+  return validateRemovalRule(input).rule ?? DEFAULT_REMOVAL_RULE;
 }
 
-/** Rules read back from disk: anything unreadable falls back to the defaults, whole. */
-export function normalizeRules(input: unknown): InboxRules {
-  return validateRules(input).rules ?? DEFAULT_RULES;
+const atOrUnder = (rate: number) => (rate === 0 ? "is 0%" : `is ${rate}% or less`);
+const days = (n: number) => `${n} day${n === 1 ? "" : "s"}`;
+
+/** The rule in one sentence: "OOO reply rate over the last 7 days is 0%, or …". */
+export function describeRemovalRule(r: RemovalRule): string {
+  const age = r.minSendingDays > 0 ? ` and it has been sending for ${days(r.minSendingDays)} or more` : "";
+  return `OOO reply rate over the last ${days(r.oooDays)} ${atOrUnder(r.maxOooRate)}, or it is above that but the human reply rate over the last ${days(r.humanDays)} ${atOrUnder(r.maxHumanRate)}${age}`;
+}
+
+export interface JudgeInput {
+  /** Over the OOO window. */
+  ooo: InboxFigures;
+  /** Over the human reply window; null when it couldn't be read. */
+  human: InboxFigures | null;
+  /** Whether it has been sending long enough; null when that couldn't be told. */
+  sendingLongEnough: boolean | null;
 }
 
 export interface Judgement {
   verdict: InboxVerdict;
   provider: ProviderBucket;
+  /** Over the OOO window. */
   rates: InboxRates;
-  /** The tier the inbox was judged on; absent when untouched. */
-  tier?: Tier;
-  /** What failed, in words: "bounce rate 62% is over 50%". Empty on a pass. */
+  /** Over the human reply window, when read. */
+  humanRates?: InboxRates;
+  /** What failed, in words. Empty on a pass. */
   reasons: string[];
-  /** Set when the human reply rate kept an inbox that would otherwise be blocked. */
-  overruled?: string;
-  /** Set when it sent fewer than the first tier starts at, so it wasn't judged. */
+  /** Why an inbox the second rule nearly caught is kept. */
+  kept?: string;
+  /** Set when it wasn't judged at all. */
   notJudged?: string;
 }
 
@@ -237,61 +143,37 @@ export function ratesOf(f: InboxFigures): InboxRates {
   };
 }
 
-/** The first tier, top to bottom, whose range holds this many sends. */
-export function tierFor(provider: ProviderBucket, sent: number, rules: InboxRules = DEFAULT_RULES): Tier | undefined {
-  const tiers = provider === "google" ? rules.google : provider === "microsoft" ? rules.microsoft : [];
-  return tiers.find((t) => inTier(t, sent));
-}
+export function judgeInbox(provider: ProviderBucket, input: JudgeInput, rule: RemovalRule = DEFAULT_REMOVAL_RULE): Judgement {
+  const rates = ratesOf(input.ooo);
+  const humanRates = input.human ? ratesOf(input.human) : undefined;
+  const base = { provider, rates, ...(humanRates ? { humanRates } : {}) };
+  if (provider !== "google" && provider !== "microsoft") return { verdict: "untouched", ...base, reasons: [] };
+  if (input.ooo.sent === 0) {
+    return { verdict: "pass", ...base, reasons: [], notJudged: `it sent nothing in the last ${days(rule.oooDays)}, so there is no OOO reply rate to judge` };
+  }
 
-/** "15–29 sends", "46+ sends", "under 15 sends", "exactly 10 sends" */
-export function describeTier(t: Tier): string {
-  if (t.min === 0 && t.max === null) return "any number of sends";
-  if (t.max === t.min) return `exactly ${t.min} send${t.min === 1 ? "" : "s"}`;
-  if (t.min === 0 && t.max !== null) return `under ${t.max + 1} sends`;
-  if (t.max === null) return `${t.min}+ sends`;
-  return `${t.min}–${t.max} sends`;
-}
+  // 1. No replies of any kind.
+  if (rates.oooReplyRate <= rule.maxOooRate) {
+    return { verdict: "block", ...base, reasons: [`OOO reply rate over the last ${days(rule.oooDays)} ${rule.maxOooRate === 0 ? "is 0%" : `is ${rates.oooReplyRate}%, at or under ${rule.maxOooRate}%`}`] };
+  }
 
-/** "bounce > 10% or OOO reply rate < 2% · human reply rate > 1% overrules" */
-export function describeRule(t: Tier): string {
-  const parts = [`bounce > ${t.maxBounceRate}%`];
-  if (t.minOooReplyRate !== undefined) parts.push(`OOO reply rate < ${t.minOooReplyRate}%`);
-  const rule = parts.join(" or ");
-  return t.humanReplyOverrule !== undefined ? `${rule} · human reply rate > ${t.humanReplyOverrule}% overrules` : rule;
-}
-
-export function judgeInbox(provider: ProviderBucket, f: InboxFigures, rules: InboxRules = DEFAULT_RULES): Judgement {
-  const rates = ratesOf(f);
-  if (provider !== "google" && provider !== "microsoft") return { verdict: "untouched", provider, rates, reasons: [] };
-  const tier = tierFor(provider, f.sent, rules);
-  if (!tier) {
+  // 2. Out-of-office replies, but no person has answered.
+  if (!humanRates) {
+    return { verdict: "pass", ...base, reasons: [], kept: `its human reply rate over the last ${days(rule.humanDays)} couldn't be read, so the second rule wasn't checked` };
+  }
+  if (humanRates.humanReplyRate > rule.maxHumanRate) return { verdict: "pass", ...base, reasons: [] };
+  const human = `the human reply rate over the last ${days(rule.humanDays)} ${rule.maxHumanRate === 0 ? "is 0%" : `is ${humanRates.humanReplyRate}%, at or under ${rule.maxHumanRate}%`}`;
+  if (rule.minSendingDays > 0 && input.sendingLongEnough !== true) {
     return {
       verdict: "pass",
-      provider,
-      rates,
+      ...base,
       reasons: [],
-      notJudged: `no tier covers ${f.sent} send${f.sent === 1 ? "" : "s"}, so it isn't judged`,
+      kept:
+        input.sendingLongEnough === false
+          ? `${human}, but it hasn't been sending for ${days(rule.minSendingDays)} yet`
+          : `${human}, but how long it has been sending couldn't be read, so it wasn't removed on that`,
     };
   }
-
-  const reasons: string[] = [];
-  if (rates.bounceRate > tier.maxBounceRate) {
-    reasons.push(`bounce rate ${rates.bounceRate}% is over ${tier.maxBounceRate}%`);
-  }
-  if (tier.minOooReplyRate !== undefined && rates.oooReplyRate < tier.minOooReplyRate) {
-    reasons.push(`OOO reply rate ${rates.oooReplyRate}% is under ${tier.minOooReplyRate}%`);
-  }
-  if (reasons.length === 0) return { verdict: "pass", provider, rates, tier, reasons };
-
-  if (tier.humanReplyOverrule !== undefined && rates.humanReplyRate > tier.humanReplyOverrule) {
-    return {
-      verdict: "pass",
-      provider,
-      rates,
-      tier,
-      reasons: [],
-      overruled: `human reply rate ${rates.humanReplyRate}% is over ${tier.humanReplyOverrule}%, which overrules ${reasons.join(" and ")}`,
-    };
-  }
-  return { verdict: "block", provider, rates, tier, reasons };
+  const age = rule.minSendingDays > 0 ? ` and it has been sending for ${days(rule.minSendingDays)} or more` : "";
+  return { verdict: "block", ...base, reasons: [`OOO reply rate is ${rates.oooReplyRate}%, but ${human}${age}`] };
 }

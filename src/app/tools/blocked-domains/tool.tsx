@@ -362,7 +362,7 @@ export function BlockedDomainsTool() {
             <Fold
               id="passed"
               title={`Passed Inboxes (${formatNumber(passedJobs.length)})`}
-              note="Within their tier: nothing was done to them."
+              note="Within the rule, or not judged: nothing was done to them."
               open={passedOpen}
               onToggle={() => setPassedOpen((v) => !v)}
             >

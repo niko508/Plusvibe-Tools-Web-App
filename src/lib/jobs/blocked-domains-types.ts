@@ -44,7 +44,7 @@ import type {
 } from "@/lib/blocked-domains/performance";
 import type { ProviderCounts } from "@/lib/plusvibe-providers";
 import type { BlockedInboxJob, InboxDomainState } from "@/lib/jobs/blocked-inboxes-types";
-import type { InboxRules } from "@/lib/blocked-inboxes/rules";
+import type { RemovalRule } from "@/lib/blocked-inboxes/rules";
 
 export type { DomainPerformance, DomainVerdict, InboxAssessment, ProviderCounts };
 
@@ -356,8 +356,8 @@ export interface BlockedDomainsView {
     minDomainReplyRateOoo: number;
     recheck: boolean;
     recheckDays: number;
-    /** The tiers sender inboxes are judged on. Absent from an older build. */
-    inboxRules?: InboxRules;
+    /** The rule sender inboxes are judged on. Absent from an older build. */
+    removalRule?: RemovalRule;
     /** A Microsoft domain is cancelled after more than this many deletions. */
     cancelAfterDeleted?: number;
     /** At cancellation, inboxes at or above this OOO reply rate are kept. */

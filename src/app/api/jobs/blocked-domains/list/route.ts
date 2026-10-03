@@ -30,7 +30,7 @@ export async function GET(request: Request) {
         minDomainReplyRateOoo: settings.minDomainReplyRateOoo,
         recheck: settings.recheck,
         recheckDays: settings.recheckDays,
-        inboxRules: settings.inboxRules,
+        removalRule: settings.removalRule,
         cancelAfterDeleted: settings.cancelAfterDeleted,
         cancelKeepReplyRate: settings.cancelKeepReplyRate,
       },

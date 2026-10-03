@@ -49,7 +49,7 @@ import type {
   AzureStartPayload,
 } from "@/lib/jobs/azure-warmup-types";
 import type { WarmupSettings as AzureWarmupSettings } from "@/lib/azure-warmup/warmup-settings";
-import type { InboxRules } from "@/lib/blocked-inboxes/rules";
+import type { RemovalRule } from "@/lib/blocked-inboxes/rules";
 import type { GeneralSettings } from "@/lib/general-settings/settings";
 import type { Industry } from "@/lib/campaign-types/industries";
 import type {
@@ -1373,7 +1373,7 @@ export function setBlockedDomainSettings(
     minDomainReplyRateOoo?: number;
     recheck?: boolean;
     recheckDays?: number;
-    inboxRules?: InboxRules;
+    removalRule?: RemovalRule;
     cancelAfterDeleted?: number;
     cancelKeepReplyRate?: number;
   },

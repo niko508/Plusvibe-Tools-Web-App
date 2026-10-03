@@ -114,7 +114,7 @@ export const TOOLS: Tool[] = [
     name: "Blocked Domains (Automation)",
     tagline: "Judge a bouncing sender inbox on its own 14 days",
     description:
-      "Clay sends the sender inbox it saw bouncing. That inbox's last 14 days are judged on bounce and reply-rate tiers for Microsoft and Google; a blocked inbox stops sending and warming at once and is deleted — straight away or once you confirm. Blocked inboxes and their domains are listed, with stats by ending and platform.",
+      "Clay sends the sender inbox it saw bouncing. That inbox is removed when its OOO reply rate over the last 7 days is 0%, or when nobody has replied to it in 14 days after 14+ days of sending — Microsoft and Google alike; a blocked inbox stops sending and warming at once and is deleted — straight away or once you confirm. Blocked inboxes and their domains are listed, with stats by ending and platform.",
     status: "active",
     color: "orange",
     Icon: FireIcon,
