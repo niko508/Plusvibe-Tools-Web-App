@@ -20,10 +20,11 @@ import { formatNumber } from "@/lib/format";
 import { EmptyState } from "@/components/ui";
 import { GaugeIcon } from "@/components/icons";
 
-// Where the blocks come from: by the domain's ending, by the platform it was
-// bought on, by mailbox provider, and by platform and ending together. A
-// domain counts once, as soon as any inbox on it is blocked; the domain-level
-// runs from before the move to inboxes count too.
+// Where the blocks come from, domain by domain: by the domain's ending, by
+// the platform it was bought on, by mailbox provider, and by platform and
+// ending together. A domain counts once, as soon as any inbox on it is
+// blocked; the domain-level runs from before the move to inboxes count too.
+// Inbox counts are left out: what matters is which domains go.
 
 export function StatsView({ inboxJobs, domainJobs }: { inboxJobs: BlockedInboxJob[]; domainJobs: BlockedDomainJob[] }) {
   const entries = useMemo(() => statsEntries(inboxJobs, domainJobs), [inboxJobs, domainJobs]);
@@ -40,7 +41,6 @@ export function StatsView({ inboxJobs, domainJobs }: { inboxJobs: BlockedInboxJo
   const platform = byPlatform(entries);
   const pair = byPlatformAndTld(entries);
   const provider = byProvider(entries);
-  const inboxes = entries.reduce((n, e) => n + e.blockedInboxes, 0);
   const fromOld = entries.filter((e) => e.fromDomainRun).length;
   const platformsKnown = entries.filter((e) => e.platform !== UNKNOWN_PLATFORM).length;
 
@@ -52,12 +52,16 @@ export function StatsView({ inboxJobs, domainJobs }: { inboxJobs: BlockedInboxJo
           value={formatNumber(entries.length)}
           hint={fromOld > 0 ? `${formatNumber(fromOld)} from the old domain-level runs` : undefined}
         />
-        <Figure label="Blocked inboxes" value={formatNumber(inboxes)} />
         <Figure label="Endings" value={formatNumber(tld.rows.length)} />
         <Figure
           label="Platforms"
           value={formatNumber(platform.rows.filter((r) => r.key !== UNKNOWN_PLATFORM).length)}
           hint={platformsKnown < entries.length ? `${formatNumber(entries.length - platformsKnown)} with no platform known` : undefined}
+        />
+        <Figure
+          label="Most blocked"
+          value={pair.rows[0]?.key ?? "—"}
+          hint={pair.rows[0] ? `${formatNumber(pair.rows[0].domains)} domain${pair.rows[0].domains === 1 ? "" : "s"} · ${percent(pair.rows[0].share)}` : undefined}
         />
       </div>
 
@@ -68,7 +72,7 @@ export function StatsView({ inboxJobs, domainJobs }: { inboxJobs: BlockedInboxJo
         breakdown={platform}
         intro="Where each blocked domain was bought: the Domain Host column of the Domains sheet, or the registrar on the domain's public record when the sheet has none."
       />
-      <BreakdownTable title="By mailbox provider" what="provider" breakdown={provider} intro="Google or Microsoft, from what Plusvibe reports for the blocked inboxes." />
+      <BreakdownTable title="By mailbox provider" what="provider" breakdown={provider} intro="Google or Microsoft: the provider each blocked domain's mailboxes are on, as Plusvibe reports it." />
       <BreakdownTable
         title="By platform and ending"
         what="combination"
@@ -84,7 +88,7 @@ function Figure({ label, value, hint }: { label: string; value: string; hint?: s
   return (
     <div className="pv-card p-3">
       <div className="truncate text-[11px] text-muted-foreground">{label}</div>
-      <div className="mt-0.5 text-lg font-semibold tabular-nums">{value}</div>
+      <div className="mt-0.5 truncate text-lg font-semibold tabular-nums" title={value}>{value}</div>
       {hint && <div className="text-[11px] text-muted-foreground">{hint}</div>}
     </div>
   );
@@ -130,9 +134,7 @@ function BreakdownTable({
             <tr className="text-left text-muted-foreground">
               <th className="pb-2 pr-3 font-medium capitalize">{what}</th>
               <th className="pb-2 pr-3 font-medium">Share of blocked domains</th>
-              <th className="pb-2 pr-3 text-right font-medium">Blocked domains</th>
-              <th className="pb-2 pr-3 text-right font-medium">Blocked inboxes</th>
-              <th className="pb-2 text-right font-medium">Inboxes deleted</th>
+              <th className="pb-2 text-right font-medium">Blocked domains</th>
             </tr>
           </thead>
           <tbody>
@@ -164,9 +166,7 @@ function Row({ row }: { row: StatRow }) {
           <span className="w-10 shrink-0 tabular-nums">{percent(row.share)}</span>
         </div>
       </td>
-      <td className="py-2 pr-3 text-right tabular-nums">{formatNumber(row.domains)}</td>
-      <td className="py-2 pr-3 text-right tabular-nums">{formatNumber(row.blockedInboxes)}</td>
-      <td className="py-2 text-right tabular-nums">{formatNumber(row.deletedInboxes)}</td>
+      <td className="py-2 text-right tabular-nums">{formatNumber(row.domains)}</td>
     </tr>
   );
 }
