@@ -9,6 +9,7 @@
 
 import { MAX_SEGMENTS } from "./segments";
 import { nameHolds } from "./add-leads";
+import { BLUE, stripYellow } from "./names";
 
 /** Segments saved per industry: as many as the page has rows for. */
 export const MAX_INDUSTRY_SEGMENTS = MAX_SEGMENTS;
@@ -112,4 +113,29 @@ export function matchCampaign(segment: string, campaigns: { id: string; name: st
   if (!segment.trim()) return null;
   const hits = campaigns.filter((c) => nameHolds(c.name, segment));
   return hits.length === 1 ? hits[0].id : null;
+}
+
+/** A campaign name without its 🟡/🔵 circle and trailing "(Month)", for comparing. */
+function bareCampaignName(name: string): string {
+  return key(stripYellow(name).replace(new RegExp(`^${BLUE}\\uFE0F?\\s*`), "").replace(/\s*\([^()]*\)\s*$/, ""));
+}
+
+/**
+ * The saved industry a campaign is named for: its name starts with the
+ * industry's, followed by nothing or by " - " ("Medical Practices & Clinics -
+ * Cash Pay (August)" is "Medical Practices & Clinics"). The longest such name
+ * wins, so "Health & Wellness - Clinics" beats "Health & Wellness". None
+ * found: null, and the industry is picked by hand.
+ */
+export function industryForCampaign(campaignName: string, list: Industry[]): Industry | null {
+  const bare = bareCampaignName(campaignName);
+  if (!bare) return null;
+  let best: Industry | null = null;
+  for (const i of list) {
+    const k = key(i.name);
+    if (!k) continue;
+    if (bare !== k && !bare.startsWith(`${k} - `)) continue;
+    if (!best || k.length > key(best.name).length) best = i;
+  }
+  return best;
 }

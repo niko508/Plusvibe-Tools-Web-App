@@ -16,7 +16,7 @@ const eq = (label, got, want) => {
   }
 };
 
-const { normalizeIndustries, saveIndustry, removeIndustry, findIndustry, matchCampaign, MAX_INDUSTRY_SEGMENTS } = await importTs("@/lib/campaign-types/industries");
+const { normalizeIndustries, saveIndustry, removeIndustry, findIndustry, matchCampaign, industryForCampaign, MAX_INDUSTRY_SEGMENTS } = await importTs("@/lib/campaign-types/industries");
 
 console.log("--- saving");
 {
@@ -71,6 +71,20 @@ console.log("--- matching a segment to its original");
   eq("in more than one: no answer", matchCampaign("free trial", camps), null);
   eq("in none: no answer", matchCampaign("luxury", camps), null);
   eq("punctuation is ignored", matchCampaign("free-trial everyday", camps), "3");
+}
+
+console.log("--- the industry a campaign is named for");
+{
+  const ind = (name, segments = []) => ({ name, segments, updatedAt: 1 });
+  const list = [ind("Medical Practices & Clinics", ["cash pay", "insurance"]), ind("Health & Wellness"), ind("Health & Wellness - Clinics"), ind("eCommerce"), ind("Financial")];
+  const of = (n) => industryForCampaign(n, list)?.name ?? null;
+  eq("the name starts with the industry, then \" - \"", of("🟡 Medical Practices & Clinics - Cash Pay (August)"), "Medical Practices & Clinics");
+  eq("…🔵 or no circle, any case", [of("🔵 medical practices & clinics - Insurance (September)"), of("Financial - Platform (August)")], ["Medical Practices & Clinics", "Financial"]);
+  eq("…or is exactly it", of("🟡 eCommerce (August)"), "eCommerce");
+  eq("the longest matching industry wins", of("🟡 Health & Wellness - Clinics - Cash (August)"), "Health & Wellness - Clinics");
+  eq("a word that merely starts the same isn't a match", of("🟡 Financials Group - Lending (August)"), null);
+  eq("no saved industry fits: none", of("🟡 Manufacturing - Service (September)"), null);
+  eq("nothing saved: none", industryForCampaign("🟡 eCommerce (August)", []), null);
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);

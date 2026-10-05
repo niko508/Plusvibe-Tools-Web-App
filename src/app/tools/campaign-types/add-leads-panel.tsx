@@ -7,7 +7,7 @@ import type { RoleNames } from "@/lib/jobs/campaign-types-types";
 import { deriveNames } from "@/lib/campaign-types/names";
 import { ALL_COMPANION_ROLES, matchCompanions } from "@/lib/campaign-types/match";
 import { familyBase, isOriginal, planAddLeads, type SegmentCount } from "@/lib/campaign-types/add-leads";
-import { findIndustry, type Industry } from "@/lib/campaign-types/industries";
+import { findIndustry, industryForCampaign, type Industry } from "@/lib/campaign-types/industries";
 import { DEFAULT_SEGMENT_ROWS, MAX_SEGMENTS } from "@/lib/campaign-types/segments";
 import { ApiClientError, deleteIndustry, previewAddLeads, saveIndustry, startCampaignTypes } from "@/lib/api-client";
 import { IndustryPicker } from "./industry-picker";
@@ -100,6 +100,25 @@ export function AddLeadsPanel({
 
   const originals = useMemo(() => campaigns.filter(isOriginal), [campaigns]);
   const source = originals.find((c) => c.id === sourceId) ?? null;
+
+  // Picking the campaign picks the industry it is named for, with its
+  // segments; a name that matches no saved industry leaves both empty, to be
+  // picked by hand.
+  useEffect(() => {
+    if (!source) return;
+    const match = industryForCampaign(source.name, industries);
+    setPicked({});
+    if (match) {
+      setIndustry(match.name);
+      const saved = match.segments.slice(0, MAX_SEGMENTS);
+      setSegments(Array.from({ length: Math.max(DEFAULT_SEGMENT_ROWS, saved.length) }, (_, k) => saved[k] ?? ""));
+    } else {
+      setIndustry("");
+      setSegments(Array(DEFAULT_SEGMENT_ROWS).fill(""));
+    }
+    // Only when the campaign changes: industries saved later don't undo a hand pick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceId]);
   const typed = segments.map((s) => s.trim()).filter(Boolean);
   /** What this industry learned from earlier hand picks: segment → family name. */
   const remembered = useMemo(() => findIndustry(industries, industry)?.families ?? {}, [industries, industry]);
@@ -201,6 +220,7 @@ export function AddLeadsPanel({
         rules: plan.rules,
         activate: false,
         onlyExisting: true,
+        activateWorkspace: true,
       });
       // Learn from the hand picks: next time these segments find the newest
       // campaign of the family chosen for them now.
@@ -473,7 +493,7 @@ export function AddLeadsPanel({
           {queued ? "Add to queue" : "Add the leads"}
         </button>
         <span className="text-xs text-muted-foreground">
-          {queued ? "A job is running; this one waits its turn. " : ""}It runs on the server — close the tab whenever you like. The result is in Jobs below.
+          {queued ? "A job is running; this one waits its turn. " : ""}It runs on the server — close the tab whenever you like. At the end, every campaign in the workspace that isn&apos;t running is launched (archived ones aside). The result is in Jobs below.
         </span>
       </div>
     </div>

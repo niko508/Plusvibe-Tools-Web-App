@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { CampaignTypesJob, CampaignTypesStatus, PhaseState, SourceRun } from "@/lib/jobs/campaign-types-types";
+import type { AllocActivation, CampaignTypesJob, CampaignTypesStatus, PhaseState, SourceRun } from "@/lib/jobs/campaign-types-types";
 import { JOB_PHASE_ORDER, PHASE_ORDER, jobPhaseLabel, phaseLabel } from "@/lib/jobs/campaign-types-types";
 import { describeKinds } from "@/lib/campaign-types/kinds";
 import { describeRule } from "@/lib/campaign-types/segments";
@@ -130,49 +130,15 @@ export function JobCard({
             ))}
           </div>
           {job.allocation.activation && job.allocation.activation.length > 0 && (
-            <div className="space-y-1 pt-1" data-alloc-activation>
-              <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-                <span className="text-xs font-medium">Activating every campaign</span>
-                <span className="text-[11px] tabular-nums text-muted-foreground">
-                  {formatNumber(job.allocation.activation.filter((a) => a.state === "done").length)} /{" "}
-                  {formatNumber(job.allocation.activation.length)} active
-                </span>
-              </div>
-              {job.allocation.activation.map((a) => (
-                <div
-                  key={a.campaignId}
-                  className="flex items-start gap-2 text-xs"
-                  data-alloc-active={a.campaignId}
-                  data-state={a.state}
-                >
-                  <span className="mt-0.5 shrink-0">
-                    {a.state === "done" ? (
-                      <CheckIcon size={13} className="text-success" />
-                    ) : a.state === "error" ? (
-                      <AlertIcon size={13} className="text-danger" />
-                    ) : a.state === "running" ? (
-                      <Spinner size={11} />
-                    ) : (
-                      <span className="inline-block h-3.5 w-3.5 rounded-full border border-border" />
-                    )}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="break-words">{a.campaignName}</span>
-                    <span className="text-muted-foreground">
-                      {" · "}
-                      {a.state === "error"
-                        ? a.error ?? "not active"
-                        : a.state === "done"
-                          ? a.launched
-                            ? `launched (was ${(a.before ?? "?").toLowerCase()})`
-                            : "already active"
-                          : a.side}
-                    </span>
-                  </span>
-                </div>
-              ))}
-            </div>
+            <ActivationList title="Activating every campaign" list={job.allocation.activation} />
           )}
+        </div>
+      )}
+
+      {/* Add More Leads: the whole workspace launched at the end. */}
+      {job.workspaceActivation && job.workspaceActivation.length > 0 && (
+        <div className="mt-3 rounded-xl border border-border p-3" data-workspace-activation>
+          <ActivationList title="Launching every campaign in the workspace" list={job.workspaceActivation} />
         </div>
       )}
 
@@ -669,4 +635,64 @@ function relativeTime(ts: number): string {
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
+}
+
+/** Campaigns checked and launched at the end of a run, each with how it ended. */
+function ActivationList({ title, list }: { title: string; list: AllocActivation[] }) {
+  // A whole workspace is a long list: the ones that were already running are
+  // counted rather than listed once the run is over.
+  const settled = list.every((a) => a.state === "done" || a.state === "error");
+  const quiet = settled && list.length > 12 ? list.filter((a) => a.state === "done" && !a.launched) : [];
+  const shown = quiet.length > 0 ? list.filter((a) => !quiet.includes(a)) : list;
+  return (
+            <div className="space-y-1 pt-1" data-alloc-activation>
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                <span className="text-xs font-medium">{title}</span>
+                <span className="text-[11px] tabular-nums text-muted-foreground">
+                  {formatNumber(list.filter((a) => a.state === "done").length)} /{" "}
+                  {formatNumber(list.length)} active
+                </span>
+              </div>
+              {shown.map((a) => (
+                <div
+                  key={a.campaignId}
+                  className="flex items-start gap-2 text-xs"
+                  data-alloc-active={a.campaignId}
+                  data-state={a.state}
+                >
+                  <span className="mt-0.5 shrink-0">
+                    {a.state === "done" ? (
+                      <CheckIcon size={13} className="text-success" />
+                    ) : a.state === "error" ? (
+                      <AlertIcon size={13} className="text-danger" />
+                    ) : a.state === "running" ? (
+                      <Spinner size={11} />
+                    ) : (
+                      <span className="inline-block h-3.5 w-3.5 rounded-full border border-border" />
+                    )}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="break-words">{a.campaignName}</span>
+                    <span className="text-muted-foreground">
+                      {" · "}
+                      {a.state === "error"
+                        ? a.error ?? "not active"
+                        : a.state === "done"
+                          ? a.launched
+                            ? `launched (was ${(a.before ?? "?").toLowerCase()})`
+                            : "already active"
+                          : a.side === "workspace"
+                            ? "waiting"
+                            : a.side}
+                    </span>
+                  </span>
+                </div>
+              ))}
+              {quiet.length > 0 && (
+                <p className="text-[11px] text-muted-foreground" data-already-active>
+                  {formatNumber(quiet.length)} more {quiet.length === 1 ? "was" : "were"} already active.
+                </p>
+              )}
+            </div>
+  );
 }

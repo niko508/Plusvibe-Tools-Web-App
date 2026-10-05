@@ -141,6 +141,7 @@ export async function POST(request: Request) {
       rules,
       activate: body.activate !== false,
       ...(mode === "move" && body.onlyExisting === true ? { onlyExisting: true } : {}),
+      ...(mode === "move" && body.activateWorkspace === true ? { activateWorkspace: true } : {}),
     });
 
     return NextResponse.json({ jobId });

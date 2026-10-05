@@ -900,7 +900,7 @@ function isRunning(status: string | undefined): boolean {
  * they belong either way, and a launch is one click in Plusvibe.
  */
 async function activateAllocation(ctx: RunCtx, alloc: AllocationProgress) {
-  const { rec, apiKey, workspaceId, check, id } = ctx;
+  const { id } = ctx;
   const list: AllocActivation[] = [];
   const seen = new Set<string>();
   const add = (c: { campaignId: string; campaignName: string }, side: AllocActivation["side"]) => {
@@ -912,6 +912,41 @@ async function activateAllocation(ctx: RunCtx, alloc: AllocationProgress) {
   for (const d of alloc.destinations) add(d, "destination");
   alloc.activation = list;
   await persist(id);
+  await launchAndConfirm(ctx, list);
+}
+
+/**
+ * Add More Leads, once the leads are in place: every parent campaign in the
+ * workspace that isn't running — paused, completed or draft — is launched,
+ * sub-sequences with it, and read back. Archived ones are left alone. One
+ * that won't launch (an empty draft, most often) is named, never a reason to
+ * undo anything.
+ */
+async function activateWorkspace(ctx: RunCtx) {
+  const { rec, apiKey, workspaceId, id } = ctx;
+  let all: CampaignSummary[];
+  try {
+    ctx.check();
+    all = await listCampaigns(apiKey, workspaceId, { campaignType: "parent" });
+  } catch (err) {
+    if (err instanceof AbortedError || ctx.m.aborted) throw err;
+    pushError(rec, `The leads are in place, but the workspace's campaigns could not be listed to launch them: ${msg(err)}. Launch them in Plusvibe.`);
+    return;
+  }
+  const list: AllocActivation[] = all
+    .filter((c) => c.campaignType !== "subseq" && (c.status ?? "").trim().toUpperCase() !== "ARCHIVED")
+    .map((c) => ({ campaignId: c.id, campaignName: c.name, side: "workspace" as const, state: "pending" as const }));
+  rec.workspaceActivation = list;
+  await persist(id);
+  await launchAndConfirm(ctx, list);
+}
+
+/**
+ * Launches every campaign on the list that isn't running, then reads the
+ * statuses back: only ACTIVE counts. The list is updated in place.
+ */
+async function launchAndConfirm(ctx: RunCtx, list: AllocActivation[]) {
+  const { rec, apiKey, workspaceId, check, id } = ctx;
 
   // Status straight from the workspace, not from when the run was set up: a
   // campaign may have been paused or launched by hand in the meantime.
@@ -1647,6 +1682,10 @@ async function runJob(id: string) {
 
     // --- Phase 3 --------------------------------------------------------------
     await runTagging(ctx);
+
+    // Add More Leads: the whole workspace running again, not only the
+    // campaigns that got leads.
+    if (mode === "move" && m.payload.activateWorkspace) await activateWorkspace(ctx);
 
     const failed =
       rec.phaseStates.segmenting === "error" || buildingFailed || rec.phaseStates.tagging === "error";

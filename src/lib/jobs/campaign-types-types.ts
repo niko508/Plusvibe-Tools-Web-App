@@ -308,6 +308,8 @@ export interface CampaignTypesJob {
   sources: SourceRun[];
   /** A "fix" run's own progress. Absent on create and move runs. */
   allocation?: AllocationProgress;
+  /** Add More Leads: every campaign in the workspace launched at the end. */
+  workspaceActivation?: AllocActivation[];
   tagging: TaggingProgress;
 
   errors: string[];
@@ -389,7 +391,7 @@ export interface AllocationProgress {
 export interface AllocActivation {
   campaignId: string;
   campaignName: string;
-  side: "source" | "destination";
+  side: "source" | "destination" | "workspace";
   /** Its status when checked, before anything was done: ACTIVE, PAUSED, DRAFT … */
   before?: string;
   /** Its status read back after launching. */
@@ -421,6 +423,12 @@ export interface CampaignTypesStartPayload {
    * both shown on the page beforehand, so neither is reported as a problem.
    */
   onlyExisting?: boolean;
+  /**
+   * Move runs from Add More Leads: once the leads are in place, every campaign
+   * in the workspace that isn't running — paused, completed or draft — is
+   * launched, not only the ones that got leads. Archived ones are left alone.
+   */
+  activateWorkspace?: boolean;
   /**
    * Resuming only: leads an interrupted run already moved, per original and
    * copy, so the split is finished rather than started over.
