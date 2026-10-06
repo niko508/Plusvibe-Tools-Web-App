@@ -7,6 +7,7 @@ import {
   fetchAccounts,
   fetchEmailStatsBulk,
   ApiClientError,
+  startBulkDelete,
 } from "@/lib/api-client";
 import { useApiKey } from "@/lib/use-api-key";
 import {
@@ -41,6 +42,7 @@ import {
   CopyIcon,
   CheckIcon,
   FireIcon,
+  TrashIcon,
 } from "@/components/icons";
 import { Controls } from "./controls";
 import { OverviewChart } from "@/components/overview-chart";
@@ -98,6 +100,10 @@ export function InboxPerformanceTool() {
   const [minSends, setMinSends] = useState("0");
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [copied, setCopied] = useState(false);
+  /** Deleting the burned inboxes: closed, asking to confirm, starting, or started (the job's id). */
+  const [deleteStep, setDeleteStep] = useState<"closed" | "confirm" | "starting" | { jobId: string; count: number }>("closed");
+  const [deleteConfirm, setDeleteConfirm] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Persisted preferences, read once on the client.
   useEffect(() => {
@@ -382,6 +388,32 @@ export function InboxPerformanceTool() {
         } · ${start} → ${end}`
       : "";
 
+  // The burned inboxes shown, deleted in the background by the same job as
+  // Remove Inboxes — it carries on with the tab closed, and is followed (or
+  // stopped) there. Asked for by typing DELETE or the count, as there.
+  const deleteReady = deleteConfirm.trim().toUpperCase() === "DELETE" || deleteConfirm.trim() === String(burnedRows.length);
+  async function handleDeleteBurned() {
+    if (!deleteReady || burnedRows.length === 0) return;
+    setDeleteStep("starting");
+    setDeleteError(null);
+    try {
+      const workspaceNames: Record<string, string> = {};
+      for (const r of burnedRows) workspaceNames[r.workspaceId] = r.workspaceName;
+      const { jobId } = await startBulkDelete({
+        label: `${formatNumber(burnedRows.length)} burned inboxes · Inbox Performance · ${start} → ${end}`,
+        workspaceNames,
+        notFound: [],
+        mode: "inbox",
+        tasks: burnedRows.map((r) => ({ workspace_id: r.workspaceId, email: r.email, domain: r.domain || r.email.split("@")[1] || "" })),
+      });
+      setDeleteStep({ jobId, count: burnedRows.length });
+      setDeleteConfirm("");
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Could not start the deletion.");
+      setDeleteStep("confirm");
+    }
+  }
+
   async function handleCopy() {
     const ok = await copyToClipboard(visibleRows.map((r) => r.email).join("\n"));
     if (ok) {
@@ -639,6 +671,20 @@ export function InboxPerformanceTool() {
                         />
                       </div>
                     )}
+                    {burnedOnly && burnedRows.length > 0 && (deleteStep === "closed" || typeof deleteStep === "object") && (
+                      <button
+                        type="button"
+                        className="pv-btn-ghost text-danger"
+                        onClick={() => {
+                          setDeleteStep("confirm");
+                          setDeleteError(null);
+                        }}
+                        data-delete-burned
+                      >
+                        <TrashIcon size={16} />
+                        <span className="hidden sm:inline">Delete {formatNumber(burnedRows.length)} burned</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="pv-btn-ghost"
@@ -668,6 +714,49 @@ export function InboxPerformanceTool() {
                     </button>
                   </div>
                 </div>
+                {burnedOnly && (deleteStep === "confirm" || deleteStep === "starting") && (
+                  <div className="rounded-xl border border-danger/40 bg-danger/5 p-3 text-sm" data-delete-confirm>
+                    <p className="font-medium text-danger">
+                      Delete {formatNumber(burnedRows.length)} burned inbox{burnedRows.length === 1 ? "" : "es"} from Plusvibe?
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Every inbox listed below — true reply rate under {threshold}% and OOO reply rate under {BURNED_OOO_SAFE}% from{" "}
+                      {start} to {end} — across {formatNumber(new Set(burnedRows.map((r) => r.workspaceId)).size)} workspace
+                      {new Set(burnedRows.map((r) => r.workspaceId)).size === 1 ? "" : "s"}. This can&apos;t be undone. It runs in the
+                      background like Remove Inboxes, where it can be followed or stopped.
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <input
+                        className="pv-input w-56 py-1.5 text-xs"
+                        placeholder={`Type DELETE or ${burnedRows.length}`}
+                        value={deleteConfirm}
+                        onChange={(e) => setDeleteConfirm(e.target.value)}
+                        aria-label="Type DELETE to confirm"
+                        data-delete-confirm-input
+                      />
+                      <button
+                        type="button"
+                        className="pv-btn bg-danger text-white shadow-soft hover:brightness-110 disabled:opacity-50"
+                        disabled={!deleteReady || deleteStep === "starting"}
+                        onClick={handleDeleteBurned}
+                        data-delete-burned-run
+                      >
+                        {deleteStep === "starting" ? <Spinner /> : <TrashIcon size={16} />} Delete {formatNumber(burnedRows.length)}
+                      </button>
+                      <button type="button" className="pv-btn-ghost" onClick={() => setDeleteStep("closed")} disabled={deleteStep === "starting"}>
+                        Cancel
+                      </button>
+                    </div>
+                    {deleteError && <p className="mt-2 text-xs text-danger">{deleteError}</p>}
+                  </div>
+                )}
+                {typeof deleteStep === "object" && (
+                  <p className="flex flex-wrap items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-xs" data-delete-started>
+                    <CheckIcon size={13} className="text-success" />
+                    Deleting {formatNumber(deleteStep.count)} inbox{deleteStep.count === 1 ? "" : "es"} in the background — follow it, or stop it, on{" "}
+                    <a href="/tools/remove-inboxes" className="underline">Remove Inboxes</a>. Find again afterwards to refresh this list.
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground">
                   Rates are replies ÷ unique leads contacted, worked out here from the counts.
                   Plusvibe&apos;s own per-sent reply rate is not used.
