@@ -255,13 +255,23 @@ export function planWinners(sequence: SequenceStep[], stats: StatsByStep, optOut
     if (i > 0) return s;
     if (noWinners) return { ...s, variations: [emptyVariant()] };
     const bar = winnerBar(winners.map((w) => w.positiveReplies));
-    const kept = s.variations
+    const isTop = (letter: string) => bar !== null && winners.find((w) => w.variation === letter)!.positiveReplies === bar;
+    let kept = s.variations
       .filter((v) => keptLetters.has(v.variation))
-      .map((v) => {
-        const isTop = bar !== null && winners.find((w) => w.variation === v.variation)!.positiveReplies === bar;
-        if (isTop) marked.push(v.variation);
-        return { ...v, name: withWinnerMark(v.name ?? "", isTop) };
+      .map((v) => ({ ...v, name: withWinnerMark(v.name ?? "", isTop(v.variation)) }));
+    // The Previous Winner(s) go first: lettered A (B, … for a tie), the other
+    // kept variants after them in their own order, lettered on from there.
+    // With no winner marked, every variant keeps its letter.
+    if (bar !== null) {
+      const ordered = [...kept.filter((v) => isTop(v.variation)), ...kept.filter((v) => !isTop(v.variation))];
+      kept = ordered.map((v, k) => {
+        const letter = VARIATION_LABELS[k];
+        const row = rows.find((r) => r.variation === v.variation);
+        if (row) row.newLetter = letter;
+        if (isTop(v.variation)) marked.push(letter);
+        return { ...v, variation: letter };
       });
+    }
     const applied = applyOptOut(kept, optOut);
     optOutSummary = applied.summary;
     return { ...s, variations: applied.variations };

@@ -54,7 +54,7 @@ console.log("--- step 1: only the winners");
   eq("the first step is the one judged, whatever order the steps come in", p.firstStep, 1);
   eq("every variant with a positive reply is kept; none without", p.rows.map((r) => [r.variation, r.kept]), [["A", true], ["B", false], ["C", true], ["D", true], ["E", true]]);
   eq("…a deleted variant never shows, however well it did", [p.rows.some((r) => r.variation === "F"), p.droppedDeleted], [false, 1]);
-  eq("the clone's step 1 holds the winners, under their own letters", p.steps[0].variations.map((x) => x.variation), ["A", "C", "D", "E"]);
+  eq("the clone's step 1 holds the winners, the Previous Winner first, lettered on", p.steps[0].variations.map((x) => x.variation), ["A", "B", "C", "D"]);
   eq("…with their copy", p.steps[0].variations.map((x) => x.body), ["<div>A</div>", "<div>C</div>", "<div>D</div>", "<div>E</div>"]);
   eq("the top three: most positive replies, then most replies", p.top3.map((r) => [r.variation, r.positiveReplies]), [["A", 9], ["C", 4], ["D", 4]]);
   eq("the positive reply rate is per 100 sent", p.rows.find((r) => r.variation === "D").positiveRate, 1.33);
@@ -116,7 +116,7 @@ console.log("--- the opt-out line on the kept variants");
     { step: 2, variations: [withBody("A", `<div>Bump</div><div>&nbsp;</div><div>${OPT_OUT_SPINTAX}</div>`)] },
   ];
   const stats = parseVariationStats([
-    { step: 1, variations: [{ variation: "A", sent: 10, pos_reply: 1 }, { variation: "B", sent: 10, pos_reply: 2 }, { variation: "C", sent: 10, pos_reply: 1 }, { variation: "D", sent: 10, pos_reply: 0 }] },
+    { step: 1, variations: [{ variation: "A", sent: 10, pos_reply: 1 }, { variation: "B", sent: 10, pos_reply: 1 }, { variation: "C", sent: 10, pos_reply: 1 }, { variation: "D", sent: 10, pos_reply: 0 }] },
   ]);
   const first = (p) => p.steps[0].variations;
 
@@ -205,9 +205,14 @@ console.log("--- (Previous Winner) on the best variant");
   const seq = [{ step: 1, wait_time: 0, variations: [v("A", "Angle A"), v("B", "Angle B"), v("C", ""), v("D", "Old (Previous Winner)")] }];
   const at = (rows) => parseVariationStats([{ step: 1, variations: rows.map(([variation, pos]) => ({ variation, sent: 100, pos_reply: pos })) }]);
   const names = (p) => p.steps[0].variations.map((x) => [x.variation, x.name]);
-  eq("3 and 2: only the 3 is marked; an old mark comes off", names(planWinners(seq, at([["A", 3], ["B", 2], ["C", 0], ["D", 1]]))), [["A", "Angle A (Previous Winner)"], ["B", "Angle B"], ["D", "Old"]]);
+  eq("3 and 2: only the 3 is marked; an old mark comes off", names(planWinners(seq, at([["A", 3], ["B", 2], ["C", 0], ["D", 1]]))), [["A", "Angle A (Previous Winner)"], ["B", "Angle B"], ["C", "Old"]]);
+  eq("the winner goes first as A, the rest after in their own order", names(planWinners(seq, at([["A", 1], ["B", 2], ["C", 0], ["D", 3]]))), [["A", "Old (Previous Winner)"], ["B", "Angle A"], ["C", "Angle B"]]);
+  eq("…its body comes with it", planWinners(seq, at([["A", 1], ["B", 2], ["C", 0], ["D", 3]])).steps[0].variations[0].body, "<p>D</p>");
+  eq("…and the rows say their new letter", planWinners(seq, at([["A", 1], ["B", 2], ["C", 0], ["D", 3]])).rows.map((r) => [r.variation, r.newLetter ?? null]), [["A", "B"], ["B", "C"], ["C", null], ["D", "A"]]);
   eq("…and the plan says which", planWinners(seq, at([["A", 3], ["B", 2], ["C", 0], ["D", 1]])).marked, ["A"]);
-  eq("two tied at 2: both marked", names(planWinners(seq, at([["A", 2], ["B", 2], ["C", 1], ["D", 0]]))), [["A", "Angle A (Previous Winner)"], ["B", "Angle B (Previous Winner)"], ["C", ""]]);
+  eq("two tied at 2: both marked, both first", names(planWinners(seq, at([["A", 1], ["B", 2], ["C", 0], ["D", 2]]))), [["A", "Angle B (Previous Winner)"], ["B", "Old (Previous Winner)"], ["C", "Angle A"]]);
+  eq("…and the plan names them by their new letters", planWinners(seq, at([["A", 1], ["B", 2], ["C", 0], ["D", 2]])).marked, ["A", "B"]);
+  eq("none marked: letters as they were", names(planWinners(seq, at([["A", 0], ["B", 1], ["C", 0], ["D", 1]]))), [["B", "Angle B"], ["D", "Old"]]);
   eq("all at one positive reply: none marked", planWinners(seq, at([["A", 1], ["B", 1], ["C", 0], ["D", 0]])).marked, []);
 }
 

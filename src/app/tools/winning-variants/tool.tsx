@@ -304,7 +304,7 @@ export function WinningVariantsTool() {
                         </span>
                       ) : r.kept ? (
                         <span className="inline-flex items-center gap-1 text-success">
-                          <CheckIcon size={12} /> Kept{plan.campaigns && r.newLetter ? ` as ${r.newLetter}` : ""}
+                          <CheckIcon size={12} /> Kept{r.newLetter && (plan.campaigns || r.newLetter !== r.variation) ? ` as ${r.newLetter}` : ""}
                           {plan.marked.includes(r.newLetter ?? r.variation) ? " · Previous Winner" : ""}
                         </span>
                       ) : (
