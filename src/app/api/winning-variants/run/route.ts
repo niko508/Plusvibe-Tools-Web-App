@@ -1,13 +1,15 @@
 import { NextResponse } from "next/server";
 import { resolveApiKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
-import { cloneWithWinners, NeedsConfirmError, PartialCloneError } from "@/lib/winning-variants/run";
+import { cloneWithWinners, MAX_WINNER_CAMPAIGNS, NeedsConfirmError, PartialCloneError } from "@/lib/winning-variants/run";
 import { planProblems } from "@/lib/winning-variants/plan";
 
 export const dynamic = "force-dynamic";
 
 // POST /api/winning-variants/run
-// { workspaceId, campaignId, name, tagIds, newTags, confirmEmpty, optOut }
+// { workspaceId, campaignId, name, tagIds, newTags, confirmEmpty, optOut, alsoIds? }
+// alsoIds: other campaigns whose step-1 winners join the clone's step 1;
+// campaignId is the one cloned (settings, follow-ups, sub-sequences).
 // optOut: true adds the opt-out line to the kept step-1 variants that lack it,
 // false takes it out; left out, each variant stays as it is.
 // Duplicates the campaign in its own workspace, keeps only step 1's winning
@@ -23,6 +25,7 @@ export async function POST(request: Request) {
       newTags?: unknown;
       confirmEmpty?: boolean;
       optOut?: unknown;
+      alsoIds?: unknown;
     };
     const sel = { workspaceId: String(body.workspaceId ?? ""), campaignId: String(body.campaignId ?? ""), name: String(body.name ?? "") };
     // Checked again here: this is the last stop before a campaign is created.
@@ -36,6 +39,7 @@ export async function POST(request: Request) {
       newTags: strings(body.newTags),
       confirmEmpty: body.confirmEmpty === true,
       optOut: body.optOut === true ? "add" : body.optOut === false ? "remove" : "keep",
+      alsoIds: strings(body.alsoIds).slice(0, MAX_WINNER_CAMPAIGNS - 1),
     });
     return NextResponse.json(result);
   } catch (err) {

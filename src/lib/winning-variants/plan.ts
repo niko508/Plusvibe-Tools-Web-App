@@ -23,6 +23,7 @@
 
 import type { SequenceStep, SequenceVariation } from "@/lib/plusvibe-types";
 import { optOutState, withCurrentOptOut, withoutOptOut, type OptOutState } from "@/lib/campaign-types/append-opt-out";
+import { VARIATION_LABELS } from "@/lib/variation-labels";
 
 export interface VariantStat {
   variation: string;
@@ -71,6 +72,13 @@ export function parseVariationStats(raw: unknown): StatsByStep {
 /** One step-1 variant as the preview shows it. */
 export interface VariantRow {
   variation: string;
+  /** From several campaigns: the campaign it comes from. */
+  campaignId?: string;
+  campaignName?: string;
+  /** From several campaigns: its letter in the clone, when kept. */
+  newLetter?: string;
+  /** From several campaigns: the same email as a kept variant of another campaign, counted into it. */
+  sameAs?: string;
   /** The first line of its subject, short enough for a table cell. */
   subject: string;
   sent: number;
@@ -102,6 +110,12 @@ export interface OptOutSummary {
 }
 
 export interface WinnerPlan {
+  /** From several campaigns: each one's step-1 variants and winners. */
+  campaigns?: { id: string; name: string; variants: number; winners: number }[];
+  /** From several campaigns: winners that were the same email as another, counted together. */
+  merged?: number;
+  /** From several campaigns: winners past the per-step limit, left out. */
+  overLimit?: number;
   /** The step judged: the campaign's first. */
   firstStep: number;
   rows: VariantRow[];
@@ -143,7 +157,7 @@ function byStrength(a: VariantRow, b: VariantRow): number {
  * so leaving it alone changes as little as possible.
  */
 export function defaultOptOut(rows: VariantRow[]): boolean {
-  const kept = rows.filter((r) => r.kept);
+  const kept = rows.filter((r) => r.kept && !r.sameAs);
   if (kept.length === 0) return false;
   return kept.filter((r) => r.optOut !== "none").length * 2 >= kept.length;
 }
@@ -226,6 +240,148 @@ export function planWinners(sequence: SequenceStep[], stats: StatsByStep, optOut
     dropped: rows.length - winners.length,
     noWinners,
     followUps: live.slice(1).map((s) => ({ step: s.step, variations: s.variations.length })),
+    droppedDeleted,
+    optOut: optOutSummary,
+    steps,
+  };
+}
+
+// --- Winners from several campaigns ------------------------------------------
+
+export interface CampaignInput {
+  id: string;
+  name: string;
+  sequence: SequenceStep[];
+  stats: StatsByStep;
+}
+
+/** Two variants are the same email when subject and body match, opt-out line, case and spacing aside. */
+function sameEmailKey(v: SequenceVariation): string {
+  const tidy = (t: string) => t.replace(/\s+/g, " ").trim().toLowerCase();
+  return `${tidy(v.subject ?? "")}\n${tidy(withoutOptOut(v.body ?? "").body)}`;
+}
+
+/**
+ * The clone of `base` whose step 1 holds the winners of every campaign given
+ * (the base among them): each step-1 variant with at least one positive reply,
+ * all time. The same email in two campaigns — a 🟡 campaign and its 🔵 copy,
+ * say — is one variant, its figures added up and the strongest copy's wording
+ * kept. Winners are lettered A, B, C… strongest first; past the per-step limit
+ * the weakest are left out. Settings, follow-ups and sub-sequences are the
+ * base's, as in the one-campaign clone.
+ */
+export function planMultiWinners(base: CampaignInput, campaigns: CampaignInput[], optOut: OptOutChoice = "keep"): WinnerPlan {
+  const all = campaigns.some((c) => c.id === base.id) ? campaigns : [base, ...campaigns];
+  let droppedDeleted = 0;
+  const firstOf = (c: CampaignInput) => {
+    const ordered = [...c.sequence].sort((a, b) => a.step - b.step);
+    const live = ordered.map((s) => {
+      const flags = c.stats.get(s.step);
+      const variations = s.variations.filter((v) => {
+        const gone = flags?.get(v.variation)?.isDel === true;
+        if (gone) droppedDeleted += 1;
+        return !gone;
+      });
+      return { ...s, variations };
+    });
+    return { live, first: live[0] };
+  };
+
+  type Entry = { row: VariantRow; v: SequenceVariation };
+  const entries: Entry[] = [];
+  const perCampaign: { id: string; name: string; variants: number; winners: number }[] = [];
+  let baseLive: SequenceStep[] = [];
+  for (const c of all) {
+    const { live, first } = firstOf(c);
+    if (c.id === base.id) baseLive = live;
+    const figures = first ? c.stats.get(first.step) : undefined;
+    let winners = 0;
+    for (const v of first?.variations ?? []) {
+      const f = figures?.get(v.variation);
+      const sent = f?.sent ?? 0;
+      const positiveReplies = f?.positiveReplies ?? 0;
+      if (positiveReplies >= 1) winners += 1;
+      entries.push({
+        v,
+        row: {
+          variation: v.variation,
+          campaignId: c.id,
+          campaignName: c.name,
+          subject: shortSubject(v.subject),
+          sent,
+          replies: f?.replies ?? 0,
+          positiveReplies,
+          positiveRate: sent > 0 ? Math.round((positiveReplies / sent) * 10000) / 100 : 0,
+          kept: false,
+          optOut: optOutState(v.body ?? ""),
+        },
+      });
+    }
+    perCampaign.push({ id: c.id, name: c.name, variants: first?.variations.length ?? 0, winners });
+  }
+
+  // The winners, the same email counted once.
+  const groups = new Map<string, Entry[]>();
+  for (const e of entries) {
+    if (e.row.positiveReplies < 1) continue;
+    const k = sameEmailKey(e.v);
+    groups.set(k, [...(groups.get(k) ?? []), e]);
+  }
+  const strongestFirst = (a: Entry, b: Entry) => byStrength(a.row, b.row);
+  const merged = [...groups.values()].map((g) => {
+    const sorted = [...g].sort(strongestFirst);
+    const sent = g.reduce((n, e) => n + e.row.sent, 0);
+    const positiveReplies = g.reduce((n, e) => n + e.row.positiveReplies, 0);
+    const total: VariantRow = {
+      ...sorted[0].row,
+      sent,
+      replies: g.reduce((n, e) => n + e.row.replies, 0),
+      positiveReplies,
+      positiveRate: sent > 0 ? Math.round((positiveReplies / sent) * 10000) / 100 : 0,
+    };
+    return { lead: sorted[0], rest: sorted.slice(1), total };
+  });
+  merged.sort((a, b) => byStrength(a.total, b.total));
+  const fits = merged.slice(0, VARIATION_LABELS.length);
+  const overLimit = merged.length - fits.length;
+  fits.forEach((g, i) => {
+    const letter = VARIATION_LABELS[i];
+    g.lead.row.kept = true;
+    g.lead.row.newLetter = letter;
+    g.total.newLetter = letter;
+    g.total.variation = letter;
+    for (const e of g.rest) {
+      e.row.kept = true;
+      e.row.newLetter = letter;
+      e.row.sameAs = `${g.lead.row.campaignName} · ${g.lead.row.variation}`;
+    }
+  });
+  const noWinners = fits.length === 0;
+
+  let optOutSummary: OptOutSummary = { choice: optOut, added: [], replaced: [], present: [], removed: [] };
+  const steps: SequenceStep[] = baseLive.map((s, i) => {
+    if (i > 0) return s;
+    if (noWinners) return { ...s, variations: [emptyVariant()] };
+    const applied = applyOptOut(
+      fits.map((g, j) => ({ ...g.lead.v, variation: VARIATION_LABELS[j] })),
+      optOut
+    );
+    optOutSummary = applied.summary;
+    return { ...s, variations: applied.variations };
+  });
+
+  const rows = entries.map((e) => e.row);
+  return {
+    campaigns: perCampaign,
+    merged: fits.reduce((n, g) => n + g.rest.length, 0),
+    overLimit,
+    firstStep: steps[0]?.step ?? 1,
+    rows,
+    top3: fits.slice(0, 3).map((g) => g.total),
+    kept: fits.length,
+    dropped: rows.filter((r) => !r.kept).length,
+    noWinners,
+    followUps: baseLive.slice(1).map((s) => ({ step: s.step, variations: s.variations.length })),
     droppedDeleted,
     optOut: optOutSummary,
     steps,

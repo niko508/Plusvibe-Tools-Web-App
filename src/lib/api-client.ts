@@ -318,13 +318,16 @@ export function runCopyCampaign(payload: CopyCampaignPayload, signal?: AbortSign
 export type { CloneResult, WinnersPreview } from "@/lib/winning-variants/plan";
 
 /** A campaign's step-1 variants with their all-time figures, and its tags. Creates nothing. */
-export function previewWinningVariants(params: { workspaceId: string; campaignId: string }, signal?: AbortSignal) {
+export function previewWinningVariants(params: { workspaceId: string; campaignId: string; alsoIds?: string[] }, signal?: AbortSignal) {
   return request<import("@/lib/winning-variants/plan").WinnersPreview>("/api/winning-variants/preview", { method: "POST", body: params, signal });
 }
 
 export interface CloneWinnersPayload {
   workspaceId: string;
+  /** The campaign cloned: its settings, follow-ups and sub-sequences. */
   campaignId: string;
+  /** Other campaigns whose step-1 winners join the clone's. */
+  alsoIds?: string[];
   name: string;
   tagIds: string[];
   newTags: string[];

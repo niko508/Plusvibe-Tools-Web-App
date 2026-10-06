@@ -16,7 +16,7 @@ const eq = (label, got, want) => {
   }
 };
 
-const { parseVariationStats, planWinners, planProblems, tagChanges, cleanTagName, defaultName, emptyVariant } = await importTs("@/lib/winning-variants/plan");
+const { parseVariationStats, planWinners, planMultiWinners, planProblems, tagChanges, cleanTagName, defaultName, emptyVariant } = await importTs("@/lib/winning-variants/plan");
 
 // As the documented endpoint answers, grouped by step.
 const RAW = [
@@ -141,6 +141,57 @@ console.log("--- the opt-out line on the kept variants");
 
   const none = planWinners(seq, parseVariationStats([{ step: 1, variations: [] }]), "add");
   eq("no winners: the empty variant stays empty", [none.noWinners, first(none)[0].body, none.optOut.added], [true, "", []]);
+}
+
+console.log("--- winners from several campaigns");
+{
+  const { withCurrentOptOut } = await importTs("@/lib/campaign-types/append-opt-out");
+  const v = (variation, subject, body) => ({ variation, subject, preheader: "", name: "", body });
+  const st = (rows) => parseVariationStats([{ step: 1, variations: rows.map(([variation, sent, pos, del]) => ({ variation, sent, reply: pos * 2, pos_reply: pos, is_del: !!del })) }]);
+  const base = {
+    id: "y", name: "🟡 Apps (August)",
+    sequence: [
+      { step: 1, wait_time: 0, variations: [v("A", "Quick idea", "<p>Hi</p>"), v("B", "Loser", "<p>No</p>")] },
+      { step: 2, wait_time: 3, variations: [v("A", "", "<p>Bump</p>")] },
+    ],
+    stats: st([["A", 500, 2], ["B", 500, 0]]),
+  };
+  const blue = {
+    id: "b", name: "🔵 Apps (August)",
+    sequence: [{ step: 1, wait_time: 0, variations: [v("A", "Quick idea", "<p>Hi</p>"), v("B", "Loser", "<p>No</p>")] }],
+    stats: st([["A", 300, 3], ["B", 300, 0]]),
+  };
+  const other = {
+    id: "o", name: "🟡 Local (August)",
+    sequence: [{ step: 1, wait_time: 0, variations: [v("A", "Local hook", "<p>Hey</p>"), v("B", "quick  IDEA", withCurrentOptOut("<p>Hi</p>").body), v("C", "Gone", "<p>x</p>")] }],
+    stats: st([["A", 400, 7], ["B", 100, 1], ["C", 100, 9, true]]),
+  };
+  const p = planMultiWinners(base, [base, blue, other], "keep");
+  eq("each campaign's variants and winners", p.campaigns, [
+    { id: "y", name: "🟡 Apps (August)", variants: 2, winners: 1 },
+    { id: "b", name: "🔵 Apps (August)", variants: 2, winners: 1 },
+    { id: "o", name: "🟡 Local (August)", variants: 2, winners: 2 },
+  ]);
+  eq("the same email in three campaigns is one variant, figures added; strongest first", p.steps[0].variations.map((x) => [x.variation, x.subject]), [["A", "Local hook"], ["B", "Quick idea"]]);
+  eq("…its figures summed", p.top3.map((r) => [r.variation, r.positiveReplies, r.sent]), [["A", 7, 400], ["B", 6, 900]]);
+  eq("…the strongest copy's wording kept (the 🔵 one, 3 positive)", p.top3[1].campaignName, "🔵 Apps (August)");
+  eq("two counted into another; a deleted variant left out", [p.merged, p.droppedDeleted, p.kept], [2, 1, 2]);
+  eq("each row says where it went", p.rows.map((r) => [r.campaignId, r.variation, r.kept, r.newLetter ?? null, r.sameAs ?? null]), [
+    ["y", "A", true, "B", "🔵 Apps (August) · A"],
+    ["y", "B", false, null, null],
+    ["b", "A", true, "B", null],
+    ["b", "B", false, null, null],
+    ["o", "A", true, "A", null],
+    ["o", "B", true, "B", "🔵 Apps (August) · A"],
+  ]);
+  eq("follow-ups are the base's", [p.followUps, p.steps.length, p.steps[1].variations[0].body], [[{ step: 2, variations: 1 }], 2, "<p>Bump</p>"]);
+  const none = planMultiWinners(base, [{ ...base, stats: st([["A", 1, 0], ["B", 1, 0]]) }, { ...blue, stats: st([["A", 1, 0], ["B", 1, 0]]) }], "keep");
+  eq("no winners anywhere: one empty variant", [none.noWinners, none.steps[0].variations.length, none.steps[0].variations[0].body], [true, 1, ""]);
+  const added = planMultiWinners(base, [base, blue, other], "add");
+  eq("the opt-out choice applies to the clone's step 1", added.optOut.added.length + added.optOut.present.length + added.optOut.replaced.length, 2);
+  const many = { id: "m", name: "Many", sequence: [{ step: 1, wait_time: 0, variations: Array.from({ length: 110 }, (_, i) => v(`V${i}`, `s${i}`, `<p>${i}</p>`)) }], stats: parseVariationStats([{ step: 1, variations: Array.from({ length: 110 }, (_, i) => ({ variation: `V${i}`, sent: 100, pos_reply: 1 + (i % 3) })) }]) };
+  const big = planMultiWinners(base, [base, many], "keep");
+  eq("past the per-step limit the weakest are left out", [big.kept, big.overLimit, big.steps[0].variations.at(-1).variation], [104, 7, "CZ"]);
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);

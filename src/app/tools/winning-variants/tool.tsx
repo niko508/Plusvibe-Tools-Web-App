@@ -2,9 +2,11 @@
 
 // Clone Campaign with Winning Variants.
 //
-// Pick a workspace and a campaign; its first-step variants are shown with
+// Pick a workspace and one campaign or several; their first-step variants are shown with
 // their all-time sends, replies and positive replies, the top three, and which
-// would be kept. The clone is made in the same workspace — settings, sender
+// would be kept. With several, the winners of all of them go into one step 1
+// (the same email twice counted once), and the clone takes the settings of the
+// one picked to clone from. The clone is made in the same workspace — settings, sender
 // accounts, follow-ups and sub-sequences as they are — with step 1 cut down to
 // the variants that got at least one positive reply. When none did, the page
 // says so plainly and step 1 becomes one empty variant to write by hand.
@@ -37,7 +39,14 @@ export function WinningVariantsTool() {
   const [ws, setWs] = useState("");
   const [campaigns, setCampaigns] = useState<CampaignSummary[]>([]);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
-  const [campaignId, setCampaignId] = useState("");
+  /** The campaigns ticked, in the order they were ticked. */
+  const [picked, setPicked] = useState<string[]>([]);
+  /** The one cloned — settings, follow-ups, sub-sequences. The first ticked unless chosen. */
+  const [baseId, setBaseId] = useState("");
+  const [campaignFilter, setCampaignFilter] = useState("");
+  const campaignId = picked.includes(baseId) ? baseId : picked[0] ?? "";
+  const alsoIds = picked.filter((id) => id !== campaignId);
+  const alsoKey = alsoIds.join(",");
 
   const [preview, setPreview] = useState<WinnersPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -72,7 +81,8 @@ export function WinningVariantsTool() {
 
   useEffect(() => {
     setCampaigns([]);
-    setCampaignId("");
+    setPicked([]);
+    setBaseId("");
     if (!ws) return;
     let cancelled = false;
     setCampaignsLoading(true);
@@ -85,7 +95,8 @@ export function WinningVariantsTool() {
     };
   }, [ws]);
 
-  // The campaign's figures and tags. The name and tags start as the source's.
+  // The campaigns' figures and the cloned one's tags. The name and tags start
+  // as its own. A moment's pause first, so ticking several reads them once.
   useEffect(() => {
     setPreview(null);
     setResult(null);
@@ -94,7 +105,8 @@ export function WinningVariantsTool() {
     let cancelled = false;
     setPreviewLoading(true);
     setError(null);
-    previewWinningVariants({ workspaceId: ws, campaignId })
+    const t = setTimeout(() => {
+    previewWinningVariants({ workspaceId: ws, campaignId, ...(alsoIds.length > 0 ? { alsoIds } : {}) })
       .then((p) => {
         if (cancelled) return;
         setPreview(p);
@@ -105,10 +117,13 @@ export function WinningVariantsTool() {
       })
       .catch((err) => !cancelled && setError(errMessage(err)))
       .finally(() => !cancelled && setPreviewLoading(false));
+    }, 400);
     return () => {
       cancelled = true;
+      clearTimeout(t);
     };
-  }, [ws, campaignId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ws, campaignId, alsoKey]);
 
   const plan = preview?.plan ?? null;
   const problems = planProblems({ workspaceId: ws, campaignId, name }, { steps: plan ? plan.rows.length + plan.followUps.length : undefined });
@@ -149,7 +164,7 @@ export function WinningVariantsTool() {
     setResult(null);
     try {
       const res = await cloneWinningVariants(
-        { workspaceId: ws, campaignId, name: name.trim(), tagIds, newTags, confirmEmpty: plan.noWinners, optOut },
+        { workspaceId: ws, campaignId, ...(alsoIds.length > 0 ? { alsoIds } : {}), name: name.trim(), tagIds, newTags, confirmEmpty: plan.noWinners, optOut },
         controller.signal
       );
       setResult(res);
@@ -177,19 +192,30 @@ export function WinningVariantsTool() {
             options={workspaces.map((w) => ({ value: w._id, label: w.name }))}
             placeholder="Pick a workspace"
           />
-          <Select
-            label="Campaign to clone"
-            value={campaignId}
-            onChange={setCampaignId}
-            loading={campaignsLoading}
-            disabled={!ws}
-            options={campaigns.map((c) => ({ value: c.id, label: c.name }))}
-            placeholder={ws ? "Pick a campaign" : "Pick a workspace first"}
-          />
+          {picked.length > 1 ? (
+            <Select
+              label="Clone settings, follow-ups and sub-sequences from"
+              value={campaignId}
+              onChange={setBaseId}
+              options={picked.map((id) => ({ value: id, label: campaigns.find((c) => c.id === id)?.name ?? id }))}
+              placeholder="Pick one"
+            />
+          ) : (
+            <div />
+          )}
         </div>
+        <CampaignPicker
+          campaigns={campaigns}
+          loading={campaignsLoading}
+          disabled={!ws}
+          picked={picked}
+          filter={campaignFilter}
+          onFilter={setCampaignFilter}
+          onToggle={(id) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))}
+        />
         {previewLoading && (
           <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-            <Spinner size={12} /> Reading the campaign and its variant stats…
+            <Spinner size={12} /> Reading {picked.length > 1 ? `${picked.length} campaigns and their` : "the campaign and its"} variant stats…
           </p>
         )}
       </div>
@@ -214,7 +240,7 @@ export function WinningVariantsTool() {
                 {plan.top3.map((r, i) => (
                   <div key={r.variation} className="rounded-xl border border-border p-3" data-top-variant={r.variation}>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-muted-foreground">#{i + 1} · Variant {r.variation}</span>
+                      <span className="text-xs text-muted-foreground">#{i + 1} · Variant {r.variation}{r.campaignName ? ` · from ${r.campaignName}` : ""}</span>
                       <span className="text-xs tabular-nums text-muted-foreground">{r.positiveRate}%</span>
                     </div>
                     <div className="mt-1 text-2xl font-semibold tabular-nums text-success">{formatNumber(r.positiveReplies)}</div>
@@ -236,12 +262,15 @@ export function WinningVariantsTool() {
                   ? "None kept"
                   : `${formatNumber(plan.kept)} kept · ${formatNumber(plan.dropped)} left out`}
                 {plan.droppedDeleted > 0 ? ` · ${formatNumber(plan.droppedDeleted)} deleted in Plusvibe, left out` : ""}
+                {plan.merged ? ` · ${formatNumber(plan.merged)} the same email as another, counted together` : ""}
+                {plan.overLimit ? ` · ${formatNumber(plan.overLimit)} over the per-step limit, left out` : ""}
               </span>
             </div>
             <table className="mt-2 w-full text-xs">
               <thead>
                 <tr className="text-left text-muted-foreground">
-                  <th className="px-4 py-2 font-medium sm:px-5">Variant</th>
+                  {plan.campaigns && <th className="px-4 py-2 font-medium sm:px-5">Campaign</th>}
+                  <th className={`py-2 font-medium ${plan.campaigns ? "px-3" : "px-4 sm:px-5"}`}>Variant</th>
                   <th className="px-3 py-2 font-medium">Subject</th>
                   <th className="px-3 py-2 text-right font-medium">Sent</th>
                   <th className="px-3 py-2 text-right font-medium">Replies</th>
@@ -253,8 +282,9 @@ export function WinningVariantsTool() {
               </thead>
               <tbody>
                 {plan.rows.map((r) => (
-                  <tr key={r.variation} className="border-t border-border" data-variant-row={r.variation}>
-                    <td className="px-4 py-2 font-mono sm:px-5">{r.variation}</td>
+                  <tr key={`${r.campaignId ?? ""}:${r.variation}`} className="border-t border-border" data-variant-row={r.variation} data-variant-campaign={r.campaignId}>
+                    {plan.campaigns && <td className="max-w-[220px] truncate px-4 py-2 sm:px-5" title={r.campaignName}>{r.campaignName}</td>}
+                    <td className={`py-2 font-mono ${plan.campaigns ? "px-3" : "px-4 sm:px-5"}`}>{r.variation}</td>
                     <td className="max-w-[320px] truncate px-3 py-2" title={r.subject}>
                       {r.subject || <span className="text-muted-foreground">—</span>}
                     </td>
@@ -268,9 +298,13 @@ export function WinningVariantsTool() {
                       {r.optOut === "current" ? "Yes" : r.optOut === "older" ? "Older wording" : <span className="text-muted-foreground">—</span>}
                     </td>
                     <td className="px-4 py-2 sm:px-5" data-kept={String(r.kept)}>
-                      {r.kept ? (
+                      {r.kept && r.sameAs ? (
+                        <span className="text-muted-foreground" title={`The same email as ${r.sameAs}`}>
+                          Same as {r.newLetter} — counted in
+                        </span>
+                      ) : r.kept ? (
                         <span className="inline-flex items-center gap-1 text-success">
-                          <CheckIcon size={12} /> Kept
+                          <CheckIcon size={12} /> Kept{plan.campaigns && r.newLetter ? ` as ${r.newLetter}` : ""}
                         </span>
                       ) : (
                         <span className="text-muted-foreground">Left out</span>
@@ -281,6 +315,7 @@ export function WinningVariantsTool() {
               </tbody>
             </table>
             <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground sm:px-5" data-follow-ups>
+              {plan.campaigns ? `Settings, sender accounts and follow-ups are ${preview.campaignName}'s. ` : ""}
               {plan.followUps.length === 0
                 ? "No follow-up steps."
                 : `Follow-ups kept as they are: ${plan.followUps.map((f) => `step ${f.step} (${f.variations} variant${f.variations === 1 ? "" : "s"})`).join(", ")}.`}
@@ -454,11 +489,14 @@ export function WinningVariantsTool() {
 const letters = (l: string[]) => l.join(", ");
 
 function OptOutChoiceBox({ rows, checked, onChange }: { rows: VariantRow[]; checked: boolean; onChange: (v: boolean) => void }) {
-  const kept = rows.filter((r) => r.kept);
-  const none = kept.filter((r) => r.optOut === "none").map((r) => r.variation);
-  const older = kept.filter((r) => r.optOut === "older").map((r) => r.variation);
-  const current = kept.filter((r) => r.optOut === "current").map((r) => r.variation);
-  const having = kept.filter((r) => r.optOut !== "none").map((r) => r.variation);
+  // The variants that go into the clone, under their letters there: one per
+  // email when several campaigns were picked.
+  const kept = rows.filter((r) => r.kept && !r.sameAs);
+  const letter = (r: VariantRow) => r.newLetter ?? r.variation;
+  const none = kept.filter((r) => r.optOut === "none").map(letter);
+  const older = kept.filter((r) => r.optOut === "older").map(letter);
+  const current = kept.filter((r) => r.optOut === "current").map(letter);
+  const having = kept.filter((r) => r.optOut !== "none").map(letter);
   let note: string;
   if (checked) {
     const bits = [
@@ -563,4 +601,60 @@ function errMessage(err: unknown): string {
   if (err instanceof ApiClientError) return err.message;
   if (err instanceof Error) return err.message;
   return "Something went wrong.";
+}
+
+/** The campaigns to take winners from: tick one, or several. */
+function CampaignPicker({
+  campaigns,
+  loading,
+  disabled,
+  picked,
+  filter,
+  onFilter,
+  onToggle,
+}: {
+  campaigns: CampaignSummary[];
+  loading: boolean;
+  disabled: boolean;
+  picked: string[];
+  filter: string;
+  onFilter: (v: string) => void;
+  onToggle: (id: string) => void;
+}) {
+  const q = filter.trim().toLowerCase();
+  const shown = campaigns.filter((c) => !q || c.name.toLowerCase().includes(q));
+  return (
+    <div className="mt-3" data-campaign-picker>
+      <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs font-medium text-muted-foreground">
+          Campaigns to take the winners from{picked.length > 0 ? ` · ${picked.length} picked` : ""}
+        </span>
+        {campaigns.length > 8 && (
+          <input className="pv-input w-48 py-1 text-xs" placeholder="Filter campaigns…" value={filter} aria-label="Filter campaigns" onChange={(e) => onFilter(e.target.value)} />
+        )}
+      </div>
+      {disabled ? (
+        <p className="text-xs text-muted-foreground">Pick a workspace first.</p>
+      ) : loading ? (
+        <p className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Spinner size={12} /> Loading campaigns…
+        </p>
+      ) : (
+        <div className="pv-scroll max-h-64 overflow-y-auto rounded-xl border border-border p-1.5">
+          {shown.map((c) => (
+            <label key={c.id} className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm hover:bg-muted/40" data-campaign-option={c.id}>
+              <input type="checkbox" checked={picked.includes(c.id)} onChange={() => onToggle(c.id)} aria-label={`Pick ${c.name}`} />
+              <span className="min-w-0 flex-1 truncate">{c.name}</span>
+              {picked[0] === c.id && picked.length > 1 && <span className="shrink-0 text-[11px] text-muted-foreground">first picked</span>}
+            </label>
+          ))}
+          {shown.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">{campaigns.length === 0 ? "No campaigns in this workspace." : "No campaign matches."}</p>}
+        </div>
+      )}
+      <p className="mt-1.5 text-[11px] text-muted-foreground">
+        One campaign keeps its own winners. Several: every step-1 variant with a positive reply in any of them goes into one step 1,
+        strongest first — the same email in two of them (a 🟡 campaign and its 🔵 copy) counted once.
+      </p>
+    </div>
+  );
 }
