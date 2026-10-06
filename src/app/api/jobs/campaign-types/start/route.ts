@@ -58,7 +58,9 @@ export async function POST(request: Request) {
       const names = {} as RoleNames;
       for (const role of CREATED_ROLES) {
         names[role] = String(s?.names?.[role] ?? "").trim();
-        if (roles.includes(role) && !names[role]) return bad(`No name for the "${role}" campaign of "${campaignName}".`);
+        // A move run finds the copies a family has; one it hasn't (a family
+        // turned into Opt Out has no plain 🔵 or Opt Out copy) comes empty.
+        if (roles.includes(role) && !names[role] && body.mode !== "move") return bad(`No name for the "${role}" campaign of "${campaignName}".`);
       }
       // Only a move run takes a family its rows merely point at.
       const arrivalsOnly = body.mode === "move" && s?.arrivalsOnly === true;
@@ -115,6 +117,8 @@ export async function POST(request: Request) {
     for (const s of sources) taken.set(normalizeName(s.campaignName), `the original "${s.campaignName}"`);
     for (const s of sources) {
       for (const role of roles) {
+        // Nothing is named by a move run, and a copy a family hasn't got has no name.
+        if (mode === "move" || !s.names[role]) continue;
         const key = normalizeName(s.names[role]);
         const holder = taken.get(key);
         if (holder) return bad(`"${s.names[role]}" would have the same name as ${holder}.`);

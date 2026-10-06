@@ -4,9 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CampaignSummary } from "@/lib/plusvibe-types";
 import type { CampaignKind } from "@/lib/campaign-types/kinds";
 import type { RoleNames } from "@/lib/jobs/campaign-types-types";
-import { deriveNames } from "@/lib/campaign-types/names";
+import { familyNames } from "@/lib/campaign-types/names";
 import { ALL_COMPANION_ROLES, matchCompanions } from "@/lib/campaign-types/match";
-import { familyBase, isOriginal, planAddLeads, type SegmentCount } from "@/lib/campaign-types/add-leads";
+import { familyBase, originalsOf, planAddLeads, type SegmentCount } from "@/lib/campaign-types/add-leads";
 import { findIndustry, industryForCampaign, type Industry } from "@/lib/campaign-types/industries";
 import { DEFAULT_SEGMENT_ROWS, MAX_SEGMENTS } from "@/lib/campaign-types/segments";
 import { ApiClientError, deleteIndustry, previewAddLeads, saveIndustry, startCampaignTypes } from "@/lib/api-client";
@@ -98,7 +98,7 @@ export function AddLeadsPanel({
   // A different campaign starts unread.
   useEffect(() => setReadTick(0), [workspaceId, sourceId]);
 
-  const originals = useMemo(() => campaigns.filter(isOriginal), [campaigns]);
+  const originals = useMemo(() => originalsOf(campaigns), [campaigns]);
   const source = originals.find((c) => c.id === sourceId) ?? null;
 
   // Picking the campaign picks the industry it is named for, with its
@@ -208,7 +208,7 @@ export function AddLeadsPanel({
       const entry = (c: { id: string; name: string }, arrivalsOnly: boolean) => ({
         campaignId: c.id,
         campaignName: c.name,
-        names: deriveNames(c.name) as unknown as RoleNames,
+        names: familyNames(c.name) as unknown as RoleNames,
         ...(arrivalsOnly ? { arrivalsOnly: true } : {}),
       });
       await startCampaignTypes({

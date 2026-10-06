@@ -434,7 +434,10 @@ function newSourceRun(src: SourceInput, roles: CreatedRole[], mode: "create" | "
   const convertTo = convert ? (src.names.optOut || deriveNames(src.campaignName).optOut) : "";
   // A move run edits no copy: the campaigns it finds already carry their
   // opt-out line and sign-off, and touching them again is not its business.
-  const created: CreatedCampaign[] = roles.map((role) => ({
+  // A move run's family may lack a copy (one turned into Opt Out has no plain
+  // 🔵 or Opt Out copy): it comes with no name and isn't a target at all.
+  const own = mode === "move" ? roles.filter((role) => src.names[role]) : roles;
+  const created: CreatedCampaign[] = own.map((role) => ({
     role,
     name: src.names[role],
     state: "pending" as const,
@@ -448,7 +451,7 @@ function newSourceRun(src: SourceInput, roles: CreatedRole[], mode: "create" | "
       ? { signature: { state: "pending" as const, applied: [], alreadyPresent: [], missing: [] } }
       : {}),
   }));
-  const moving: MoveTarget[] = roles.map((role) => ({ role, name: src.names[role], planned: 0, moved: 0, state: "pending" as const }));
+  const moving: MoveTarget[] = own.map((role) => ({ role, name: src.names[role], planned: 0, moved: 0, state: "pending" as const }));
   const activation: ActivationTarget[] = activate
     ? (["source", ...roles] as CampaignRole[]).map((role) => ({
         role,

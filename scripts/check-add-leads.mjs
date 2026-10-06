@@ -16,7 +16,7 @@ const eq = (label, got, want) => {
   }
 };
 
-const { isOriginal, familiesFor, planAddLeads, countSegments, monthOf, monthRecency, familyBase } = await importTs("@/lib/campaign-types/add-leads");
+const { isOriginal, originalsOf, familiesFor, planAddLeads, countSegments, monthOf, monthRecency, familyBase } = await importTs("@/lib/campaign-types/add-leads");
 const Y = "🟡", B = "🔵";
 const oid = (unixSeconds, n) => unixSeconds.toString(16).padStart(8, "0") + n.toString(16).padStart(16, "0");
 const t = (y, m) => Math.floor(Date.UTC(y, m - 1, 1) / 1000);
@@ -107,6 +107,39 @@ console.log("--- plurals, and what was learned");
   const p = planAddLeads(src, ["dtc", "app"], camps, {}, null, { dtc: "D2C Brands" });
   eq("the plan marks what memory found", p.rows.map((r) => [r.segment, r.familyId, r.remembered, r.auto]), [["dtc", "d9", true, true], ["app", "a", false, true]]);
   eq("…a hand pick still wins over memory", planAddLeads(src, ["dtc"], camps, { dtc: "a" }, null, { dtc: "D2C Brands" }).rows[0].familyId, "a");
+}
+
+console.log("--- families turned into Opt Out (Opt Out only)");
+{
+  const { familyNames } = await importTs("@/lib/campaign-types/names");
+  const { matchCompanions, ALL_COMPANION_ROLES } = await importTs("@/lib/campaign-types/match");
+  const c = (id, name, extra = {}) => ({ id, name, status: "ACTIVE", ...extra });
+  // Conifr: SaaS families converted; eCommerce V2 a plain family with its Opt Out copies.
+  const ws = [
+    c("s1", "🟡 SaaS - Sales Led - Opt Out (August)"),
+    c("s2", "🔵 SaaS - Sales Led - Opt Out (August)"),
+    c("s3", "🟡 SaaS - Sales Led - Opt Out - Signature (August)"),
+    c("s4", "🔵 SaaS - Sales Led - Opt Out - Signature (August)"),
+    c("e1", "eCommerce V2 (August)"),
+    c("e2", "🔵 eCommerce V2 (August)"),
+    c("e3", "eCommerce V2 - Opt Out (August)"),
+    c("e4", "🔵 eCommerce V2 - Opt Out (August)"),
+    c("v1", "🟡 Vet - Opt Out (August)"),
+    c("v2", "Vet (August)"),
+    c("x1", "🟡 Old - Opt Out (May)", { status: "ARCHIVED" }),
+    c("x2", "🟡 Sub - Opt Out (August)", { campaignType: "subseq" }),
+  ];
+  eq("originals: the plain ones, and an Opt Out one with no plain campaign of its name", originalsOf(ws).map((x) => x.id), ["s1", "e1", "v2"]);
+  eq("…a plain one with or without its 🟡 still counts as the original", originalsOf(ws).some((x) => x.id === "v1"), false);
+  eq("isOriginal alone stays as it was", [isOriginal(ws[0]), isOriginal(ws[4])], [false, true]);
+  const n = familyNames("🟡 SaaS - Sales Led - Opt Out (August)");
+  eq("a converted family has no plain 🔵 or Opt Out copy", [n.blue, n.optOut], ["", ""]);
+  eq("…but its 🔵 Opt Out and Signature pair", [n.blueOptOut, n.signature, n.blueSignature], ["🔵 SaaS - Sales Led - Opt Out (August)", "🟡 SaaS - Sales Led - Opt Out - Signature (August)", "🔵 SaaS - Sales Led - Opt Out - Signature (August)"]);
+  const m = matchCompanions("🟡 SaaS - Sales Led - Opt Out (August)", ws, "s1", ALL_COMPANION_ROLES);
+  eq("its copies are found in their own roles", m.matches.map((x) => [x.role, x.match?.id ?? null]), [["blue", null], ["optOut", null], ["blueOptOut", "s2"], ["signature", "s3"], ["blueSignature", "s4"]]);
+  const p = matchCompanions("eCommerce V2 (August)", ws, "e1", ALL_COMPANION_ROLES);
+  eq("a plain family is found as before", p.matches.map((x) => [x.role, x.match?.id ?? null]), [["blue", "e2"], ["optOut", "e3"], ["blueOptOut", "e4"], ["signature", null], ["blueSignature", null]]);
+  eq("a segment finds the converted family", familiesFor("sales led", originalsOf(ws)).map((x) => x.id), ["s1"]);
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);

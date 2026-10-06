@@ -1,4 +1,4 @@
-import { deriveNames } from "./names";
+import { familyNames } from "./names";
 
 // Maps one source campaign onto the three companions the user created by hand
 // in Plusvibe.
@@ -156,7 +156,9 @@ export function matchCompanions(
   sourceId?: string,
   roleList: MatchRole[] = COMPANION_ROLES
 ): MatchResult {
-  const names = deriveNames(sourceName);
+  // A family whose original was turned into Opt Out has no plain 🔵 or Opt
+  // Out copy: those roles come back empty and match nothing.
+  const names = familyNames(sourceName);
   // Sub-sequences are separate campaign records; they are never a role here.
   // Archived campaigns are left out for the same reason buildReuseIndex leaves
   // them out: they cannot take a lead, so matching one would report a tidy
@@ -184,6 +186,7 @@ export function matchCompanions(
 
   const used = new Set<string>();
   const matches: RoleMatch[] = roles.map(({ role, expectedName }) => {
+    if (!expectedName) return { role, expectedName, match: null, ambiguous: false };
     const exact = byName.get(normalizeName(expectedName)) ?? [];
     // Two campaigns with the same name: we can't tell which is meant.
     if (exact.length > 1) {

@@ -15,7 +15,8 @@
 //
 // Pure module: no API calls, so all of it is unit-tested.
 
-import { BLUE, hasOptOut, hasSignature } from "./names";
+import { BLUE, hasOptOut, hasSignature, stripYellow, withoutOptOut } from "./names";
+import { normalizeName } from "./match";
 import { isArchived } from "./match";
 
 export interface CampaignLite {
@@ -26,9 +27,25 @@ export interface CampaignLite {
   createdAt?: number;
 }
 
+const live = (c: CampaignLite) => c.campaignType !== "subseq" && !isArchived(c);
+const plainSide = (c: CampaignLite) => !c.name.trim().startsWith(BLUE) && !hasSignature(c.name);
+
 /** An original: live, not a sub-sequence, and not one of the 🔵, Opt Out or Signature copies. */
 export function isOriginal(c: CampaignLite): boolean {
-  return c.campaignType !== "subseq" && !isArchived(c) && !c.name.trim().startsWith(BLUE) && !hasOptOut(c.name) && !hasSignature(c.name);
+  return live(c) && plainSide(c) && !hasOptOut(c.name);
+}
+
+/**
+ * The workspace's originals. Besides the plain ones, an Opt Out campaign is
+ * one when no plain campaign of the same name sits beside it: its family was
+ * built with Opt Out only, which turns the original itself into the Opt Out
+ * campaign ("🟡 SaaS - Sales Led - Opt Out (August)").
+ */
+export function originalsOf<T extends CampaignLite>(campaigns: T[]): T[] {
+  // With or without the 🟡: both spellings are in use.
+  const key = (name: string) => normalizeName(stripYellow(name));
+  const plain = new Set(campaigns.filter((c) => live(c) && isOriginal(c)).map((c) => key(c.name)));
+  return campaigns.filter((c) => live(c) && plainSide(c) && (!hasOptOut(c.name) || !plain.has(key(withoutOptOut(c.name)))));
 }
 
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];

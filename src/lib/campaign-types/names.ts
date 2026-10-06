@@ -148,3 +148,19 @@ export function deriveNames(sourceName: string): DerivedNames {
     blueSignature: withSignature(withBlue(base)),
   };
 }
+
+/** The name with its " - Opt Out" marker taken out: "🟡 X - Opt Out (August)" → "🟡 X (August)". */
+export function withoutOptOut(name: string): string {
+  return name.replace(/\s*-\s*opt out(?=\s*(\(|-|$))/i, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The copies a family has, named from its original. An original that carries
+ * "Opt Out" itself was turned into Opt Out in place (Opt Out only), so its
+ * family has no plain 🔵 copy and no separate Opt Out copy — just its 🔵 Opt
+ * Out copy and the Signature pair: those two roles are left empty ("").
+ */
+export function familyNames(originalName: string): DerivedNames {
+  const names = deriveNames(originalName);
+  return hasOptOut(originalName) ? { ...names, blue: "", optOut: "" } : names;
+}
