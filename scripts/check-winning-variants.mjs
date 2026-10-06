@@ -16,7 +16,7 @@ const eq = (label, got, want) => {
   }
 };
 
-const { parseVariationStats, planWinners, planMultiWinners, planProblems, tagChanges, cleanTagName, defaultName, emptyVariant } = await importTs("@/lib/winning-variants/plan");
+const { parseVariationStats, planWinners, planMultiWinners, planProblems, tagChanges, cleanTagName, defaultName, emptyVariant, resultName, MAX_VARIANT_NAME } = await importTs("@/lib/winning-variants/plan");
 
 // As the documented endpoint answers, grouped by step.
 const RAW = [
@@ -192,6 +192,20 @@ console.log("--- winners from several campaigns");
   const many = { id: "m", name: "Many", sequence: [{ step: 1, wait_time: 0, variations: Array.from({ length: 110 }, (_, i) => v(`V${i}`, `s${i}`, `<p>${i}</p>`)) }], stats: parseVariationStats([{ step: 1, variations: Array.from({ length: 110 }, (_, i) => ({ variation: `V${i}`, sent: 100, pos_reply: 1 + (i % 3) })) }]) };
   const big = planMultiWinners(base, [base, many], "keep");
   eq("past the per-step limit the weakest are left out", [big.kept, big.overLimit, big.steps[0].variations.at(-1).variation], [104, 7, "CZ"]);
+}
+
+console.log("--- naming the kept variants with their results");
+{
+  eq("rank and figures, then the old name", resultName(1, { positiveReplies: 2, sent: 138 }, "Permission-ask + without"), "#1 · 2 pos / 138 sent · Permission-ask + without");
+  eq("no old name: just the figures", resultName(3, { positiveReplies: 1, sent: 90 }, ""), "#3 · 1 pos / 90 sent");
+  eq("from several campaigns: where it came from, circle off", resultName(2, { positiveReplies: 2, sent: 247 }, "Angle", { campaign: "🔵 Legal - Opt Out (August)", letter: "B" }), "#2 · 2 pos / 247 sent · from Legal - Opt Out (August) B · Angle");
+  eq("a clone of a clone: the old figures replaced, not stacked", resultName(1, { positiveReplies: 5, sent: 300 }, "#2 · 2 pos / 138 sent · from Legal (August) A · Angle"), "#1 · 5 pos / 300 sent · Angle");
+  eq("kept short", resultName(1, { positiveReplies: 1, sent: 1 }, "x".repeat(300)).length, MAX_VARIANT_NAME);
+  const v = (variation, name) => ({ variation, subject: variation, preheader: "", name, body: `<p>${variation}</p>` });
+  const seq = [{ step: 1, wait_time: 0, variations: [v("A", "Angle A"), v("B", "Angle B"), v("C", "")] }];
+  const stats = parseVariationStats([{ step: 1, variations: [{ variation: "A", sent: 100, pos_reply: 1 }, { variation: "B", sent: 100, pos_reply: 0 }, { variation: "C", sent: 50, pos_reply: 3 }] }]);
+  eq("one campaign: named by rank, letters kept", planWinners(seq, stats, "keep", true).steps[0].variations.map((x) => [x.variation, x.name]), [["A", "#2 · 1 pos / 100 sent · Angle A"], ["C", "#1 · 3 pos / 50 sent"]]);
+  eq("…unticked: names as they were", planWinners(seq, stats, "keep", false).steps[0].variations.map((x) => x.name), ["Angle A", ""]);
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);

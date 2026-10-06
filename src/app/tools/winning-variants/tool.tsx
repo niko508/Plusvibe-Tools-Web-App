@@ -24,7 +24,7 @@ import {
   type CloneResult,
   type WinnersPreview,
 } from "@/lib/api-client";
-import { cleanTagName, defaultName, defaultOptOut, planProblems, type TagRef, type VariantRow } from "@/lib/winning-variants/plan";
+import { cleanTagName, defaultName, defaultOptOut, planProblems, resultName, type TagRef, type VariantRow } from "@/lib/winning-variants/plan";
 import { useApiKey } from "@/lib/use-api-key";
 import { formatNumber } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
@@ -56,6 +56,7 @@ export function WinningVariantsTool() {
   const [newTags, setNewTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState("");
   const [optOut, setOptOut] = useState(false);
+  const [nameResults, setNameResults] = useState(true);
 
   const [armed, setArmed] = useState(false);
   const [running, setRunning] = useState(false);
@@ -164,7 +165,7 @@ export function WinningVariantsTool() {
     setResult(null);
     try {
       const res = await cloneWinningVariants(
-        { workspaceId: ws, campaignId, ...(alsoIds.length > 0 ? { alsoIds } : {}), name: name.trim(), tagIds, newTags, confirmEmpty: plan.noWinners, optOut },
+        { workspaceId: ws, campaignId, ...(alsoIds.length > 0 ? { alsoIds } : {}), name: name.trim(), tagIds, newTags, confirmEmpty: plan.noWinners, optOut, nameResults },
         controller.signal
       );
       setResult(res);
@@ -389,6 +390,27 @@ export function WinningVariantsTool() {
             </div>
 
             {!plan.noWinners && <OptOutChoiceBox rows={plan.rows} checked={optOut} onChange={setOptOut} />}
+            {!plan.noWinners && (
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3" data-name-results>
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 accent-accent"
+                  checked={nameResults}
+                  onChange={(e) => setNameResults(e.target.checked)}
+                  aria-label="Name each kept variant with its results"
+                />
+                <span className="text-sm">
+                  <span className="font-medium">Name each kept variant with its results</span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    The variant&apos;s name in Plusvibe starts with its rank and figures, then the name it had —{" "}
+                    <span className="font-mono">
+                      {resultName(1, plan.top3[0] ?? { positiveReplies: 0, sent: 0 }, "", plan.campaigns && plan.top3[0] ? { campaign: plan.top3[0].campaignName ?? "", letter: rowLetterOf(plan.rows, plan.top3[0]) } : undefined)}
+                    </span>
+                    {plan.campaigns ? "" : " …"}. Unticked, names stay as they were.
+                  </span>
+                </span>
+              </label>
+            )}
 
             <div className="flex flex-wrap items-center gap-2">
               {armed && (
@@ -657,4 +679,9 @@ function CampaignPicker({
       </p>
     </div>
   );
+}
+
+/** The letter a top variant had in its own campaign (several campaigns: its row's original letter). */
+function rowLetterOf(rows: VariantRow[], top: VariantRow): string {
+  return rows.find((r) => r.campaignId === top.campaignId && r.newLetter === top.newLetter && !r.sameAs)?.variation ?? top.variation;
 }

@@ -142,6 +142,27 @@ function shortSubject(s: string | undefined): string {
   return line.length > SUBJECT_CHARS ? `${line.slice(0, SUBJECT_CHARS - 1)}…` : line;
 }
 
+/** At most this long, so the name box stays readable in Plusvibe. */
+export const MAX_VARIANT_NAME = 120;
+
+/** A campaign's name without its 🟡/🔵 circle, for a variant's name. */
+const shortCampaign = (name: string) => name.replace(/^[🟡🔵]\uFE0F?\s*/u, "").trim();
+
+/**
+ * A kept variant's name in the clone: its rank and results first, so the best
+ * performers can be told apart in Plusvibe, then where it came from (several
+ * campaigns) and the name it had. "#1 · 2 pos / 138 sent · Permission-ask".
+ * A name that already starts with a rank (a clone of a clone) loses the old one.
+ */
+export function resultName(rank: number, r: { positiveReplies: number; sent: number }, oldName = "", from?: { campaign: string; letter: string }): string {
+  const old = oldName.replace(/^#\d+ · \d+ pos \/ \d+ sent(?: · from [^·]+)?/, "").replace(/^[·\s]+/, "").trim();
+  const parts = [`#${rank}`, `${r.positiveReplies} pos / ${r.sent} sent`];
+  if (from) parts.push(`from ${shortCampaign(from.campaign)} ${from.letter}`);
+  if (old) parts.push(old);
+  const out = parts.join(" · ");
+  return out.length > MAX_VARIANT_NAME ? `${out.slice(0, MAX_VARIANT_NAME - 1)}…` : out;
+}
+
 /** The single blank variant a step 1 with no winners is left with. */
 export function emptyVariant(): SequenceVariation {
   return { variation: "A", subject: "", preheader: "", name: "", body: "" };
@@ -187,7 +208,7 @@ function applyOptOut(variations: SequenceVariation[], choice: OptOutChoice): { v
   return { variations: out, summary };
 }
 
-export function planWinners(sequence: SequenceStep[], stats: StatsByStep, optOut: OptOutChoice = "keep"): WinnerPlan {
+export function planWinners(sequence: SequenceStep[], stats: StatsByStep, optOut: OptOutChoice = "keep", nameResults = false): WinnerPlan {
   const ordered = [...sequence].sort((a, b) => a.step - b.step);
   let droppedDeleted = 0;
   // Deleted variants are left out everywhere, as the other copy tools do.
@@ -227,7 +248,16 @@ export function planWinners(sequence: SequenceStep[], stats: StatsByStep, optOut
   const steps: SequenceStep[] = live.map((s, i) => {
     if (i > 0) return s;
     if (noWinners) return { ...s, variations: [emptyVariant()] };
-    const applied = applyOptOut(s.variations.filter((v) => keptLetters.has(v.variation)), optOut);
+    // Rank by strength, as the top three are.
+    const rankOf = new Map([...winners].sort(byStrength).map((r, k) => [r.variation, k + 1]));
+    const kept = s.variations
+      .filter((v) => keptLetters.has(v.variation))
+      .map((v) => {
+        if (!nameResults) return v;
+        const r = winners.find((w) => w.variation === v.variation)!;
+        return { ...v, name: resultName(rankOf.get(v.variation)!, r, v.name ?? "") };
+      });
+    const applied = applyOptOut(kept, optOut);
     optOutSummary = applied.summary;
     return { ...s, variations: applied.variations };
   });
@@ -270,7 +300,7 @@ function sameEmailKey(v: SequenceVariation): string {
  * the weakest are left out. Settings, follow-ups and sub-sequences are the
  * base's, as in the one-campaign clone.
  */
-export function planMultiWinners(base: CampaignInput, campaigns: CampaignInput[], optOut: OptOutChoice = "keep"): WinnerPlan {
+export function planMultiWinners(base: CampaignInput, campaigns: CampaignInput[], optOut: OptOutChoice = "keep", nameResults = false): WinnerPlan {
   const all = campaigns.some((c) => c.id === base.id) ? campaigns : [base, ...campaigns];
   let droppedDeleted = 0;
   const firstOf = (c: CampaignInput) => {
@@ -363,7 +393,13 @@ export function planMultiWinners(base: CampaignInput, campaigns: CampaignInput[]
     if (i > 0) return s;
     if (noWinners) return { ...s, variations: [emptyVariant()] };
     const applied = applyOptOut(
-      fits.map((g, j) => ({ ...g.lead.v, variation: VARIATION_LABELS[j] })),
+      fits.map((g, j) => ({
+        ...g.lead.v,
+        variation: VARIATION_LABELS[j],
+        ...(nameResults
+          ? { name: resultName(j + 1, g.total, g.lead.v.name ?? "", { campaign: g.lead.row.campaignName ?? "", letter: g.lead.row.variation }) }
+          : {}),
+      })),
       optOut
     );
     optOutSummary = applied.summary;

@@ -71,19 +71,20 @@ async function planFor(
   workspaceId: string,
   campaignId: string,
   alsoIds: string[],
-  optOut: OptOutChoice = "keep"
+  optOut: OptOutChoice = "keep",
+  nameResults = false
 ): Promise<{ raw: Record<string, unknown>; plan: WinnerPlan }> {
   const raw = await readCampaign(apiKey, workspaceId, campaignId);
   const stats = await readStats(apiKey, workspaceId, campaignId);
   const others = [...new Set(alsoIds)].filter((id) => id && id !== campaignId).slice(0, MAX_WINNER_CAMPAIGNS - 1);
-  if (others.length === 0) return { raw, plan: planWinners(normalizeSequences(raw.sequences), stats, optOut) };
+  if (others.length === 0) return { raw, plan: planWinners(normalizeSequences(raw.sequences), stats, optOut, nameResults) };
   const base: CampaignInput = { id: campaignId, name: nameOf(raw), sequence: normalizeSequences(raw.sequences), stats };
   const inputs: CampaignInput[] = [base];
   for (const id of others) {
     const r = await readCampaign(apiKey, workspaceId, id);
     inputs.push({ id, name: nameOf(r), sequence: normalizeSequences(r.sequences), stats: await readStats(apiKey, workspaceId, id) });
   }
-  return { raw, plan: planMultiWinners(base, inputs, optOut) };
+  return { raw, plan: planMultiWinners(base, inputs, optOut, nameResults) };
 }
 
 export async function previewWinners(apiKey: string, workspaceId: string, campaignId: string, alsoIds: string[] = []): Promise<WinnersPreview> {
@@ -124,6 +125,8 @@ export interface CloneInput {
   optOut: OptOutChoice;
   /** Other campaigns in the workspace whose step-1 winners join the clone's. */
   alsoIds?: string[];
+  /** Each kept variant named with its rank and results ("#1 · 2 pos / 138 sent · …"). */
+  nameResults?: boolean;
 }
 
 /** Step 1 has no winners and the page hasn't said the user knows. */
@@ -155,7 +158,7 @@ export async function cloneWithWinners(input: CloneInput): Promise<CloneResult> 
   const warnings: string[] = [];
 
   // --- 1. Read it all first: a failure here leaves nothing behind ---------
-  const { plan } = await planFor(apiKey, workspaceId, campaignId, input.alsoIds ?? [], input.optOut);
+  const { plan } = await planFor(apiKey, workspaceId, campaignId, input.alsoIds ?? [], input.optOut, input.nameResults === true);
   if (plan.steps.length === 0) throw new Error("That campaign has no sequence steps, so there is nothing to clone.");
   if (plan.noWinners && !input.confirmEmpty) throw new NeedsConfirmError();
   if (plan.overLimit) warnings.push(`${plan.overLimit} more winning variant${plan.overLimit === 1 ? "" : "s"} didn't fit in one step and ${plan.overLimit === 1 ? "was" : "were"} left out — the weakest.`);
