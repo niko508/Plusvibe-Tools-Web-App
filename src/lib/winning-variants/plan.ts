@@ -125,6 +125,8 @@ export interface WinnerPlan {
   dropped: number;
   /** No variant in step 1 has a positive reply: it becomes one empty variant. */
   noWinners: boolean;
+  /** The clone's letters whose names get "(Previous Winner)": the most positive replies, if more than one. */
+  marked: string[];
   /** Follow-up steps, kept as they are. */
   followUps: { step: number; variations: number }[];
   /** Variants Plusvibe has deleted but still returns: never written back. */
@@ -142,25 +144,28 @@ function shortSubject(s: string | undefined): string {
   return line.length > SUBJECT_CHARS ? `${line.slice(0, SUBJECT_CHARS - 1)}…` : line;
 }
 
-/** At most this long, so the name box stays readable in Plusvibe. */
-export const MAX_VARIANT_NAME = 120;
-
-/** A campaign's name without its 🟡/🔵 circle, for a variant's name. */
-const shortCampaign = (name: string) => name.replace(/^[🟡🔵]\uFE0F?\s*/u, "").trim();
+/** Added to the name of the variant(s) that did best. */
+export const WINNER_MARK = "(Previous Winner)";
 
 /**
- * A kept variant's name in the clone: its rank and results first, so the best
- * performers can be told apart in Plusvibe, then where it came from (several
- * campaigns) and the name it had. "#1 · 2 pos / 138 sent · Permission-ask".
- * A name that already starts with a rank (a clone of a clone) loses the old one.
+ * A variant's name in the clone: as it was, with "(Previous Winner)" after it
+ * when it is a winner — and a mark left over from an earlier clone taken off
+ * when it isn't, so the mark only ever means this round.
  */
-export function resultName(rank: number, r: { positiveReplies: number; sent: number }, oldName = "", from?: { campaign: string; letter: string }): string {
-  const old = oldName.replace(/^#\d+ · \d+ pos \/ \d+ sent(?: · from [^·]+)?/, "").replace(/^[·\s]+/, "").trim();
-  const parts = [`#${rank}`, `${r.positiveReplies} pos / ${r.sent} sent`];
-  if (from) parts.push(`from ${shortCampaign(from.campaign)} ${from.letter}`);
-  if (old) parts.push(old);
-  const out = parts.join(" · ");
-  return out.length > MAX_VARIANT_NAME ? `${out.slice(0, MAX_VARIANT_NAME - 1)}…` : out;
+export function withWinnerMark(name: string, isWinner: boolean): string {
+  const bare = (name ?? "").replace(/\s*\(previous winner\)\s*$/i, "").trim();
+  if (!isWinner) return bare;
+  return bare ? `${bare} ${WINNER_MARK}` : WINNER_MARK;
+}
+
+/**
+ * The positive replies a variant needs to be marked: the most any kept one got
+ * — so ties are all marked — and only when that is more than one. When every
+ * variant has a single positive reply, none stands out, and none is marked.
+ */
+export function winnerBar(positives: number[]): number | null {
+  const top = Math.max(0, ...positives);
+  return top >= 2 ? top : null;
 }
 
 /** The single blank variant a step 1 with no winners is left with. */
@@ -208,7 +213,7 @@ function applyOptOut(variations: SequenceVariation[], choice: OptOutChoice): { v
   return { variations: out, summary };
 }
 
-export function planWinners(sequence: SequenceStep[], stats: StatsByStep, optOut: OptOutChoice = "keep", nameResults = false): WinnerPlan {
+export function planWinners(sequence: SequenceStep[], stats: StatsByStep, optOut: OptOutChoice = "keep"): WinnerPlan {
   const ordered = [...sequence].sort((a, b) => a.step - b.step);
   let droppedDeleted = 0;
   // Deleted variants are left out everywhere, as the other copy tools do.
@@ -243,19 +248,19 @@ export function planWinners(sequence: SequenceStep[], stats: StatsByStep, optOut
   const winners = rows.filter((r) => r.kept);
   const noWinners = winners.length === 0;
   const keptLetters = new Set(winners.map((r) => r.variation));
+  const marked: string[] = [];
 
   let optOutSummary: OptOutSummary = { choice: optOut, added: [], replaced: [], present: [], removed: [] };
   const steps: SequenceStep[] = live.map((s, i) => {
     if (i > 0) return s;
     if (noWinners) return { ...s, variations: [emptyVariant()] };
-    // Rank by strength, as the top three are.
-    const rankOf = new Map([...winners].sort(byStrength).map((r, k) => [r.variation, k + 1]));
+    const bar = winnerBar(winners.map((w) => w.positiveReplies));
     const kept = s.variations
       .filter((v) => keptLetters.has(v.variation))
       .map((v) => {
-        if (!nameResults) return v;
-        const r = winners.find((w) => w.variation === v.variation)!;
-        return { ...v, name: resultName(rankOf.get(v.variation)!, r, v.name ?? "") };
+        const isTop = bar !== null && winners.find((w) => w.variation === v.variation)!.positiveReplies === bar;
+        if (isTop) marked.push(v.variation);
+        return { ...v, name: withWinnerMark(v.name ?? "", isTop) };
       });
     const applied = applyOptOut(kept, optOut);
     optOutSummary = applied.summary;
@@ -269,6 +274,7 @@ export function planWinners(sequence: SequenceStep[], stats: StatsByStep, optOut
     kept: winners.length,
     dropped: rows.length - winners.length,
     noWinners,
+    marked,
     followUps: live.slice(1).map((s) => ({ step: s.step, variations: s.variations.length })),
     droppedDeleted,
     optOut: optOutSummary,
@@ -300,7 +306,7 @@ function sameEmailKey(v: SequenceVariation): string {
  * the weakest are left out. Settings, follow-ups and sub-sequences are the
  * base's, as in the one-campaign clone.
  */
-export function planMultiWinners(base: CampaignInput, campaigns: CampaignInput[], optOut: OptOutChoice = "keep", nameResults = false): WinnerPlan {
+export function planMultiWinners(base: CampaignInput, campaigns: CampaignInput[], optOut: OptOutChoice = "keep"): WinnerPlan {
   const all = campaigns.some((c) => c.id === base.id) ? campaigns : [base, ...campaigns];
   let droppedDeleted = 0;
   const firstOf = (c: CampaignInput) => {
@@ -387,6 +393,8 @@ export function planMultiWinners(base: CampaignInput, campaigns: CampaignInput[]
     }
   });
   const noWinners = fits.length === 0;
+  const bar = winnerBar(fits.map((g) => g.total.positiveReplies));
+  const marked = bar === null ? [] : fits.map((g, j) => (g.total.positiveReplies === bar ? VARIATION_LABELS[j] : "")).filter(Boolean);
 
   let optOutSummary: OptOutSummary = { choice: optOut, added: [], replaced: [], present: [], removed: [] };
   const steps: SequenceStep[] = baseLive.map((s, i) => {
@@ -396,9 +404,7 @@ export function planMultiWinners(base: CampaignInput, campaigns: CampaignInput[]
       fits.map((g, j) => ({
         ...g.lead.v,
         variation: VARIATION_LABELS[j],
-        ...(nameResults
-          ? { name: resultName(j + 1, g.total, g.lead.v.name ?? "", { campaign: g.lead.row.campaignName ?? "", letter: g.lead.row.variation }) }
-          : {}),
+        name: withWinnerMark(g.lead.v.name ?? "", bar !== null && g.total.positiveReplies === bar),
       })),
       optOut
     );
@@ -417,6 +423,7 @@ export function planMultiWinners(base: CampaignInput, campaigns: CampaignInput[]
     kept: fits.length,
     dropped: rows.filter((r) => !r.kept).length,
     noWinners,
+    marked,
     followUps: baseLive.slice(1).map((s) => ({ step: s.step, variations: s.variations.length })),
     droppedDeleted,
     optOut: optOutSummary,

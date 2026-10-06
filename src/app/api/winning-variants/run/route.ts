@@ -26,7 +26,6 @@ export async function POST(request: Request) {
       confirmEmpty?: boolean;
       optOut?: unknown;
       alsoIds?: unknown;
-      nameResults?: unknown;
     };
     const sel = { workspaceId: String(body.workspaceId ?? ""), campaignId: String(body.campaignId ?? ""), name: String(body.name ?? "") };
     // Checked again here: this is the last stop before a campaign is created.
@@ -41,7 +40,6 @@ export async function POST(request: Request) {
       confirmEmpty: body.confirmEmpty === true,
       optOut: body.optOut === true ? "add" : body.optOut === false ? "remove" : "keep",
       alsoIds: strings(body.alsoIds).slice(0, MAX_WINNER_CAMPAIGNS - 1),
-      nameResults: body.nameResults === true,
     });
     return NextResponse.json(result);
   } catch (err) {

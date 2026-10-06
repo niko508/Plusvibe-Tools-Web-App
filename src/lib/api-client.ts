@@ -328,8 +328,6 @@ export interface CloneWinnersPayload {
   campaignId: string;
   /** Other campaigns whose step-1 winners join the clone's. */
   alsoIds?: string[];
-  /** Name each kept variant with its rank and results. */
-  nameResults?: boolean;
   name: string;
   tagIds: string[];
   newTags: string[];
