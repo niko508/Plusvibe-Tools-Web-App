@@ -326,7 +326,12 @@ export interface CampaignTypesJob {
   request?: CampaignTypesStartPayload;
   /** When a restart cut the run off. */
   interruptedAt?: number;
-  /** The run that picked this one up after it was interrupted. */
+  /**
+   * When a restart cut the run off and it was picked up again in place — the
+   * same card carrying on, not a new run. Leads already moved are counted.
+   */
+  resumes?: number[];
+  /** Older records: the run that picked this one up after it was interrupted. */
   resumedAs?: string;
   /** The interrupted run this one continues. */
   resumedFrom?: string;

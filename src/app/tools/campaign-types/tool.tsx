@@ -208,12 +208,13 @@ export function CampaignTypesTool() {
   // A run a server restart cut off is continued without being asked. The
   // server does this itself at start-up when it has a key of its own; when it
   // does not, the page does it with the key it holds, as soon as it sees one.
-  // Tried once per run per page, so a refusal is shown rather than retried.
+  // Tried once per interruption per page, so a refusal is shown rather than
+  // retried — while a run cut off again by a later restart is still picked up.
   const [resuming, setResuming] = useState<Set<string>>(() => new Set());
   const resumeTried = useRef(new Set<string>());
   const resume = useCallback(
-    async (id: string) => {
-      resumeTried.current.add(id);
+    async (id: string, interruptedAt?: number) => {
+      resumeTried.current.add(`${id}:${interruptedAt ?? ""}`);
       setResuming((prev) => new Set(prev).add(id));
       try {
         await resumeCampaignTypes(id);
@@ -236,11 +237,11 @@ export function CampaignTypesTool() {
     const now = Date.now();
     // Oldest first, so the queue comes back in the order it was in.
     const due = jobs
-      .filter((j) => shouldAutoResume(j, now, jobs) && !resumeTried.current.has(j.id))
+      .filter((j) => shouldAutoResume(j, now, jobs) && !resumeTried.current.has(`${j.id}:${j.interruptedAt ?? ""}`))
       .sort((a, b) => a.createdAt - b.createdAt);
     if (due.length === 0) return;
     void (async () => {
-      for (const j of due) await resume(j.id);
+      for (const j of due) await resume(j.id, j.interruptedAt);
     })();
   }, [jobs, resume]);
 

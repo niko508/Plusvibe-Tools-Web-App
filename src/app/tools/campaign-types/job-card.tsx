@@ -258,8 +258,14 @@ export function JobCard({
             : resuming
               ? "Interrupted by a server restart — picking it up again…"
               : job.startedAt
-                ? "Interrupted by a server restart. Leads already moved are in their new campaigns. Continue picks up where it stopped and finishes the same split."
+                ? "Interrupted by a server restart. Leads already moved are in their new campaigns. It carries on here by itself as soon as the server is back; Continue does it now."
                 : "Still queued when the server restarted, so it never began. Nothing was created — continue to queue it again."}
+        </p>
+      )}
+      {(job.resumes?.length ?? 0) > 0 && job.status !== "interrupted" && (
+        <p className="mt-2 text-xs text-muted-foreground" data-resumed>
+          {job.resumes!.length === 1 ? "A server restart cut this run off and it carried on" : `Server restarts cut this run off ${job.resumes!.length} times and it carried on each time`}
+          , counting the leads already moved, so the split comes out as one.
         </p>
       )}
       {job.resumedFrom && (

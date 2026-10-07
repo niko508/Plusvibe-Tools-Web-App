@@ -527,7 +527,19 @@ export async function createJob(apiKey: string, payload: CampaignTypesStartPaylo
   }
 
   const id = randomUUID();
-  const now = Date.now();
+  const record = buildRecord(id, payload, Date.now());
+
+  records.set(id, record);
+  meta.set(id, { fingerprint: fp, apiKey, payload, aborted: false });
+  queue.push(id);
+
+  await persist(id);
+  pump(fp);
+  return id;
+}
+
+/** A fresh record for a run of `payload`, queued, with what it carries from an earlier run filled in. */
+function buildRecord(id: string, payload: CampaignTypesStartPayload, now: number): CampaignTypesJob {
   const mode: CampaignTypesMode =
     payload.mode === "move" ? "move" : payload.mode === "fix" ? "fix" : "create";
   const activate = mode === "create" && payload.activate !== false;
@@ -607,14 +619,7 @@ export async function createJob(apiKey: string, payload: CampaignTypesStartPaylo
     request: { ...payload, carry: undefined, carryAlloc: undefined, carryArrivals: undefined, resumedFrom: undefined },
     ...(payload.resumedFrom ? { resumedFrom: payload.resumedFrom } : {}),
   };
-
-  records.set(id, record);
-  meta.set(id, { fingerprint: fp, apiKey, payload, aborted: false });
-  queue.push(id);
-
-  await persist(id);
-  pump(fp);
-  return id;
+  return record;
 }
 
 // --- Runner ----------------------------------------------------------------
@@ -956,7 +961,8 @@ async function activateWorkspace(ctx: RunCtx) {
  */
 async function pauseWorkspace(ctx: RunCtx): Promise<boolean> {
   const { rec, apiKey, workspaceId, id } = ctx;
-  const wp: WorkspacePause = { state: "running", paused: [], failed: [], notRunning: 0 };
+  // Picked up after a restart: the campaigns it paused then are still its own.
+  const wp: WorkspacePause = { state: "running", paused: [...(rec.workspacePause?.paused ?? [])], failed: [], notRunning: 0 };
   rec.workspacePause = wp;
   await persist(id);
   let all: CampaignSummary[];
@@ -974,7 +980,7 @@ async function pauseWorkspace(ctx: RunCtx): Promise<boolean> {
   for (const c of all) {
     if (c.campaignType === "subseq") continue;
     if (!isRunning(c.status)) {
-      wp.notRunning += 1;
+      if (!wp.paused.some((p) => p.campaignId === c.id)) wp.notRunning += 1;
       continue;
     }
     ctx.check();
@@ -1938,20 +1944,25 @@ export async function abortJob(apiKey: string, id: string): Promise<boolean> {
 // --- Resuming after a restart ------------------------------------------------
 
 /**
- * Starts an interrupted run again, as a new run that carries what the old one
- * already moved. The old record stays, pointing at the new one.
+ * Carries on a run a restart cut off, in place: the same job, the same card,
+ * queued again with everything it already moved counted, so the split comes
+ * out as one. Its problems so far and the campaigns it paused stay with it.
  *
- * Returns the new run's id, or throws with a reason a person can act on.
+ * Returns the run's id (the same one), or throws with a reason a person can
+ * act on.
  */
 export async function resumeJob(apiKey: string, id: string): Promise<string> {
   await loadOnce();
   const rec = records.get(id);
   const m = meta.get(id);
-  if (!rec || !m || m.fingerprint !== fingerprintKey(apiKey)) throw new QueueRejectedError("Run not found.");
+  const fp = fingerprintKey(apiKey);
+  if (!rec || !m || m.fingerprint !== fp) throw new QueueRejectedError("Run not found.");
+  // A record continued the old way, as a separate run.
   if (rec.resumedAs) {
     if (records.has(rec.resumedAs)) return rec.resumedAs;
     throw new QueueRejectedError("This run was already continued.");
   }
+  if (rec.status === "queued" || rec.status === "running") return id;
   if (rec.status !== "interrupted") throw new QueueRejectedError("Only a run cut off by a restart can be continued.");
   const later = supersededBy(
     rec,
@@ -1965,20 +1976,27 @@ export async function resumeJob(apiKey: string, id: string): Promise<string> {
   const payload = resumePayload(rec);
   if (!payload) throw new QueueRejectedError("This run is too old to continue on its own — start it again from the form.");
 
-  // Claimed before anything is awaited, so a second click, a second tab or
-  // the boot-time pass cannot start it twice.
-  rec.resumedAs = "pending";
-  try {
-    const newId = await createJob(apiKey, { ...payload, resumedFrom: id });
-    rec.resumedAs = newId;
-    rec.resumeBlocked = undefined;
-    rec.updatedAt = Date.now();
-    await persist(id);
-    return newId;
-  } catch (err) {
-    rec.resumedAs = undefined;
-    throw err;
-  }
+  const now = Date.now();
+  const fresh = buildRecord(id, payload, now);
+  fresh.createdAt = rec.createdAt;
+  fresh.label = rec.label;
+  fresh.errors = rec.errors ?? [];
+  if (rec.errorsTruncated) fresh.errorsTruncated = true;
+  if (rec.resumedFrom) fresh.resumedFrom = rec.resumedFrom;
+  // Only a run that had begun was cut off; one still waiting just takes its place again.
+  fresh.resumes = rec.startedAt ? [...(rec.resumes ?? []), now] : rec.resumes;
+  // The campaigns it paused before the restart are still its to launch again
+  // if it's stopped; the pause step adds to them.
+  if (rec.workspacePause) fresh.workspacePause = { ...rec.workspacePause, state: "pending", failed: [] };
+
+  // Replaced synchronously, so a second click, a second tab or the boot-time
+  // pass finds it queued and leaves it alone.
+  records.set(id, fresh);
+  meta.set(id, { fingerprint: fp, apiKey, payload, aborted: false });
+  queue.push(id);
+  await persist(id);
+  pump(fp);
+  return id;
 }
 
 /**

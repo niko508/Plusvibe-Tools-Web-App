@@ -7,8 +7,8 @@ export const dynamic = "force-dynamic";
 
 // POST /api/jobs/campaign-types/resume  { jobId }
 //
-// Continues a run a restart cut off, as a new run that carries what the old
-// one already moved. Safe to call twice: the second call gets the same run.
+// Continues a run a restart cut off, in place: the same job carries on,
+// counting what it already moved. Safe to call twice.
 export async function POST(request: Request) {
   try {
     const apiKey = resolveApiKey(request);
