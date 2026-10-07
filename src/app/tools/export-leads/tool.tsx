@@ -23,6 +23,49 @@ interface Progress {
   index: number;
   total: number;
   read: number;
+  /** Seconds until a failed page is tried again. */
+  retry?: number;
+}
+
+/** Where an export is: kept when it fails, so it can carry on from there. */
+interface RunState {
+  order: { id: string; name: string }[];
+  collected: CampaignLeads[];
+  /** The campaign and page to read next. */
+  i: number;
+  page: number;
+  wrongStatus: number;
+}
+
+/** Waits before each retry, in seconds — about a minute and a half in all, enough to ride out a redeploy. */
+const RETRY_WAITS = [2, 4, 8, 15, 30, 30];
+
+/** A rate limit, a server error or a dropped connection — worth trying again. */
+function isTransient(err: unknown): boolean {
+  if (err instanceof ApiClientError) return err.status === 429 || err.status >= 500;
+  return err instanceof TypeError; // fetch's "Failed to fetch"
+}
+
+function wait(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => {
+      clearTimeout(t);
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  });
+}
+
+async function withRetry<T>(fn: () => Promise<T>, signal: AbortSignal, onWait: (secs: number) => void): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (signal.aborted || !isTransient(err) || attempt >= RETRY_WAITS.length) throw err;
+      onWait(RETRY_WAITS[attempt]);
+      await wait(RETRY_WAITS[attempt] * 1000, signal);
+    }
+  }
 }
 
 interface Done {
@@ -48,6 +91,7 @@ interface DeleteProgress {
   total: number;
   step: "checking" | "deleting";
   done: number;
+  retry?: number;
 }
 
 interface DeleteResult {
@@ -76,6 +120,8 @@ export function ExportLeadsTool() {
   const [confirmText, setConfirmText] = useState("");
   const [delProgress, setDelProgress] = useState<DeleteProgress | null>(null);
   const [delResults, setDelResults] = useState<{ results: DeleteResult[]; stopped: boolean } | null>(null);
+  const [failed, setFailed] = useState<{ message: string; read: number } | null>(null);
+  const resumeRef = useRef<RunState | null>(null);
   const ctrl = useRef<AbortController | null>(null);
   const delCtrl = useRef<AbortController | null>(null);
   /** Counts are read one after another, so ticking many at once stays under Plusvibe's rate limit. */
@@ -99,6 +145,8 @@ export function ExportLeadsTool() {
     setDone(null);
     setExported(null);
     setDelResults(null);
+    setFailed(null);
+    resumeRef.current = null;
     if (!ws) return;
     let cancelled = false;
     setCampaignsLoading(true);
@@ -111,10 +159,18 @@ export function ExportLeadsTool() {
     };
   }, [ws]);
 
+  // A failed export belongs to the campaigns it was started for.
+  useEffect(() => {
+    setFailed(null);
+    resumeRef.current = null;
+  }, [picked]);
+
   function toggle(id: string) {
     setDone(null);
     setExported(null);
     setDelResults(null);
+    setFailed(null);
+    resumeRef.current = null;
     setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
     if (counts[id] === undefined) {
       setCounts((c) => ({ ...c, [id]: "loading" }));
@@ -136,45 +192,70 @@ export function ExportLeadsTool() {
   const toDelete = exported?.reduce((n, x) => n + x.emails.length, 0) ?? 0;
   const confirmed = confirmText.trim().toUpperCase() === "DELETE" || confirmText.trim().replace(/[,\s]/g, "") === String(toDelete);
 
-  async function run() {
-    if (running || picked.length === 0) return;
+  /** Starts a fresh export, or picks up a failed one where it stopped. */
+  async function run(resume = false) {
+    if (running) return;
+    let st = resume ? resumeRef.current : null;
+    if (!st) {
+      if (picked.length === 0) return;
+      st = { order: campaigns.filter((x) => picked.includes(x.id)).map((x) => ({ id: x.id, name: x.name })), collected: [], i: 0, page: 1, wrongStatus: 0 };
+    }
+    resumeRef.current = null;
     const c = new AbortController();
     ctrl.current = c;
     setError(null);
+    setFailed(null);
     setDone(null);
     setExported(null);
     setDelResults(null);
     setConfirmText("");
-    const order = campaigns.filter((x) => picked.includes(x.id));
-    const collected: CampaignLeads[] = [];
-    let wrongStatus = 0;
     let stopped = false;
     try {
-      for (let i = 0; i < order.length; i++) {
-        const camp = order[i];
-        const rows: CampaignLeads["rows"] = [];
-        collected.push({ campaignName: camp.name, rows });
-        for (let page = 1; ; page++) {
-          setProgress({ campaign: camp.name, index: i, total: order.length, read: rows.length });
-          const r = await fetchNotContactedPage({ workspace_id: ws, campaign_id: camp.id, page }, c.signal);
-          rows.push(...r.leads);
-          wrongStatus += r.wrongStatus;
-          if (!r.more) break;
+      for (; st.i < st.order.length; ) {
+        const camp = st.order[st.i];
+        if (!st.collected[st.i]) st.collected[st.i] = { campaignName: camp.name, rows: [] };
+        const rows = st.collected[st.i].rows;
+        const at = { campaign: camp.name, index: st.i, total: st.order.length, read: rows.length };
+        setProgress(at);
+        const page = st.page;
+        const r = await withRetry(
+          () => fetchNotContactedPage({ workspace_id: ws, campaign_id: camp.id, page }, c.signal),
+          c.signal,
+          (secs) => setProgress({ ...at, retry: secs })
+        );
+        // The position moves on only once a page is in, so a resume never
+        // reads a page twice or skips one.
+        rows.push(...r.leads);
+        st.wrongStatus += r.wrongStatus;
+        if (r.more) st.page += 1;
+        else {
+          st.i += 1;
+          st.page = 1;
         }
       }
     } catch (err) {
       if (c.signal.aborted) stopped = true;
       else {
-        setError(`${errMessage(err)} Nothing was downloaded.`);
+        resumeRef.current = st;
+        setFailed({ message: errMessage(err), read: st.collected.reduce((n, x) => n + x.rows.length, 0) });
         setProgress(null);
+        ctrl.current = null;
         return;
       }
     }
+    finish(st, stopped);
+  }
+
+  /** Builds and downloads the CSV from what a run read; `partial` when it didn't finish. */
+  function finish(st: RunState, partial: boolean) {
+    resumeRef.current = null;
+    setFailed(null);
+    const collected = st.collected.filter(Boolean);
     const { rows, merged } = combineLeads(collected, onePerEmail);
     const columns = columnsOf(rows);
     const name = fileName(workspaces.find((w) => w._id === ws)?.name ?? "workspace", new Date().toISOString().slice(0, 10));
     if (rows.length > 0) {
-      const blob = new Blob(["﻿" + toCsv(rows, columns)], { type: "text/csv;charset=utf-8" });
+      const blob = new Blob(["\uFEFF" + toCsv(rows, columns)], { type: "text/csv;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -186,12 +267,12 @@ export function ExportLeadsTool() {
     }
     // Only a complete download can be followed by a delete: after a stop, the
     // CSV is missing leads the delete would otherwise have to guess at.
-    if (!stopped && rows.length > 0) {
+    if (!partial && rows.length > 0) {
       setExported(
-        order.map((camp, i) => ({
+        st.order.map((camp, i) => ({
           campaignId: camp.id,
           campaignName: camp.name,
-          emails: collected[i].rows.map((r) => String(r.email ?? "").trim()).filter(Boolean),
+          emails: st.collected[i].rows.map((r) => String(r.email ?? "").trim()).filter(Boolean),
         }))
       );
     }
@@ -200,8 +281,8 @@ export function ExportLeadsTool() {
       merged,
       columns: columns.length,
       perCampaign: collected.map((x) => ({ name: x.campaignName, leads: x.rows.length })),
-      wrongStatus,
-      stopped,
+      wrongStatus: st.wrongStatus,
+      stopped: partial,
       file: name,
     });
     setProgress(null);
@@ -229,17 +310,29 @@ export function ExportLeadsTool() {
       try {
         const current: string[] = [];
         for (let page = 1; ; page++) {
-          setDelProgress({ campaign: camp.campaignName, index: i, total: exported.length, step: "checking", done: current.length });
-          const r = await fetchNotContactedPage({ workspace_id: ws, campaign_id: camp.campaignId, page }, c.signal);
+          const at: DeleteProgress = { campaign: camp.campaignName, index: i, total: exported.length, step: "checking", done: current.length };
+          setDelProgress(at);
+          const r = await withRetry(
+            () => fetchNotContactedPage({ workspace_id: ws, campaign_id: camp.campaignId, page }, c.signal),
+            c.signal,
+            (secs) => setDelProgress({ ...at, retry: secs })
+          );
           for (const l of r.leads) if (l.email) current.push(String(l.email));
           if (!r.more) break;
         }
         const plan = deletionPlan(camp.emails, current);
         result.skipped = plan.skipped;
         for (let k = 0; k < plan.remove.length; k += DELETE_CHUNK) {
-          setDelProgress({ campaign: camp.campaignName, index: i, total: exported.length, step: "deleting", done: result.deleted });
+          const at: DeleteProgress = { campaign: camp.campaignName, index: i, total: exported.length, step: "deleting", done: result.deleted };
+          setDelProgress(at);
           const chunk = plan.remove.slice(k, k + DELETE_CHUNK);
-          await deleteCampaignLeads({ workspaceId: ws, campaignId: camp.campaignId, emails: chunk }, c.signal);
+          // Deleting the same addresses twice is harmless, so a retry after a
+          // lost response is safe.
+          await withRetry(
+            () => deleteCampaignLeads({ workspaceId: ws, campaignId: camp.campaignId, emails: chunk }, c.signal),
+            c.signal,
+            (secs) => setDelProgress({ ...at, retry: secs })
+          );
           result.deleted += chunk.length;
         }
       } catch (err) {
@@ -347,7 +440,7 @@ export function ExportLeadsTool() {
         </label>
 
         <div className="flex flex-wrap items-center gap-3">
-          <button type="button" className="pv-btn-primary disabled:opacity-50" disabled={running || picked.length === 0} onClick={run} data-download>
+          <button type="button" className="pv-btn-primary disabled:opacity-50" disabled={running || picked.length === 0} onClick={() => run()} data-download>
             {running ? <Spinner /> : <DownloadIcon size={16} />}
             {running ? "Reading the leads…" : `Download CSV${expected > 0 ? ` · about ${formatNumber(expected)} leads` : ""}`}
           </button>
@@ -355,6 +448,7 @@ export function ExportLeadsTool() {
             <>
               <span className="text-xs text-muted-foreground" data-progress>
                 {progress.campaign} ({progress.index + 1} of {progress.total}) · {formatNumber(progress.read)} read
+                {progress.retry ? ` · no answer, trying again in ${progress.retry}s` : ""}
               </span>
               <button type="button" className="pv-btn-ghost text-xs" onClick={() => ctrl.current?.abort()}>
                 Stop and download what&apos;s read
@@ -374,6 +468,29 @@ export function ExportLeadsTool() {
         <div className="flex items-start gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
           <AlertIcon size={16} className="mt-0.5 shrink-0" />
           <span>{error}</span>
+        </div>
+      )}
+
+      {failed && !running && (
+        <div className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm" data-failed>
+          <p className="flex items-start gap-2 font-medium">
+            <AlertIcon size={16} className="mt-0.5 shrink-0 text-warning" />
+            <span>
+              The export stopped after {formatNumber(failed.read)} lead{failed.read === 1 ? "" : "s"}: {failed.message}
+            </span>
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            It was tried again for about a minute and a half. What&apos;s read is kept — carry on from where it stopped, or
+            download it as it is.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button type="button" className="pv-btn-primary" onClick={() => run(true)} data-resume>
+              Carry on
+            </button>
+            <button type="button" className="pv-btn-ghost" disabled={failed.read === 0} onClick={() => resumeRef.current && finish(resumeRef.current, true)} data-partial>
+              Download what&apos;s read
+            </button>
+          </div>
         </div>
       )}
 
@@ -446,6 +563,7 @@ export function ExportLeadsTool() {
                 <span className="text-xs text-muted-foreground" data-delete-progress>
                   {delProgress.campaign} ({delProgress.index + 1} of {delProgress.total}) ·{" "}
                   {delProgress.step === "checking" ? `checking, ${formatNumber(delProgress.done)} still not contacted` : `${formatNumber(delProgress.done)} deleted`}
+                  {delProgress.retry ? ` · Plusvibe didn't answer, trying again in ${delProgress.retry}s` : ""}
                 </span>
                 <button type="button" className="pv-btn-ghost text-xs" onClick={() => delCtrl.current?.abort()}>
                   Stop
