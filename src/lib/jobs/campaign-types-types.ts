@@ -308,8 +308,12 @@ export interface CampaignTypesJob {
   sources: SourceRun[];
   /** A "fix" run's own progress. Absent on create and move runs. */
   allocation?: AllocationProgress;
-  /** Add More Leads: every campaign in the workspace launched at the end. */
+  /** Every campaign in the workspace launched at the end (Add More Leads, and the workspace flow). */
   workspaceActivation?: AllocActivation[];
+  /** The workspace flow: the running campaigns paused before anything else. */
+  workspacePause?: WorkspacePause;
+  /** The workspace flow: the ESP app's Manual Run for this workspace, once the leads are in place. */
+  espRun?: EspRunProgress;
   tagging: TaggingProgress;
 
   errors: string[];
@@ -387,6 +391,31 @@ export interface AllocationProgress {
   activation?: AllocActivation[];
 }
 
+/** The workspace flow's first step: every running parent campaign paused. Sub-sequences are left alone. */
+export interface WorkspacePause {
+  state: PhaseState;
+  /** Running before, paused by this run. */
+  paused: { campaignId: string; campaignName: string }[];
+  /** Running before and could not be paused: they kept sending during the run. */
+  failed: { campaignId: string; campaignName: string; error: string }[];
+  /** Parent campaigns that weren't running, left as they were. */
+  notRunning: number;
+  /** The run was stopped: this many of the paused campaigns were launched again. */
+  restored?: number;
+}
+
+/** The ESP app's Manual Run, started and waited for by the workspace flow. */
+export interface EspRunProgress {
+  state: PhaseState;
+  /** The ESP app was busy with another run; this one waits its turn. */
+  waiting?: boolean;
+  startedAt?: number;
+  finishedAt?: number;
+  /** The ESP app's own report of the run. */
+  report?: string;
+  error?: string;
+}
+
 /** One campaign's check at the end of a fix run. */
 export interface AllocActivation {
   campaignId: string;
@@ -429,6 +458,13 @@ export interface CampaignTypesStartPayload {
    * launched, not only the ones that got leads. Archived ones are left alone.
    */
   activateWorkspace?: boolean;
+  /**
+   * Create all types and Add More Leads: the workspace flow. Every running
+   * campaign in the workspace is paused first (sub-sequences untouched), the
+   * run does its work, the ESP app's Manual Run is run for the workspace, and
+   * then every campaign in it that isn't running is launched.
+   */
+  workspaceFlow?: boolean;
   /**
    * Resuming only: leads an interrupted run already moved, per original and
    * copy, so the split is finished rather than started over.

@@ -33,6 +33,7 @@ import { AddLeadsPanel } from "./add-leads-panel";
 import { findIndustry, matchCampaign, type Industry } from "@/lib/campaign-types/industries";
 import { POOL_TAGS } from "@/lib/campaign-types/pools";
 import { useGeneralSettings } from "@/lib/general-settings/use-general-settings";
+import { WorkspaceFlowNote } from "./workspace-flow-note";
 
 const POLL_MS = 2000;
 const JOBS_OPEN_KEY = "pv_ct_jobs_open";
@@ -503,6 +504,7 @@ export function CampaignTypesTool() {
             ? destinations.destinations.map((d) => ({ campaignId: d.campaignId, campaignName: d.campaignName }))
             : undefined,
         activate: mode === "create" && activate,
+        ...(mode === "create" && activate ? { workspaceFlow: true } : {}),
       });
       // The segments this run used are what the industry starts from next time.
       if (mode !== "fix" && !noSegments) void rememberIndustry(true);
@@ -1013,7 +1015,10 @@ export function CampaignTypesTool() {
             {mode === "create" && (
               <label className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
                 <input type="checkbox" className="mt-0.5" checked={activate} onChange={(e) => setActivate(e.target.checked)} />
-                <span>Activate every campaign at the end, sub-sequences included. Untick to leave the copies as drafts and launch them yourself.</span>
+                <span>
+                  Pause the workspace first, run the ESP app&apos;s Manual Run once the leads are in place, and activate every campaign at
+                  the end, sub-sequences included. Untick to touch nothing else in the workspace and leave the copies as drafts.
+                </span>
               </label>
             )}
           </div>
@@ -1042,6 +1047,7 @@ export function CampaignTypesTool() {
             </span>
           ) : null}
         </div>
+        {mode === "create" && activate && <WorkspaceFlowNote />}
         </>
         )}
       </div>

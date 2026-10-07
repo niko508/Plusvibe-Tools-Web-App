@@ -84,6 +84,21 @@ export async function launchCampaign(params: {
 }
 
 /**
+ * Pauses one campaign — the parent only; its sub-sequences aren't sent a
+ * call of their own.
+ *
+ *   POST /campaign/pause  { workspace_id, campaign_id }
+ */
+export async function pauseCampaign(params: { apiKey: string; workspaceId: string; campaignId: string }): Promise<void> {
+  await acquireSlot();
+  await plusvibePost<{ status?: string }>({
+    apiKey: params.apiKey,
+    path: "/campaign/pause",
+    body: { workspace_id: params.workspaceId, campaign_id: params.campaignId },
+  });
+}
+
+/**
  * Renames a campaign in place.
  *
  *   POST /campaign/set/name  { workspace_id, campaign_id, name }

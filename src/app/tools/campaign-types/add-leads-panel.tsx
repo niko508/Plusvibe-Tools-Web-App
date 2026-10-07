@@ -14,6 +14,7 @@ import { IndustryPicker } from "./industry-picker";
 import { formatNumber } from "@/lib/format";
 import { Spinner } from "@/components/ui";
 import { AlertIcon, ChevronDownIcon, MoveIcon, RefreshIcon } from "@/components/icons";
+import { WorkspaceFlowNote } from "./workspace-flow-note";
 
 // Add More Leads: pick the campaign a new batch was uploaded to and the
 // industry, and each segment's leads go to the newest campaign named for it,
@@ -220,7 +221,7 @@ export function AddLeadsPanel({
         rules: plan.rules,
         activate: false,
         onlyExisting: true,
-        activateWorkspace: true,
+        workspaceFlow: true,
       });
       // Learn from the hand picks: next time these segments find the newest
       // campaign of the family chosen for them now.
@@ -492,10 +493,9 @@ export function AddLeadsPanel({
           {starting ? <Spinner /> : <MoveIcon size={16} />}
           {queued ? "Add to queue" : "Add the leads"}
         </button>
-        <span className="text-xs text-muted-foreground">
-          {queued ? "A job is running; this one waits its turn. " : ""}It runs on the server — close the tab whenever you like. At the end, every campaign in the workspace that isn&apos;t running is launched (archived ones aside). The result is in Jobs below.
-        </span>
+        {queued && <span className="text-xs text-muted-foreground">A job is running; this one waits its turn.</span>}
       </div>
+      <WorkspaceFlowNote />
     </div>
   );
 }

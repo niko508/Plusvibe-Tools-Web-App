@@ -13,7 +13,8 @@ import { resolveLeadEsps } from "@/lib/campaign-types/resolve-esp";
 import { planSplitFor, type Availability } from "@/lib/campaign-types/split";
 import { applyOptOutToCampaign } from "@/lib/campaign-types/apply-opt-out";
 import { applySignatureToCampaign } from "@/lib/campaign-types/apply-signature";
-import { duplicateCampaign, launchCampaign, renameCampaign } from "@/lib/campaign-types/duplicate";
+import { duplicateCampaign, launchCampaign, pauseCampaign, renameCampaign } from "@/lib/campaign-types/duplicate";
+import { runEspManual } from "@/lib/esp-app";
 import { buildReuseIndex, matchCompanions, normalizeName } from "@/lib/campaign-types/match";
 import { convertsOriginal, rolesFor, type CampaignKind } from "@/lib/campaign-types/kinds";
 import { deriveNames } from "@/lib/campaign-types/names";
@@ -33,11 +34,13 @@ import type {
   CampaignTypesStartPayload,
   CreatedCampaign,
   CreatedRole,
+  EspRunProgress,
   MoveTarget,
   PhaseState,
   SourceInput,
   SourceRun,
   TagTarget,
+  WorkspacePause,
 } from "@/lib/jobs/campaign-types-types";
 import {
   MAX_STORED_ERRORS,
@@ -919,7 +922,7 @@ async function activateAllocation(ctx: RunCtx, alloc: AllocationProgress) {
 }
 
 /**
- * Add More Leads, once the leads are in place: every parent campaign in the
+ * Add More Leads and the workspace flow, once the leads are in place: every parent campaign in the
  * workspace that isn't running — paused, completed or draft — is launched,
  * sub-sequences with it, and read back. Archived ones are left alone. One
  * that won't launch (an empty draft, most often) is named, never a reason to
@@ -942,6 +945,130 @@ async function activateWorkspace(ctx: RunCtx) {
   rec.workspaceActivation = list;
   await persist(id);
   await launchAndConfirm(ctx, list);
+}
+
+/**
+ * The workspace flow's first step: every running parent campaign in the
+ * workspace is paused, so nothing sends while leads move and limits change.
+ * Sub-sequences get no call of their own. Read back afterwards: one still
+ * running is named, since it kept sending. False when the campaigns couldn't
+ * even be listed — then nothing has changed and the run stops there.
+ */
+async function pauseWorkspace(ctx: RunCtx): Promise<boolean> {
+  const { rec, apiKey, workspaceId, id } = ctx;
+  const wp: WorkspacePause = { state: "running", paused: [], failed: [], notRunning: 0 };
+  rec.workspacePause = wp;
+  await persist(id);
+  let all: CampaignSummary[];
+  try {
+    ctx.check();
+    all = await listCampaigns(apiKey, workspaceId, { campaignType: "parent" });
+  } catch (err) {
+    if (err instanceof AbortedError || ctx.m.aborted) throw err;
+    wp.state = "error";
+    pushError(rec, `Could not list the workspace's campaigns to pause them: ${msg(err)}. Nothing was changed.`);
+    await persist(id);
+    return false;
+  }
+  let sinceFlush = 0;
+  for (const c of all) {
+    if (c.campaignType === "subseq") continue;
+    if (!isRunning(c.status)) {
+      wp.notRunning += 1;
+      continue;
+    }
+    ctx.check();
+    try {
+      await pauseCampaign({ apiKey, workspaceId, campaignId: c.id });
+      wp.paused.push({ campaignId: c.id, campaignName: c.name });
+    } catch (err) {
+      if (err instanceof AbortedError || ctx.m.aborted) throw err;
+      wp.failed.push({ campaignId: c.id, campaignName: c.name, error: msg(err) });
+    }
+    if (++sinceFlush >= 10) {
+      sinceFlush = 0;
+      rec.updatedAt = Date.now();
+      await persist(id);
+    }
+  }
+  if (wp.paused.length > 0) {
+    try {
+      ctx.check();
+      const after = new Map((await listCampaigns(apiKey, workspaceId, { campaignType: "all" })).map((c) => [c.id, c.status]));
+      for (const p of [...wp.paused]) {
+        if (!isRunning(after.get(p.campaignId))) continue;
+        wp.paused = wp.paused.filter((x) => x !== p);
+        wp.failed.push({ ...p, error: "paused, but it still reads active" });
+      }
+    } catch (err) {
+      if (err instanceof AbortedError || ctx.m.aborted) throw err;
+      pushError(rec, `Paused ${wp.paused.length} campaign${wp.paused.length === 1 ? "" : "s"}, but could not read the status back to confirm: ${msg(err)}.`);
+    }
+  }
+  for (const f of wp.failed) pushError(rec, `"${f.campaignName}" could not be paused (${f.error}), so it kept sending during the run.`);
+  wp.state = wp.failed.length > 0 ? "error" : "done";
+  rec.updatedAt = Date.now();
+  await persist(id);
+  return true;
+}
+
+/**
+ * The run was stopped: the campaigns it paused at the start are launched
+ * again, so stopping leaves the workspace sending as it was. Nothing else is
+ * launched, and no ESP run happens.
+ */
+async function restorePaused(ctx: RunCtx) {
+  const { rec, apiKey, workspaceId, id } = ctx;
+  const wp = rec.workspacePause;
+  if (!wp || wp.paused.length === 0) return;
+  let back = 0;
+  const failed: string[] = [];
+  for (const p of wp.paused) {
+    try {
+      await launchCampaign({ apiKey, workspaceId, campaignId: p.campaignId });
+      back += 1;
+    } catch (err) {
+      failed.push(`"${p.campaignName}" (${msg(err)})`);
+    }
+  }
+  wp.restored = back;
+  if (failed.length > 0) pushError(rec, `Stopped. These campaigns were paused at the start and could not be launched again: ${failed.join(", ")}. Launch them in Plusvibe.`);
+  await persist(id);
+}
+
+/** The workspace flow, once the leads are in place: the ESP app's Manual Run for this workspace, waited for. */
+async function runEspStep(ctx: RunCtx): Promise<boolean> {
+  const { rec, workspaceId, id } = ctx;
+  const es: EspRunProgress = { state: "running" };
+  rec.espRun = es;
+  await persist(id);
+  try {
+    const r = await runEspManual(workspaceId, {
+      check: ctx.check,
+      onWaiting: async (waiting) => {
+        if (es.waiting === waiting) return;
+        es.waiting = waiting;
+        await persist(id);
+      },
+    });
+    es.startedAt = r.startedAt;
+    es.finishedAt = r.finishedAt;
+    if (r.report) es.report = r.report.slice(0, 6000);
+    es.state = r.ok ? "done" : "error";
+    if (!r.ok) {
+      es.error = r.error ?? "the run failed";
+      pushError(rec, `The ESP Manual Run finished with a problem: ${es.error}. The campaigns were activated anyway; check the ESP app.`);
+    }
+  } catch (err) {
+    if (err instanceof AbortedError || ctx.m.aborted) throw err;
+    es.state = "error";
+    es.error = msg(err);
+    pushError(rec, `The ESP Manual Run didn't happen: ${es.error} The campaigns were activated anyway.`);
+  }
+  es.waiting = undefined;
+  rec.updatedAt = Date.now();
+  await persist(id);
+  return es.state === "done";
 }
 
 /**
@@ -1603,13 +1730,81 @@ async function runTagging(ctx: RunCtx) {
   await persist(id);
 }
 
+/** Records an unexpected failure against the phase, and the original, that was running. */
+function markCrash(rec: CampaignTypesJob, err: unknown) {
+  pushError(rec, msg(err));
+  const phase = rec.phase;
+  if (phase !== "finished") rec.phaseStates[phase] = "error";
+  const src = rec.sources.find((s) => s.state === "running");
+  if (src) {
+    src.state = "error";
+    if (src.phase !== "finished") src.phaseStates[src.phase] = "error";
+  }
+}
+
+/** The three phases of a create or move run. True when any of them failed. */
+async function runPhases(ctx: RunCtx, mode: "create" | "move", activate: boolean, payload: CampaignTypesStartPayload): Promise<boolean> {
+  const { rec, id } = ctx;
+  // --- Phase 1 --------------------------------------------------------------
+  if (payload.rules.length > 0) await runSegmenting(ctx, payload.rules);
+  else rec.phaseStates.segmenting = "skipped";
+
+  // --- Phase 2 --------------------------------------------------------------
+  rec.phase = "building";
+  rec.phaseStates.building = "running";
+  await persist(id);
+
+  // The workspace's live campaigns. A create run uses them to adopt copies
+  // it already made instead of making a second set under the same names —
+  // duplication is not idempotent on its own. A move run uses them to find
+  // the campaigns to move into.
+  //
+  // Archived campaigns are excluded either way: adopting or matching one is
+  // silently fatal, since it reads as a success and then cannot take a
+  // single lead.
+  let workspaceCampaigns: CampaignSummary[] = [];
+  try {
+    workspaceCampaigns = await listCampaigns(ctx.apiKey, ctx.workspaceId);
+  } catch (err) {
+    // Without the list we can't tell a resumed run from a fresh one, and
+    // duplicating blind could leave a second set of campaigns behind.
+    pushError(
+      rec,
+      mode === "move"
+        ? `Could not list the workspace's campaigns to find the ones to move into: ${msg(err)}. Nothing was moved.`
+        : `Could not list the workspace's campaigns to check for copies already made: ${msg(err)}. Stopped before duplicating anything.`
+    );
+    rec.phaseStates.building = "error";
+    rec.phaseStates.tagging = "skipped";
+    return true;
+  }
+  const existingByName = mode === "create" ? buildReuseIndex(workspaceCampaigns) : new Map<string, string>();
+  const roles = rolesFor(rec.kinds as CampaignKind[]);
+
+  for (const src of rec.sources) {
+    ctx.check();
+    await runSource(ctx, src, { mode, activate, existingByName, workspaceCampaigns, roles });
+    rec.updatedAt = Date.now();
+    await persist(id);
+  }
+  const buildingFailed = rec.sources.some((s) => s.state === "error");
+  rec.phaseStates.building = buildingFailed ? "error" : "done";
+  await persist(id);
+
+  // --- Phase 3 --------------------------------------------------------------
+  await runTagging(ctx);
+
+  return rec.phaseStates.segmenting === "error" || buildingFailed || rec.phaseStates.tagging === "error";
+}
+
 async function runJob(id: string) {
   const rec = records.get(id);
   const m = meta.get(id);
   if (!rec || !m || !m.apiKey || !m.payload) return;
 
   const mode = rec.mode ?? "create";
-  const activate = mode !== "move" && m.payload.activate !== false;
+  // The workspace flow launches the whole workspace at the end instead.
+  const activate = mode !== "move" && m.payload.activate !== false && m.payload.workspaceFlow !== true;
   const ctx: RunCtx = {
     id,
     rec,
@@ -1636,76 +1831,44 @@ async function runJob(id: string) {
       return;
     }
 
-    // --- Phase 1 --------------------------------------------------------------
-    if (m.payload.rules.length > 0) await runSegmenting(ctx, m.payload.rules);
-    else rec.phaseStates.segmenting = "skipped";
-
-    // --- Phase 2 --------------------------------------------------------------
-    rec.phase = "building";
-    rec.phaseStates.building = "running";
-    await persist(id);
-
-    // The workspace's live campaigns. A create run uses them to adopt copies
-    // it already made instead of making a second set under the same names —
-    // duplication is not idempotent on its own. A move run uses them to find
-    // the campaigns to move into.
-    //
-    // Archived campaigns are excluded either way: adopting or matching one is
-    // silently fatal, since it reads as a success and then cannot take a
-    // single lead.
-    let workspaceCampaigns: CampaignSummary[] = [];
-    try {
-      workspaceCampaigns = await listCampaigns(ctx.apiKey, ctx.workspaceId);
-    } catch (err) {
-      // Without the list we can't tell a resumed run from a fresh one, and
-      // duplicating blind could leave a second set of campaigns behind.
-      pushError(
-        rec,
-        mode === "move"
-          ? `Could not list the workspace's campaigns to find the ones to move into: ${msg(err)}. Nothing was moved.`
-          : `Could not list the workspace's campaigns to check for copies already made: ${msg(err)}. Stopped before duplicating anything.`
-      );
-      rec.phaseStates.building = "error";
-      rec.phaseStates.tagging = "skipped";
+    const flow = m.payload.workspaceFlow === true;
+    // The workspace flow: nothing sends while leads move and limits change.
+    if (flow && !(await pauseWorkspace(ctx))) {
       rec.status = "error";
       return;
     }
-    const existingByName = mode === "create" ? buildReuseIndex(workspaceCampaigns) : new Map<string, string>();
-    const roles = rolesFor(rec.kinds as CampaignKind[]);
 
-    for (const src of rec.sources) {
-      ctx.check();
-      await runSource(ctx, src, { mode, activate, existingByName, workspaceCampaigns, roles });
-      rec.updatedAt = Date.now();
-      await persist(id);
+    let failed: boolean;
+    try {
+      failed = await runPhases(ctx, mode, activate, m.payload);
+    } catch (err) {
+      // In the workspace flow a failure part-way still ends with the ESP run
+      // and every campaign launched: a lead that didn't move stayed where it
+      // was, so nothing is doubled, and the workspace isn't left paused.
+      if (!flow || err instanceof AbortedError || m.aborted) throw err;
+      markCrash(rec, err);
+      failed = true;
     }
-    const buildingFailed = rec.sources.some((s) => s.state === "error");
-    rec.phaseStates.building = buildingFailed ? "error" : "done";
-    await persist(id);
 
-    // --- Phase 3 --------------------------------------------------------------
-    await runTagging(ctx);
-
-    // Add More Leads: the whole workspace running again, not only the
-    // campaigns that got leads.
-    if (mode === "move" && m.payload.activateWorkspace) await activateWorkspace(ctx);
-
-    const failed =
-      rec.phaseStates.segmenting === "error" || buildingFailed || rec.phaseStates.tagging === "error";
+    if (flow) {
+      const espOk = await runEspStep(ctx);
+      await activateWorkspace(ctx);
+      if (!espOk) failed = true;
+    } else if (mode === "move" && m.payload.activateWorkspace) {
+      // Add More Leads before the workspace flow: the whole workspace running
+      // again, not only the campaigns that got leads.
+      await activateWorkspace(ctx);
+    }
     rec.status = failed ? "error" : "done";
   } catch (err) {
     if (err instanceof AbortedError || m.aborted) {
+      // Stopping leaves the workspace sending as it was before the run — done
+      // before the run reads as stopped, so "stopped" means it's all back.
+      if (m.payload?.workspaceFlow) await restorePaused(ctx);
       rec.status = "aborted";
     } else {
-      pushError(rec, msg(err));
+      markCrash(rec, err);
       rec.status = "error";
-      const phase = rec.phase;
-      if (phase !== "finished") rec.phaseStates[phase] = "error";
-      const src = rec.sources.find((s) => s.state === "running");
-      if (src) {
-        src.state = "error";
-        if (src.phase !== "finished") src.phaseStates[src.phase] = "error";
-      }
     }
   } finally {
     rec.phase = "finished";

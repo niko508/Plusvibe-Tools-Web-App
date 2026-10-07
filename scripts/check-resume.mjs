@@ -217,5 +217,13 @@ console.log("--- a family that only takes the leads moved into it");
   eq("…and nothing is carried when there is no such family", none.carryArrivals, undefined);
 }
 
+{
+  const base = { mode: "move", workspaceId: "ws1", workspaceName: "Client A", sources: [], kinds: ["default"], rules: [], activate: false };
+  const p = resumePayload(job({ request: { ...base, onlyExisting: true, workspaceFlow: true } }));
+  eq("Add More Leads keeps its settings and the workspace flow when it's continued", [p.onlyExisting, p.workspaceFlow, p.activateWorkspace], [true, true, undefined]);
+  const old = resumePayload(job({ request: { ...base, onlyExisting: true, activateWorkspace: true } }));
+  eq("…and a run from before the flow keeps launching the workspace", [old.onlyExisting, old.workspaceFlow, old.activateWorkspace], [true, undefined, true]);
+}
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

@@ -167,6 +167,28 @@ when your domains sit in one or a few workspaces.
 - The deletion phase is unchanged — the sheet only speeds up finding the
   inboxes, not the rate-limited deletes.
 
+### The ESP app (`ESP_APP_URL`, `ESP_APP_PASSWORD`)
+
+**Create all types** (with "activate" ticked) and **Add more leads** run as one
+workspace flow:
+
+1. Every running parent campaign in the workspace is paused (sub-sequences get
+   no call of their own).
+2. The campaigns are built and the leads sorted, moved and split as usual, and
+   the pools tagged.
+3. The ESP Matching & Campaign Limits app's **Manual Run** is started for the
+   workspace and waited for (behind any run it is already doing). It counts
+   paused and draft campaigns, so it sees the workspace as it is about to run.
+4. Every parent campaign that isn't running is launched (archived ones aside).
+
+A failure part-way still ends with steps 3 and 4, so the workspace isn't left
+paused. Stopping the job launches the campaigns it paused again and does
+nothing else.
+
+Set `ESP_APP_URL` to the ESP app's address and `ESP_APP_PASSWORD` to its
+`APP_PASSWORD` (if it has one) on this service. Without them step 3 is reported
+as not done and the page warns before starting.
+
 ### Job storage (`JOBS_DIR`) — important for redeploys
 
 Both background-job tools (**Remove Inboxes** and **Remove 50 Inboxes from

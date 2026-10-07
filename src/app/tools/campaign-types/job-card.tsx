@@ -135,12 +135,8 @@ export function JobCard({
         </div>
       )}
 
-      {/* Add More Leads: the whole workspace launched at the end. */}
-      {job.workspaceActivation && job.workspaceActivation.length > 0 && (
-        <div className="mt-3 rounded-xl border border-border p-3" data-workspace-activation>
-          <ActivationList title="Launching every campaign in the workspace" list={job.workspaceActivation} />
-        </div>
-      )}
+      {/* The workspace flow: the running campaigns paused first. */}
+      {job.workspacePause && <PauseBlock job={job} />}
 
       {/* The three phases */}
       {job.mode !== "fix" && (
@@ -204,6 +200,16 @@ export function JobCard({
           );
         })}
       </ol>
+      )}
+
+      {/* The workspace flow: the ESP app's Manual Run once the leads are in place. */}
+      {job.espRun && <EspBlock job={job} />}
+
+      {/* The whole workspace launched at the end. */}
+      {job.workspaceActivation && job.workspaceActivation.length > 0 && (
+        <div className="mt-3 rounded-xl border border-border p-3" data-workspace-activation>
+          <ActivationList title="Launching every campaign in the workspace" list={job.workspaceActivation} />
+        </div>
       )}
 
       {errors.length > 0 && (
@@ -635,6 +641,77 @@ function relativeTime(ts: number): string {
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
+}
+
+function StateIcon({ state }: { state: PhaseState }) {
+  if (state === "done") return <CheckIcon size={13} className="text-success" />;
+  if (state === "error") return <AlertIcon size={13} className="text-danger" />;
+  if (state === "running") return <Spinner size={11} />;
+  return <span className="inline-block h-3.5 w-3.5 rounded-full border border-border" />;
+}
+
+/** The workspace flow's first step. */
+function PauseBlock({ job }: { job: CampaignTypesJob }) {
+  const wp = job.workspacePause!;
+  const paused = wp.paused ?? [];
+  const failed = wp.failed ?? [];
+  return (
+    <div className="mt-3 rounded-xl border border-border p-3 text-xs" data-workspace-pause data-state={wp.state}>
+      <div className="flex flex-wrap items-center justify-between gap-x-3">
+        <span className="flex items-center gap-2 font-medium">
+          <StateIcon state={wp.state} /> Pausing the workspace
+        </span>
+        <span className="tabular-nums text-muted-foreground">
+          {formatNumber(paused.length)} paused
+          {wp.notRunning ? ` · ${formatNumber(wp.notRunning)} weren't running` : ""}
+          {failed.length ? ` · ${formatNumber(failed.length)} couldn't be paused` : ""}
+        </span>
+      </div>
+      {failed.map((f) => (
+        <p key={f.campaignId} className="mt-1 text-danger">
+          {f.campaignName} · {f.error}
+        </p>
+      ))}
+      {wp.restored !== undefined && (
+        <p className="mt-1 text-muted-foreground" data-restored>
+          Stopped — {formatNumber(wp.restored)} of the {formatNumber(paused.length)} paused campaign{paused.length === 1 ? " was" : "s were"} launched again.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The ESP app's Manual Run for this workspace. */
+function EspBlock({ job }: { job: CampaignTypesJob }) {
+  const es = job.espRun!;
+  const took = es.startedAt && es.finishedAt ? Math.max(1, Math.round((es.finishedAt - es.startedAt) / 60_000)) : null;
+  return (
+    <div className="mt-3 rounded-xl border border-border p-3 text-xs" data-esp-run data-state={es.state}>
+      <div className="flex flex-wrap items-center justify-between gap-x-3">
+        <span className="flex items-center gap-2 font-medium">
+          <StateIcon state={es.state} /> ESP Manual Run
+        </span>
+        <span className="text-muted-foreground">
+          {es.state === "running"
+            ? es.waiting
+              ? "waiting — the ESP app is busy with another run"
+              : "running in the ESP app…"
+            : es.state === "done"
+              ? `done${took ? ` in about ${took} min` : ""}`
+              : es.state === "error"
+                ? "didn't finish"
+                : ""}
+        </span>
+      </div>
+      {es.error && <p className="mt-1 text-danger">{es.error}</p>}
+      {es.report && (
+        <details className="mt-1.5">
+          <summary className="cursor-pointer text-muted-foreground">The ESP app&apos;s report</summary>
+          <pre className="pv-scroll mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/40 p-2 font-mono text-[11px]">{es.report}</pre>
+        </details>
+      )}
+    </div>
+  );
 }
 
 /** Campaigns checked and launched at the end of a run, each with how it ended. */

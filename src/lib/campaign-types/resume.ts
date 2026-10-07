@@ -159,6 +159,10 @@ export function resumePayload(job: CampaignTypesJob): CampaignTypesStartPayload 
       base?.rules ??
       job.segmenting.rules.map((r) => ({ segment: r.segment, campaignId: r.campaignId, campaignName: r.campaignName })),
     activate: base?.activate ?? (mode === "create" && job.sources.some((s) => s.phaseStates.activating !== "skipped")),
+    // How the run was asked to behave carries over as it was.
+    ...(base?.onlyExisting ? { onlyExisting: true } : {}),
+    ...(base?.activateWorkspace ? { activateWorkspace: true } : {}),
+    ...(base?.workspaceFlow ? { workspaceFlow: true } : {}),
     ...(Object.keys(carry).length > 0 ? { carry } : {}),
     ...(Object.keys(carryArrivals).length > 0 ? { carryArrivals } : {}),
   };

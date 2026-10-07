@@ -17,7 +17,11 @@ export const dynamic = "force-dynamic";
 //                     names: { blue, optOut, blueOptOut, signature, blueSignature } }],
 //         kinds: ["default" | "optOut" | "signature"],
 //         rules: [{ segment: string | null, campaignId, campaignName }],
-//         activate? }
+//         activate?, workspaceFlow? }
+//
+// workspaceFlow (create and Add More Leads): pause every running campaign in
+// the workspace first, then the run, then the ESP app's Manual Run, then
+// launch every campaign that isn't running.
 //
 // mode "move" sorts and splits into the copies that already carry these
 // names, creating and launching nothing.
@@ -146,6 +150,7 @@ export async function POST(request: Request) {
       activate: body.activate !== false,
       ...(mode === "move" && body.onlyExisting === true ? { onlyExisting: true } : {}),
       ...(mode === "move" && body.activateWorkspace === true ? { activateWorkspace: true } : {}),
+      ...(body.workspaceFlow === true ? { workspaceFlow: true } : {}),
     });
 
     return NextResponse.json({ jobId });
