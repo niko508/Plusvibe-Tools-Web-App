@@ -501,6 +501,16 @@ export function fetchLeadsPreview(
   });
 }
 
+// --- Export Not Contacted Leads ----------------------------------------------
+
+export function fetchNotContactedPage(
+  params: { workspace_id: string; campaign_id: string; page: number },
+  signal?: AbortSignal
+) {
+  const qs = new URLSearchParams({ workspace_id: params.workspace_id, campaign_id: params.campaign_id, page: String(params.page) });
+  return request<{ leads: import("@/lib/export-leads/rows").LeadRow[]; more: boolean; wrongStatus: number }>(`/api/leads/not-contacted?${qs.toString()}`, { signal });
+}
+
 // --- Move-leads background jobs ---------------------------------------------
 
 export function startMoveLeads(

@@ -14,6 +14,7 @@ import {
   RefreshIcon,
   GaugeIcon,
   SettingsIcon,
+  DownloadIcon,
 } from "@/components/icons";
 
 // Registry of tools shown on the landing page. Adding a new tool = add an entry
@@ -268,6 +269,16 @@ export const TOOLS: Tool[] = [
     status: "active",
     color: "cyan",
     Icon: MoveIcon,
+  },
+  {
+    slug: "export-leads",
+    name: "Export Not Contacted Leads",
+    tagline: "One CSV of the leads not contacted yet, from several campaigns",
+    description:
+      "Pick a workspace and tick the campaigns: every lead in them that hasn't been contacted yet is downloaded as one CSV — every field and custom variable, and the campaign it's in — one row per email, ready to run through Clay again. Nothing is changed in Plusvibe.",
+    status: "active",
+    color: "teal",
+    Icon: DownloadIcon,
   },
   {
     slug: "sending-capacity",

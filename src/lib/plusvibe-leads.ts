@@ -259,3 +259,42 @@ export function notContactedCount(counts: StatusCount[]): number {
 export function totalCount(counts: StatusCount[]): number {
   return counts.reduce((sum, c) => sum + c.count, 0);
 }
+
+/**
+ * One page of a campaign's NOT_CONTACTED leads, in `_id` order, for a caller
+ * that drives the paging itself (Export Not Contacted Leads). The status is
+ * re-checked here as in fetchCampaignLeads; `more` says whether another page
+ * may follow.
+ */
+export async function fetchNotContactedPage(
+  apiKey: string,
+  workspace_id: string,
+  campaign_id: string,
+  page: number
+): Promise<{ leads: RawLead[]; more: boolean; wrongStatus: number }> {
+  const data = await plusvibeGet<unknown>({
+    apiKey,
+    path: "/lead/workspace-leads",
+    query: {
+      workspace_id,
+      campaign_id,
+      status: NOT_CONTACTED,
+      page: String(page),
+      limit: String(PAGE_LIMIT),
+      sort: "_id",
+      direction: "asc",
+    },
+  });
+  const batch = asLeadArray(data);
+  let wrongStatus = 0;
+  const leads: RawLead[] = [];
+  for (const lead of batch) {
+    if (!lead.email) continue;
+    if (String(lead.status ?? "").toUpperCase() !== NOT_CONTACTED) {
+      wrongStatus += 1;
+      continue;
+    }
+    leads.push(lead);
+  }
+  return { leads, more: batch.length >= PAGE_LIMIT && page < HARD_PAGE_CEILING, wrongStatus };
+}
