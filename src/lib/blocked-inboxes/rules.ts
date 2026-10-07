@@ -2,9 +2,13 @@
 //
 // The same rule for Microsoft (Azure) and Google. An inbox is removed when:
 //
-//   1. its OOO reply rate over the last 7 days is 0%, or
+//   1. its OOO reply rate over the last 7 days is 0% — unless people replied
+//      to it over the last 14 days (human reply rate above 0%), or
 //   2. its OOO reply rate is above that, but its human reply rate over the
 //      last 14 days is 0% — and it has been sending for at least 14 days.
+//
+// So a human reply in the last 14 days always keeps an inbox: a quiet week
+// after real replies is not a block.
 //
 //   Human reply rate   replies ÷ unique leads contacted
 //   OOO reply rate     (replies + out-of-office) ÷ unique leads contacted
@@ -101,7 +105,8 @@ const days = (n: number) => `${n} day${n === 1 ? "" : "s"}`;
 /** The rule in one sentence: "OOO reply rate over the last 7 days is 0%, or …". */
 export function describeRemovalRule(r: RemovalRule): string {
   const age = r.minSendingDays > 0 ? ` and it has been sending for ${days(r.minSendingDays)} or more` : "";
-  return `OOO reply rate over the last ${days(r.oooDays)} ${atOrUnder(r.maxOooRate)}, or it is above that but the human reply rate over the last ${days(r.humanDays)} ${atOrUnder(r.maxHumanRate)}${age}`;
+  const humanOk = r.maxHumanRate === 0 ? "above 0%" : `above ${r.maxHumanRate}%`;
+  return `OOO reply rate over the last ${days(r.oooDays)} ${atOrUnder(r.maxOooRate)} (unless the human reply rate over the last ${days(r.humanDays)} is ${humanOk}), or it is above that but the human reply rate over the last ${days(r.humanDays)} ${atOrUnder(r.maxHumanRate)}${age}`;
 }
 
 export interface JudgeInput {
@@ -152,8 +157,17 @@ export function judgeInbox(provider: ProviderBucket, input: JudgeInput, rule: Re
     return { verdict: "pass", ...base, reasons: [], notJudged: `it sent nothing in the last ${days(rule.oooDays)}, so there is no OOO reply rate to judge` };
   }
 
-  // 1. No replies of any kind.
+  // 1. No replies of any kind — unless people replied over the longer human
+  // window: a quiet week after real replies isn't a block.
   if (rates.oooReplyRate <= rule.maxOooRate) {
+    if (humanRates && humanRates.humanReplyRate > rule.maxHumanRate) {
+      return {
+        verdict: "pass",
+        ...base,
+        reasons: [],
+        kept: `its OOO reply rate over the last ${days(rule.oooDays)} ${rule.maxOooRate === 0 ? "is 0%" : `is ${rates.oooReplyRate}%`}, but people replied: the human reply rate over the last ${days(rule.humanDays)} is ${humanRates.humanReplyRate}%`,
+      };
+    }
     return { verdict: "block", ...base, reasons: [`OOO reply rate over the last ${days(rule.oooDays)} ${rule.maxOooRate === 0 ? "is 0%" : `is ${rates.oooReplyRate}%, at or under ${rule.maxOooRate}%`}`] };
   }
 

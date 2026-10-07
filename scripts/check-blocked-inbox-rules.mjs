@@ -41,6 +41,13 @@ eq("…however new it is", v("google", f(30), f(30), false), "block");
 eq("…in words", judge("microsoft", f(40)).reasons, ["OOO reply rate over the last 7 days is 0%"]);
 eq("one out-of-office reply is enough to pass the first rule", v("microsoft", f(40, 40, 0, 1), f(80, 80, 1, 2)), "pass");
 eq("nothing sent in the 7 days: not judged, kept", (({ verdict, notJudged }) => [verdict, notJudged])(judge("microsoft", f(0), f(30))), ["pass", "it sent nothing in the last 7 days, so there is no OOO reply rate to judge"]);
+// A quiet week after real replies: 7 sent and nothing back, but 1 of 10 contacted replied over 14 days.
+const quietWeek = judge("google", f(7, 0), f(20, 10, 1, 0), true);
+eq("0% OOO over 7 days, but people replied over 14 days: kept", [quietWeek.verdict, quietWeek.reasons], ["pass", []]);
+eq("…and says why", quietWeek.kept, "its OOO reply rate over the last 7 days is 0%, but people replied: the human reply rate over the last 14 days is 10%");
+eq("…Microsoft alike", v("microsoft", f(7, 0), f(20, 10, 1, 0), true), "pass");
+eq("0% OOO and no human reply over 14 days either: removed", v("google", f(7, 0), f(20, 10, 0, 0), true), "block");
+eq("…and when the 14 days couldn't be read, the 7 days decide", judgeInbox("google", { ooo: f(7, 0), human: null, sendingLongEnough: true }).verdict, "block");
 eq("neither Microsoft nor Google: never touched", v("other", f(40)), "untouched");
 
 console.log("--- 2. out-of-office replies, but no human ones over 14 days");
@@ -58,11 +65,12 @@ eq("the 14-day rates are reported beside the 7-day ones", judge("google", oooOnl
 
 console.log("--- the rule as edited");
 const loose = { oooDays: 7, maxOooRate: 1, humanDays: 14, maxHumanRate: 0.5, minSendingDays: 0 };
-eq("a higher OOO bar removes at or under it", [v("microsoft", f(100, 100, 0, 1), f(100, 100, 1, 1), true, loose), v("microsoft", f(100, 100, 0, 2), f(200, 200, 2, 2), true, loose)], ["block", "pass"]);
-eq("…and says the rate", judge("microsoft", f(100, 100, 0, 1), f(100, 100, 1, 1), true, loose).reasons, ["OOO reply rate over the last 7 days is 1%, at or under 1%"]);
+eq("a higher OOO bar removes at or under it", [v("microsoft", f(100, 100, 0, 1), f(100, 100, 0, 1), true, loose), v("microsoft", f(100, 100, 0, 2), f(200, 200, 2, 2), true, loose)], ["block", "pass"]);
+eq("…and says the rate", judge("microsoft", f(100, 100, 0, 1), f(100, 100, 0, 1), true, loose).reasons, ["OOO reply rate over the last 7 days is 1%, at or under 1%"]);
 eq("0 days of sending needed: age not checked", v("google", f(100, 100, 0, 3), f(200, 200, 0, 5), false, loose), "block");
 eq("the rule in one sentence", describeRemovalRule(DEFAULT_REMOVAL_RULE),
-  "OOO reply rate over the last 7 days is 0%, or it is above that but the human reply rate over the last 14 days is 0% and it has been sending for 14 days or more");
+  "OOO reply rate over the last 7 days is 0% (unless the human reply rate over the last 14 days is above 0%), or it is above that but the human reply rate over the last 14 days is 0% and it has been sending for 14 days or more");
+eq("…and with the human bar raised", describeRemovalRule(loose).includes("(unless the human reply rate over the last 14 days is above 0.5%)"), true);
 
 console.log("--- validation");
 eq("the defaults, as typed, are valid", validateRemovalRule({ oooDays: "7", maxOooRate: "0", humanDays: "14", maxHumanRate: "0", minSendingDays: "14" }).rule, DEFAULT_REMOVAL_RULE);

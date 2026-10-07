@@ -243,7 +243,8 @@ export function SettingsView({
 
 /**
  * The one rule every inbox Clay sends is judged on, Microsoft and Google
- * alike: no replies of any kind over the OOO window, or out-of-office replies
+ * alike: no replies of any kind over the OOO window (unless people replied
+ * over the human window), or out-of-office replies
  * but no human ones over the human window once it has been sending long enough.
  */
 function RuleEditor({
@@ -324,6 +325,10 @@ function RuleEditor({
             days is at or under
             {field("maxOooRate", "Highest OOO reply rate that removes an inbox", "pct")}%.
           </div>
+          <p className="mt-1 text-[11px] text-muted-foreground" data-rule-one-exception>
+            Unless people replied to it: an inbox whose human reply rate over the last {d.humanDays} days is above{" "}
+            {d.maxHumanRate}% is kept, however quiet its last {d.oooDays} days were.
+          </p>
         </li>
         <li className="rounded-xl border border-border p-3" data-rule-two>
           <div className="text-xs font-medium text-muted-foreground">2 · Out-of-office replies, but nobody answers</div>
