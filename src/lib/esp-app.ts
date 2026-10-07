@@ -1,5 +1,7 @@
 import "server-only";
 
+import { cleanEspUrl } from "@/lib/esp-url";
+
 // The ESP Matching & Campaign Limits app, a separate service. Its Manual Run
 // sets a workspace's pool tags, inbox limits and campaign daily limits from
 // the campaigns and leads it finds, so the workspace flow runs it once the
@@ -11,15 +13,29 @@ import "server-only";
 //
 // ESP_APP_URL is the app's address; ESP_APP_PASSWORD its APP_PASSWORD, if set.
 
-const baseUrl = () => process.env.ESP_APP_URL?.trim().replace(/\/+$/, "") || "";
-const password = () => process.env.ESP_APP_PASSWORD ?? "";
+const baseUrl = () => cleanEspUrl(process.env.ESP_APP_URL);
+const password = () => cleanSecret(process.env.ESP_APP_PASSWORD);
+
+/** The password, without a pasted "NAME=" or surrounding quotes. */
+function cleanSecret(raw: string | undefined): string {
+  let v = (raw ?? "").trim();
+  v = v.replace(/^ESP_APP_PASSWORD\s*=\s*/, "");
+  return v.replace(/^(["'])(.*)\1$/, "$2");
+}
 
 export function espConfigured(): boolean {
   return baseUrl() !== "";
 }
 
+/** Set, but not something an address can be read from. */
+export function espUrlInvalid(): boolean {
+  return (process.env.ESP_APP_URL ?? "").trim() !== "" && baseUrl() === "";
+}
+
 export const ESP_NOT_CONNECTED =
   "The ESP app isn't connected: set ESP_APP_URL (and ESP_APP_PASSWORD, if it has a password) on this app's Railway service.";
+export const ESP_URL_INVALID =
+  "ESP_APP_URL on this app's Railway service isn't an address: its value should be just the ESP app's link, e.g. https://….up.railway.app.";
 
 export interface EspOutcome {
   ok: boolean;
@@ -53,6 +69,7 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
  * returns the app's own verdict otherwise.
  */
 export async function runEspManual(workspaceId: string, opts: EspRunOptions): Promise<EspOutcome> {
+  if (espUrlInvalid()) throw new Error(ESP_URL_INVALID);
   if (!espConfigured()) throw new Error(ESP_NOT_CONNECTED);
   const sleep = opts.sleep ?? defaultSleep;
   const pollMs = opts.pollMs ?? 5000;

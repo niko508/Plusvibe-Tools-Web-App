@@ -6,13 +6,13 @@
 import { useEffect, useState } from "react";
 import { AlertIcon } from "@/components/icons";
 
-export function useEspConnected(): boolean | null {
-  const [connected, setConnected] = useState<boolean | null>(null);
+export function useEspConnected(): boolean | "invalid" | null {
+  const [connected, setConnected] = useState<boolean | "invalid" | null>(null);
   useEffect(() => {
     let cancelled = false;
     fetch("/api/esp/status")
       .then((r) => r.json())
-      .then((b: { connected?: boolean }) => !cancelled && setConnected(b.connected === true))
+      .then((b: { connected?: boolean; invalid?: boolean }) => !cancelled && setConnected(b.invalid ? "invalid" : b.connected === true))
       .catch(() => !cancelled && setConnected(null));
     return () => {
       cancelled = true;
@@ -31,6 +31,15 @@ export function WorkspaceFlowNote() {
         workspace&apos;s limits; and last every campaign that isn&apos;t running is launched (archived ones aside). Stopping the
         job launches the paused ones again. The result is in Jobs below.
       </p>
+      {connected === "invalid" && (
+        <p className="flex items-start gap-1.5 text-warning" data-esp-not-connected>
+          <AlertIcon size={13} className="mt-0.5 shrink-0" />
+          <span>
+            ESP_APP_URL on Railway isn&apos;t an address, so the Manual Run step will fail — its value should be just the ESP
+            app&apos;s link (https://….up.railway.app), without the name in front.
+          </span>
+        </p>
+      )}
       {connected === false && (
         <p className="flex items-start gap-1.5 text-warning" data-esp-not-connected>
           <AlertIcon size={13} className="mt-0.5 shrink-0" />
