@@ -36,6 +36,8 @@ export function JobCard({
   const status = STATUS_META[job.status] ?? STATUS_META.error;
   const running = job.status === "running";
   const queued = job.status === "queued";
+  /** The workspace flow: pause first, the ESP Manual Run and the launch after. */
+  const flow = job.request?.workspaceFlow === true;
 
   // A record persisted by an older build can be missing whole sections. The
   // server migrates what it loads, but normalising here too means a shape this
@@ -135,8 +137,9 @@ export function JobCard({
         </div>
       )}
 
-      {/* The workspace flow: the running campaigns paused first. */}
-      {job.workspacePause && <PauseBlock job={job} />}
+      {/* The workspace flow: the running campaigns paused first. Shown from
+          the start, waiting, so a queued run says everything it will do. */}
+      {(job.workspacePause || (flow && (running || queued))) && <PauseBlock job={job} />}
 
       {/* The three phases */}
       {job.mode !== "fix" && (
@@ -203,13 +206,25 @@ export function JobCard({
       )}
 
       {/* The workspace flow: the ESP app's Manual Run once the leads are in place. */}
-      {job.espRun && <EspBlock job={job} />}
+      {(job.espRun || (flow && (running || queued))) && <EspBlock job={job} />}
 
       {/* The whole workspace launched at the end. */}
-      {job.workspaceActivation && job.workspaceActivation.length > 0 && (
+      {job.workspaceActivation && job.workspaceActivation.length > 0 ? (
         <div className="mt-3 rounded-xl border border-border p-3" data-workspace-activation>
           <ActivationList title="Launching every campaign in the workspace" list={job.workspaceActivation} />
         </div>
+      ) : (
+        (flow || job.request?.activateWorkspace) &&
+        (running || queued) && (
+          <div className="mt-3 rounded-xl border border-border p-3 text-xs" data-workspace-activation-pending>
+            <div className="flex flex-wrap items-center justify-between gap-x-3">
+              <span className="flex items-center gap-2 font-medium text-muted-foreground">
+                <StateIcon state="pending" /> Launching every campaign in the workspace
+              </span>
+              <span className="text-muted-foreground">at the end</span>
+            </div>
+          </div>
+        )
       )}
 
       {errors.length > 0 && (
@@ -650,19 +665,19 @@ function StateIcon({ state }: { state: PhaseState }) {
   return <span className="inline-block h-3.5 w-3.5 rounded-full border border-border" />;
 }
 
-/** The workspace flow's first step. */
+/** The workspace flow's first step. Waiting until the run gets to it. */
 function PauseBlock({ job }: { job: CampaignTypesJob }) {
-  const wp = job.workspacePause!;
+  const wp = job.workspacePause ?? { state: "pending" as PhaseState, paused: [], failed: [], notRunning: 0 };
   const paused = wp.paused ?? [];
   const failed = wp.failed ?? [];
   return (
     <div className="mt-3 rounded-xl border border-border p-3 text-xs" data-workspace-pause data-state={wp.state}>
       <div className="flex flex-wrap items-center justify-between gap-x-3">
-        <span className="flex items-center gap-2 font-medium">
+        <span className={`flex items-center gap-2 font-medium ${wp.state === "pending" ? "text-muted-foreground" : ""}`}>
           <StateIcon state={wp.state} /> Pausing the workspace
         </span>
         <span className="tabular-nums text-muted-foreground">
-          {formatNumber(paused.length)} paused
+          {wp.state === "pending" ? "first" : `${formatNumber(paused.length)} paused`}
           {wp.notRunning ? ` · ${formatNumber(wp.notRunning)} weren't running` : ""}
           {failed.length ? ` · ${formatNumber(failed.length)} couldn't be paused` : ""}
         </span>
@@ -681,14 +696,14 @@ function PauseBlock({ job }: { job: CampaignTypesJob }) {
   );
 }
 
-/** The ESP app's Manual Run for this workspace. */
+/** The ESP app's Manual Run for this workspace. Waiting until the run gets to it. */
 function EspBlock({ job }: { job: CampaignTypesJob }) {
-  const es = job.espRun!;
+  const es = job.espRun ?? { state: "pending" as PhaseState };
   const took = es.startedAt && es.finishedAt ? Math.max(1, Math.round((es.finishedAt - es.startedAt) / 60_000)) : null;
   return (
     <div className="mt-3 rounded-xl border border-border p-3 text-xs" data-esp-run data-state={es.state}>
       <div className="flex flex-wrap items-center justify-between gap-x-3">
-        <span className="flex items-center gap-2 font-medium">
+        <span className={`flex items-center gap-2 font-medium ${es.state === "pending" ? "text-muted-foreground" : ""}`}>
           <StateIcon state={es.state} /> ESP Manual Run
         </span>
         <span className="text-muted-foreground">
@@ -700,7 +715,7 @@ function EspBlock({ job }: { job: CampaignTypesJob }) {
               ? `done${took ? ` in about ${took} min` : ""}`
               : es.state === "error"
                 ? "didn't finish"
-                : ""}
+                : "once the leads are in place"}
         </span>
       </div>
       {es.error && <p className="mt-1 text-danger">{es.error}</p>}
