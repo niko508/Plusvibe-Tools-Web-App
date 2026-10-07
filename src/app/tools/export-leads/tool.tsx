@@ -1,22 +1,22 @@
 "use client";
 
-// Export Not Contacted Leads. The campaigns are read one page at a time from
-// the browser — a campaign of tens of thousands of leads never has to fit in
+// The Export tab of Export/Remove Not Contacted Leads. The campaigns are read
+// one page at a time from the browser — a campaign of tens of thousands of leads never has to fit in
 // one request — then combined into one CSV and downloaded. Downloading only
 // reads; deleting the exported leads is a separate, confirmed step offered
 // once a complete download has happened.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CampaignSummary, Workspace } from "@/lib/plusvibe-types";
-import { ApiClientError, deleteCampaignLeads, fetchCampaigns, fetchLeadsPreview, fetchNotContactedPage, fetchWorkspaces } from "@/lib/api-client";
+import { useRef, useState } from "react";
+import { deleteCampaignLeads, fetchNotContactedPage } from "@/lib/api-client";
+import { withRetry } from "@/lib/client-retry";
+import { CampaignPick, errMessage, useCampaignPick } from "@/components/campaign-pick";
 import { columnsOf, combineLeads, deletionPlan, DELETE_CHUNK, fileName, toCsv, type CampaignLeads } from "@/lib/export-leads/rows";
 import { useApiKey } from "@/lib/use-api-key";
 import { formatNumber } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { Spinner } from "@/components/ui";
-import { AlertIcon, CheckIcon, ChevronDownIcon, DownloadIcon, TrashIcon } from "@/components/icons";
+import { AlertIcon, CheckIcon, DownloadIcon, TrashIcon } from "@/components/icons";
 
-const errMessage = (err: unknown) => (err instanceof ApiClientError || err instanceof Error ? err.message : "Something went wrong.");
 
 interface Progress {
   campaign: string;
@@ -35,37 +35,6 @@ interface RunState {
   i: number;
   page: number;
   wrongStatus: number;
-}
-
-/** Waits before each retry, in seconds — about a minute and a half in all, enough to ride out a redeploy. */
-const RETRY_WAITS = [2, 4, 8, 15, 30, 30];
-
-/** A rate limit, a server error or a dropped connection — worth trying again. */
-function isTransient(err: unknown): boolean {
-  if (err instanceof ApiClientError) return err.status === 429 || err.status >= 500;
-  return err instanceof TypeError; // fetch's "Failed to fetch"
-}
-
-function wait(ms: number, signal: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
-    const t = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => {
-      clearTimeout(t);
-      reject(new DOMException("Aborted", "AbortError"));
-    }, { once: true });
-  });
-}
-
-async function withRetry<T>(fn: () => Promise<T>, signal: AbortSignal, onWait: (secs: number) => void): Promise<T> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (signal.aborted || !isTransient(err) || attempt >= RETRY_WAITS.length) throw err;
-      onWait(RETRY_WAITS[attempt]);
-      await wait(RETRY_WAITS[attempt] * 1000, signal);
-    }
-  }
 }
 
 interface Done {
@@ -104,14 +73,6 @@ interface DeleteResult {
 
 export function ExportLeadsTool() {
   const { hasKey, ready } = useApiKey();
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [ws, setWs] = useState("");
-  const [campaigns, setCampaigns] = useState<CampaignSummary[]>([]);
-  const [campaignsLoading, setCampaignsLoading] = useState(false);
-  const [picked, setPicked] = useState<string[]>([]);
-  const [filter, setFilter] = useState("");
-  /** Not-contacted leads per campaign, read when it is ticked. */
-  const [counts, setCounts] = useState<Record<string, number | "loading" | "error">>({});
   const [onePerEmail, setOnePerEmail] = useState(true);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [done, setDone] = useState<Done | null>(null);
@@ -124,69 +85,20 @@ export function ExportLeadsTool() {
   const resumeRef = useRef<RunState | null>(null);
   const ctrl = useRef<AbortController | null>(null);
   const delCtrl = useRef<AbortController | null>(null);
-  /** Counts are read one after another, so ticking many at once stays under Plusvibe's rate limit. */
-  const countQueue = useRef<Promise<void>>(Promise.resolve());
+  const pick = useCampaignPick({
+    enabled: ready && hasKey,
+    onError: setError,
+    // Results, a delete offer and a failed run all belong to the old pick.
+    onChange: () => {
+      setDone(null);
+      setExported(null);
+      setDelResults(null);
+      setFailed(null);
+      resumeRef.current = null;
+    },
+  });
+  const { workspaces, ws, campaigns, picked, expected } = pick;
 
-  const loadWorkspaces = useCallback(async () => {
-    try {
-      setWorkspaces((await fetchWorkspaces()).workspaces ?? []);
-    } catch (err) {
-      setError(errMessage(err));
-    }
-  }, []);
-  useEffect(() => {
-    if (ready && hasKey) void loadWorkspaces();
-  }, [ready, hasKey, loadWorkspaces]);
-
-  useEffect(() => {
-    setCampaigns([]);
-    setPicked([]);
-    setCounts({});
-    setDone(null);
-    setExported(null);
-    setDelResults(null);
-    setFailed(null);
-    resumeRef.current = null;
-    if (!ws) return;
-    let cancelled = false;
-    setCampaignsLoading(true);
-    fetchCampaigns({ workspace_id: ws, campaign_type: "parent" })
-      .then((r) => !cancelled && setCampaigns(r.campaigns ?? []))
-      .catch((err) => !cancelled && setError(errMessage(err)))
-      .finally(() => !cancelled && setCampaignsLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [ws]);
-
-  // A failed export belongs to the campaigns it was started for.
-  useEffect(() => {
-    setFailed(null);
-    resumeRef.current = null;
-  }, [picked]);
-
-  function toggle(id: string) {
-    setDone(null);
-    setExported(null);
-    setDelResults(null);
-    setFailed(null);
-    resumeRef.current = null;
-    setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
-    if (counts[id] === undefined) {
-      setCounts((c) => ({ ...c, [id]: "loading" }));
-      const workspaceId = ws;
-      countQueue.current = countQueue.current.then(() =>
-        fetchLeadsPreview({ workspace_id: workspaceId, campaign_id: id })
-          .then((r) => setCounts((c) => ({ ...c, [id]: r.available })))
-          .catch(() => setCounts((c) => ({ ...c, [id]: "error" })))
-      );
-    }
-  }
-
-  const q = filter.trim().toLowerCase();
-  const shown = campaigns.filter((c) => !q || c.name.toLowerCase().includes(q));
-  const allShownPicked = shown.length > 0 && shown.every((c) => picked.includes(c.id));
-  const expected = useMemo(() => picked.reduce((n, id) => n + (typeof counts[id] === "number" ? (counts[id] as number) : 0), 0), [picked, counts]);
   const deleting = delProgress !== null;
   const running = progress !== null || deleting;
   const toDelete = exported?.reduce((n, x) => n + x.emails.length, 0) ?? 0;
@@ -349,84 +261,17 @@ export function ExportLeadsTool() {
     // What was deleted can't be deleted again; a stopped or failed run can be
     // finished by downloading afresh.
     setExported(null);
-    setCounts({});
+    pick.refreshCounts();
     delCtrl.current = null;
   }
 
   if (!ready) return <div className="pv-card h-40 animate-pulse" />;
-  if (!hasKey) return <ConnectPrompt onConnected={loadWorkspaces} />;
+  if (!hasKey) return <ConnectPrompt onConnected={pick.loadWorkspaces} />;
 
   return (
     <div className="space-y-5">
       <div className="pv-card space-y-4 p-4 sm:p-5">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="el-ws">
-              Workspace
-            </label>
-            <div className="relative">
-              <select id="el-ws" className="pv-input appearance-none pr-9" value={ws} disabled={running} onChange={(e) => setWs(e.target.value)} aria-label="Workspace">
-                <option value="">Pick a workspace</option>
-                {workspaces.map((w) => (
-                  <option key={w._id} value={w._id}>
-                    {w.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDownIcon size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            </div>
-          </div>
-        </div>
-
-        {ws && (
-          <div data-campaigns>
-            <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs font-medium text-muted-foreground">
-                Campaigns{picked.length > 0 ? ` · ${picked.length} picked` : ""}
-              </span>
-              <div className="flex flex-wrap items-center gap-2">
-                {campaigns.length > 8 && (
-                  <input className="pv-input w-48 py-1 text-xs" placeholder="Filter campaigns…" value={filter} aria-label="Filter campaigns" onChange={(e) => setFilter(e.target.value)} />
-                )}
-                <button
-                  type="button"
-                  className="pv-btn-ghost py-1 text-xs disabled:opacity-50"
-                  disabled={running || shown.length === 0}
-                  onClick={() => {
-                    if (allShownPicked) setPicked((p) => p.filter((id) => !shown.some((c) => c.id === id)));
-                    else for (const c of shown) if (!picked.includes(c.id)) toggle(c.id);
-                  }}
-                  data-pick-all
-                >
-                  {allShownPicked ? "Clear" : q ? "Pick shown" : "Pick all"}
-                </button>
-              </div>
-            </div>
-            {campaignsLoading ? (
-              <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Spinner size={12} /> Loading campaigns…
-              </p>
-            ) : (
-              <div className="pv-scroll max-h-80 overflow-y-auto rounded-xl border border-border p-1.5">
-                {shown.map((c) => {
-                  const n = counts[c.id];
-                  return (
-                    <label key={c.id} className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm hover:bg-muted/40" data-campaign-option={c.id}>
-                      <input type="checkbox" checked={picked.includes(c.id)} disabled={running} onChange={() => toggle(c.id)} aria-label={`Pick ${c.name}`} />
-                      <span className="min-w-0 flex-1 truncate">{c.name}</span>
-                      {picked.includes(c.id) && (
-                        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground" data-count={c.id}>
-                          {n === "loading" ? <Spinner size={10} /> : n === "error" ? "count unknown" : typeof n === "number" ? `${formatNumber(n)} not contacted` : ""}
-                        </span>
-                      )}
-                    </label>
-                  );
-                })}
-                {shown.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">{campaigns.length === 0 ? "No campaigns in this workspace." : "No campaign matches."}</p>}
-              </div>
-            )}
-          </div>
-        )}
+        <CampaignPick pick={pick} disabled={running} idPrefix="el" />
 
         <label className="flex cursor-pointer items-start gap-2.5 text-sm">
           <input type="checkbox" className="mt-0.5 h-4 w-4 accent-accent" checked={onePerEmail} disabled={running} onChange={(e) => setOnePerEmail(e.target.checked)} aria-label="One row per email" />

@@ -272,10 +272,10 @@ export const TOOLS: Tool[] = [
   },
   {
     slug: "export-leads",
-    name: "Export Not Contacted Leads",
-    tagline: "One CSV of the leads not contacted yet, from several campaigns",
+    name: "Export/Remove Not Contacted Leads",
+    tagline: "Download the leads not contacted yet as one CSV, or delete them",
     description:
-      "Pick a workspace and tick the campaigns: every lead in them that hasn't been contacted yet is downloaded as one CSV — every field and custom variable, and the campaign it's in — one row per email, ready to run through Clay again. Nothing is changed in Plusvibe.",
+      "Pick a workspace and tick the campaigns: every lead in them that hasn't been contacted yet is downloaded as one CSV — every field and custom variable, and the campaign it's in — one row per email, ready to run through Clay again. Then, or without a download, delete them from their campaigns.",
     status: "active",
     color: "teal",
     Icon: DownloadIcon,

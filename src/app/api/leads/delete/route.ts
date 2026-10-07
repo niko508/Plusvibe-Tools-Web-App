@@ -9,8 +9,8 @@ export const dynamic = "force-dynamic";
 
 // POST /api/leads/delete  { workspaceId, campaignId, emails: string[] } -> { deleted }
 // Deletes up to 100 leads, by email, from one campaign — never without one,
-// which would delete them workspace-wide. Export Not Contacted Leads calls it
-// only for leads it exported and has just seen still not contacted.
+// which would delete them workspace-wide. Export/Remove Not Contacted Leads calls it
+// only for leads it has just seen still not contacted.
 export async function POST(request: Request) {
   try {
     const apiKey = resolveApiKey(request);
