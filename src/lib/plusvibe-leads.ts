@@ -1,6 +1,6 @@
 import "server-only";
 
-import { plusvibeGet } from "@/lib/plusvibe-server";
+import { plusvibeGet, plusvibePost } from "@/lib/plusvibe-server";
 
 // Helpers for moving leads between campaigns.
 //
@@ -297,4 +297,18 @@ export async function fetchNotContactedPage(
     leads.push(lead);
   }
   return { leads, more: batch.length >= PAGE_LIMIT && page < HARD_PAGE_CEILING, wrongStatus };
+}
+
+/**
+ * Deletes leads, by email, from ONE campaign. The campaign is required: the
+ * same call without one deletes the addresses workspace-wide.
+ */
+export async function deleteCampaignLeads(apiKey: string, workspace_id: string, campaign_id: string, emails: string[]): Promise<void> {
+  if (!campaign_id) throw new Error("A campaign is required: without one Plusvibe deletes the leads workspace-wide.");
+  if (emails.length === 0) return;
+  await plusvibePost<unknown>({
+    apiKey,
+    path: "/lead/delete",
+    body: { workspace_id, campaign_id, delete_all_from_company: false, delete_list: emails },
+  });
 }

@@ -16,7 +16,7 @@ const eq = (label, got, want) => {
   }
 };
 
-const { flattenLead, combineLeads, columnsOf, toCsv, fileName } = await importTs("@/lib/export-leads/rows");
+const { flattenLead, combineLeads, columnsOf, toCsv, fileName, deletionPlan, DELETE_CHUNK } = await importTs("@/lib/export-leads/rows");
 
 console.log("--- a lead as a row");
 const raw = {
@@ -48,6 +48,12 @@ console.log("--- the file");
 eq("columns: the usual fields first, then the rest as seen, the campaign last", columnsOf(one.rows), ["email", "first_name", "phone_number", "segment", "campaign"]);
 eq("CSV: quoted where needed, empty cells for missing fields", toCsv([{ email: "a@b.com", company_name: "Acme, Inc.", note: 'Say "hi"' }, { email: "c@d.com" }]), 'email,company_name,note\r\na@b.com,"Acme, Inc.","Say ""hi"""\r\nc@d.com,,\r\n');
 eq("file name", fileName("Something Inc (SaaS + eCommerce)", "2026-10-07"), "not-contacted-leads-something-inc-saas-ecommerce-2026-10-07.csv");
+
+console.log("--- deleting after the download");
+eq("only exported leads still not contacted are removed, in the campaign's spelling", deletionPlan(["Ann@Acme.com", "bob@b.com", "cy@c.com"], ["ann@acme.com", "cy@c.com", "new@n.com"]), { remove: ["ann@acme.com", "cy@c.com"], skipped: 1 });
+eq("a lead added after the download is never removed", deletionPlan([], ["new@n.com"]), { remove: [], skipped: 0 });
+eq("duplicates and blanks in the export count once / not at all", deletionPlan(["a@b.com", "A@B.com ", ""], ["a@b.com"]), { remove: ["a@b.com"], skipped: 0 });
+eq("delete chunk", DELETE_CHUNK, 100);
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

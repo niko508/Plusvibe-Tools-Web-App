@@ -147,3 +147,35 @@ export function fileName(workspaceName: string, day: string): string {
   const slug = workspaceName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
   return `not-contacted-leads-${slug}-${day}.csv`;
 }
+
+// --- Deleting what was exported -----------------------------------------------
+
+/**
+ * Which of the exported leads to delete from a campaign, checked against what
+ * it holds NOT contacted right now: an exported lead still there and still not
+ * contacted goes; one contacted since the export (or gone already) stays out
+ * of it, so a lead with a send history is never deleted. Emails compare
+ * without case; the campaign's own spelling is what's deleted.
+ */
+export function deletionPlan(exported: string[], notContactedNow: string[]): { remove: string[]; skipped: number } {
+  const now = new Map<string, string>();
+  for (const e of notContactedNow) {
+    const k = e.trim().toLowerCase();
+    if (k && !now.has(k)) now.set(k, e.trim());
+  }
+  const seen = new Set<string>();
+  const remove: string[] = [];
+  let skipped = 0;
+  for (const e of exported) {
+    const k = e.trim().toLowerCase();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    const hit = now.get(k);
+    if (hit) remove.push(hit);
+    else skipped += 1;
+  }
+  return { remove, skipped };
+}
+
+/** Leads deleted per call. */
+export const DELETE_CHUNK = 100;

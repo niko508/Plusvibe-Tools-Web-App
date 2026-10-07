@@ -511,6 +511,11 @@ export function fetchNotContactedPage(
   return request<{ leads: import("@/lib/export-leads/rows").LeadRow[]; more: boolean; wrongStatus: number }>(`/api/leads/not-contacted?${qs.toString()}`, { signal });
 }
 
+/** Deletes up to 100 leads, by email, from one campaign. */
+export function deleteCampaignLeads(params: { workspaceId: string; campaignId: string; emails: string[] }, signal?: AbortSignal) {
+  return request<{ deleted: number }>("/api/leads/delete", { method: "POST", body: params, signal });
+}
+
 // --- Move-leads background jobs ---------------------------------------------
 
 export function startMoveLeads(
