@@ -112,11 +112,14 @@ export function BlockedDomainsTool() {
   const inboxJobs = view?.inboxJobs ?? [];
   const domainJobs = view?.jobs ?? [];
   const blocked = inboxJobs.filter(isBlocked);
-  const waiting = inboxJobs.filter((j) => j.status === "awaiting_confirmation");
+  // Inboxes stopped with their whole domain are decided on the domain's card, not one by one.
+  const waiting = inboxJobs.filter((j) => j.status === "awaiting_confirmation" && !j.cancelledWithDomain);
+  const domainInboxes = (domain: string) => inboxJobs.filter((j) => j.cancelledWithDomain && j.domain === domain);
   const domainCount = blockedDomains(inboxJobs).length;
+  const domainsWaiting = new Set(inboxJobs.filter((j) => j.cancelledWithDomain && j.status === "awaiting_confirmation").map((j) => j.domain)).size;
   const stats = {
     checked: inboxJobs.length,
-    waiting: waiting.length,
+    waiting: waiting.length + domainsWaiting,
     blocked: blocked.length,
     deleted: inboxJobs.filter((j) => j.status === "deleted").length,
     passed: inboxJobs.filter((j) => j.status === "passed").length,
@@ -135,7 +138,7 @@ export function BlockedDomainsTool() {
   const onHome = inboxJobs.filter((j) => j.hiddenAt === undefined && j.status !== "queued" && j.status !== "working" && !deletedByYou(j));
   const blockedFeed = [
     ...onHome
-      .filter((j) => isBlocked(j) && j.status !== "awaiting_confirmation")
+      .filter((j) => isBlocked(j) && j.status !== "awaiting_confirmation" && !j.cancelledWithDomain)
       .map((job) => ({ kind: "inbox" as const, key: job.id, at: job.blockedAt ?? job.createdAt, job })),
     ...(view?.inboxDomains ?? [])
       .filter((d) => d.hiddenAt === undefined && (isTenantBlock(d) || d.notActiveAt !== undefined))
@@ -304,7 +307,10 @@ export function BlockedDomainsTool() {
                   <DomainEventCard
                     key={item.key}
                     d={item.d}
+                    inboxes={domainInboxes(item.d.domain)}
                     busy={busyId === item.key}
+                    onDeleteAll={(domain) => withBusy(item.key, () => blockedInboxAction({ action: "confirm-domain", domain }))}
+                    onKeepAll={(domain) => withBusy(item.key, () => blockedInboxAction({ action: "dismiss-domain", domain }))}
                     onRemove={(domain) => withBusy(item.key, () => blockedInboxAction({ action: "hide-domain", domain }))}
                   />
                 )

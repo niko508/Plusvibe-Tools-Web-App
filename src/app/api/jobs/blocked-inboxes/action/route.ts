@@ -3,7 +3,9 @@ import { requireAccountKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import {
   confirmAllInboxes,
+  confirmDomainInboxes,
   confirmInbox,
+  dismissDomainInboxes,
   dismissInbox,
   hideInboxDomain,
   intakeInbox,
@@ -16,6 +18,7 @@ export const dynamic = "force-dynamic";
 // POST /api/jobs/blocked-inboxes/action
 // Body: { action: "confirm" | "dismiss" | "remove", jobId }
 //     | { action: "confirm-all" }
+//     | { action: "confirm-domain" | "dismiss-domain", domain } — every inbox a domain block stopped
 //     | { action: "check", email }   — run one inbox by hand, as Clay would
 //     | { action: "tenant-block", domain } — block a whole domain by hand
 //     | { action: "hide-domain", domain }  — take a domain's card off Home
@@ -38,6 +41,12 @@ export async function POST(request: Request) {
       }
       case "confirm-all":
         return NextResponse.json({ ok: true, deleting: await confirmAllInboxes() });
+      case "confirm-domain":
+      case "dismiss-domain": {
+        if (!body.domain) return NextResponse.json({ error: "domain is required" }, { status: 400 });
+        const n = await (body.action === "confirm-domain" ? confirmDomainInboxes : dismissDomainInboxes)(body.domain);
+        return NextResponse.json({ ok: true, inboxes: n });
+      }
       case "check": {
         const r = await intakeInbox({ email: body.email, source: "manual" });
         if (r.outcome === "invalid") return NextResponse.json({ error: r.reason }, { status: 400 });

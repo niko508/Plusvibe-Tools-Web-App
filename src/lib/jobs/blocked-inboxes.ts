@@ -1264,14 +1264,48 @@ export async function confirmInbox(id: string): Promise<boolean> {
   return true;
 }
 
-/** Deletes every blocked inbox waiting for confirmation, one after another. */
+/**
+ * Deletes every blocked inbox waiting for confirmation, one after another —
+ * the ones blocked on their own. Inboxes stopped with their whole domain are
+ * decided on the domain's card (confirmDomainInboxes).
+ */
 export async function confirmAllInboxes(): Promise<number> {
   await loadOnce();
-  const waiting = [...records.values()].filter((r) => r.status === "awaiting_confirmation");
+  const waiting = [...records.values()].filter((r) => r.status === "awaiting_confirmation" && !r.cancelledWithDomain);
   for (const r of waiting) r.confirmedAt = Date.now();
   void (async () => {
     for (const r of waiting) await runDelete(r.id);
   })();
+  return waiting.length;
+}
+
+/** A blocked domain's inboxes still waiting for a decision. */
+function waitingOnDomain(domain: string): BlockedInboxJob[] {
+  const key = domain.trim().toLowerCase();
+  return [...records.values()].filter((r) => r.domain === key && r.cancelledWithDomain && r.status === "awaiting_confirmation");
+}
+
+/** Deletes every inbox a domain block stopped and that is still waiting — the domain card's button. */
+export async function confirmDomainInboxes(domain: string): Promise<number> {
+  await loadOnce();
+  const waiting = waitingOnDomain(domain);
+  for (const r of waiting) r.confirmedAt = Date.now();
+  void (async () => {
+    for (const r of waiting) await runDelete(r.id);
+  })();
+  return waiting.length;
+}
+
+/** Keeps every inbox a domain block stopped: not deleted, left stopped. */
+export async function dismissDomainInboxes(domain: string): Promise<number> {
+  await loadOnce();
+  const waiting = waitingOnDomain(domain);
+  for (const r of waiting) {
+    r.status = "dismissed";
+    r.dismissedAt = Date.now();
+    r.updatedAt = Date.now();
+    await persist(r.id);
+  }
   return waiting.length;
 }
 

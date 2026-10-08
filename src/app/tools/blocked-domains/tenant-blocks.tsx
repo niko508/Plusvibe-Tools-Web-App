@@ -184,13 +184,25 @@ export function TenantBlocksView({
 /** A domain taken out as a whole, as a compact card for Home. */
 export function DomainEventCard({
   d,
+  inboxes = [],
   busy,
   onRemove,
+  onDeleteAll,
+  onKeepAll,
 }: {
   d: InboxDomainState;
+  /** The inboxes the domain block stopped, by their records. */
+  inboxes?: BlockedInboxJob[];
   busy: boolean;
   onRemove: (domain: string) => void;
+  onDeleteAll?: (domain: string) => void;
+  onKeepAll?: (domain: string) => void;
 }) {
+  const waiting = inboxes.filter((j) => j.status === "awaiting_confirmation").length;
+  const deleting = inboxes.filter((j) => j.status === "deleting").length;
+  const deleted = inboxes.filter((j) => j.status === "deleted").length;
+  const kept = inboxes.filter((j) => j.status === "dismissed").length;
+  const failed = inboxes.filter((j) => j.status === "error").length;
   const tenantBlock = d.cancelReason === "tenant-block";
   const inProgress = d.cancelledAt === undefined && d.cancelRequestedAt !== undefined;
   const label = inProgress
@@ -217,7 +229,30 @@ export function DomainEventCard({
             : `Its last Google inbox${d.lastInboxEmail ? `, ${d.lastInboxEmail},` : ""} was blocked, so it was set Not Active in 📋 Domains.`}
         {d.errors.length > 0 && <span className="text-warning"> {formatNumber(d.errors.length)} problem{d.errors.length === 1 ? "" : "s"} — see Tenant Blocks.</span>}
       </p>
-      {!inProgress && (
+      {inboxes.length > 0 && (
+        <p className="mt-1 text-xs" data-domain-inboxes={d.domain}>
+          {waiting > 0 && <span className="text-warning">{formatNumber(waiting)} waiting for you to delete. </span>}
+          {deleting > 0 && <span className="text-accent">Deleting {formatNumber(deleting)}… </span>}
+          {deleted > 0 && <span className="text-muted-foreground">{formatNumber(deleted)} deleted. </span>}
+          {kept > 0 && <span className="text-muted-foreground">{formatNumber(kept)} kept stopped. </span>}
+          {failed > 0 && <span className="text-danger">{formatNumber(failed)} couldn&apos;t be deleted — see Blocked Inboxes. </span>}
+        </p>
+      )}
+      {!inProgress && waiting > 0 && (onDeleteAll || onKeepAll) && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {onDeleteAll && (
+            <button type="button" className="pv-btn-ghost text-danger disabled:opacity-50" data-delete-domain-inboxes disabled={busy} onClick={() => onDeleteAll(d.domain)}>
+              <TrashIcon size={14} /> Delete {formatNumber(waiting)} inbox{waiting === 1 ? "" : "es"}
+            </button>
+          )}
+          {onKeepAll && (
+            <button type="button" className="pv-btn-ghost disabled:opacity-50" data-keep-domain-inboxes disabled={busy} onClick={() => onKeepAll(d.domain)}>
+              Keep them stopped
+            </button>
+          )}
+        </div>
+      )}
+      {!inProgress && waiting === 0 && deleting === 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
           <button
             type="button"
