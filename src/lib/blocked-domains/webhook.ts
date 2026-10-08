@@ -59,6 +59,9 @@ export function saysYes(v: unknown): boolean {
   return typeof v === "string" && ["yes", "y", "true", "1"].includes(v.trim().toLowerCase());
 }
 
+const STOP_GOOGLE_KEYS = ["stop_sending_to_google", "stopSendingToGoogle", "Stop Sending to Google"];
+const DOMAIN_BLOCKED_KEYS = ["domain_blocked", "domainBlocked", "Domain Blocked"];
+
 const TENANT_BLOCK_KEYS = ["tenant_block", "tenantBlock", "Tenant Block", "tenant_blocked", "tenantBlocked"];
 
 /** Constant-time compare, so a wrong secret can't be found a byte at a time. */
@@ -119,6 +122,24 @@ export async function handleBlockedDomainWebhook(request: Request) {
       });
     }
     return NextResponse.json({ status: "accepted", action: "tenant_block", domain: r.domain }, { status: 202 });
+  }
+
+  // Stop Sending to Google has its own behaviour, still to be built. Until
+  // then a row that only says that is received and left alone — never judged
+  // as a Domain Blocked row it isn't.
+  const flagged = (keys: string[]) => keys.some((k) => saysYes(body[k]));
+  if (
+    flagged(STOP_GOOGLE_KEYS) &&
+    !flagged(DOMAIN_BLOCKED_KEYS) &&
+    // Older Clay bodies carry no Domain Blocked field: those keep working as before.
+    DOMAIN_BLOCKED_KEYS.some((k) => k in body)
+  ) {
+    return NextResponse.json({
+      status: "received",
+      action: "stop_sending_to_google",
+      email: typeof email === "string" ? email : undefined,
+      message: "Stop Sending to Google isn't acted on yet. Nothing was done.",
+    });
   }
 
   if (email === undefined && domain !== undefined) {
