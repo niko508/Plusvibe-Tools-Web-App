@@ -317,7 +317,7 @@ export function DomainDetail({ state }: { state: InboxDomainState | undefined })
       {state.cancelledAt !== undefined && (
         <p>
           {tenantBlock
-            ? `Tenant blocked ${relativeTime(state.cancelledAt)}, as Clay's Tenant Block column said${state.tenantBlockEmail ? ` (sent with ${state.tenantBlockEmail})` : ""}: `
+            ? `Blocked ${relativeTime(state.cancelledAt)}, as Clay's ${state.blockColumn === "domain-blocked" ? "Domain Blocked" : "Tenant Block"} column said${state.tenantBlockEmail ? ` (sent with ${state.tenantBlockEmail})` : ""}: `
             : `Cancelled ${relativeTime(state.cancelledAt)} after ${state.deletedByRules} inboxes were deleted: `}
           {state.notActiveAt ? "set Not Active in 📋 Domains" : "could not be set Not Active"}
           {state.tenantQueued

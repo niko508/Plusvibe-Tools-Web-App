@@ -184,17 +184,24 @@ export function SettingsView({
       <section className="pv-card p-4 sm:p-6">
         <h2 className="text-base font-semibold">Clay webhook</h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          POST the <strong>sender inbox</strong> that bounced to this URL, with the header{" "}
-          <span className="font-mono">x-webhook-secret</span> and a body of{" "}
-          <span className="font-mono">{'{ "email": "sender@domain.com" }'}</span>. Repeat bounces are counted, not re-run: a
-          blocked inbox is never judged again, and one that passed is judged again on its first bounce 24 hours later.
+          POST the <strong>sender inbox</strong> to this URL, with the header <span className="font-mono">x-webhook-secret</span> and a
+          body of{" "}
+          <span className="font-mono">
+            {'{ "email": …, "domain": …, "domain_blocked": …, "tenant_block": …, "stop_sending_to_google": …, "bounce_reason": … }'}
+          </span>
+          , run when any of the three columns says <span className="font-mono">YES</span>.
+        </p>
+        <p className="mt-2 text-xs text-muted-foreground" data-google-stop-doc>
+          <strong>Stop Sending to Google:</strong> every inbox on the sender&apos;s domain, in every workspace, gets the{" "}
+          <span className="font-mono">No Sending to Google</span> tag (created where it&apos;s missing). Nothing is stopped or deleted
+          and the sheet isn&apos;t touched. Once a day per domain; later YES rows are only counted.
         </p>
         <p className="mt-2 text-xs text-muted-foreground" data-tenant-block-doc>
-          <strong>Tenant Block:</strong> add <span className="font-mono">{'"tenant_block": "{{Tenant Block}}"'}</span> to the same body.
-          When it is <span className="font-mono">YES</span>, the inbox is not judged — its whole domain is blocked: every inbox on it
+          <strong>Domain Blocked or Tenant Block:</strong> the sender&apos;s whole domain is blocked: every inbox on it
           stopped and deleted{view?.settings.autoDelete ? "" : " (once you confirm, while Auto-delete is off)"}, the domain set Not Active,
-          and the domain and its tenant added to 🚯 Tenants to Cancel. Once per domain; later YES rows for it are only counted. Empty
-          or anything else: the inbox is judged as usual.
+          and the domain and its tenant added to 🚯 Tenants to Cancel (a Google inbox goes on 🛑 Google Inboxes to Cancel). Once per
+          domain; later YES rows for it are only counted. A body without domain_blocked or stop_sending_to_google counts as Domain
+          Blocked.
         </p>
         <div className="mt-3 flex items-center gap-2">
           <code className="flex-1 truncate rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-xs">{url}</code>

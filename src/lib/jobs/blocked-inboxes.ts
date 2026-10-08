@@ -28,6 +28,9 @@ import { deleteInbox, fetchInboxStats, listInboxes, listWorkspaces, quarantineIn
 import type { Workspace } from "@/lib/plusvibe-types";
 import { loadSettings } from "@/lib/blocked-domains/settings";
 import { lookupRegistrar } from "@/lib/blocked-domains/registrar";
+import { ACCOUNTS_MAX_PAGES, ACCOUNTS_PAGE, assignTag, readInboxPage, resolveTag } from "@/lib/inbox-tags/api";
+import type { InboxLite } from "@/lib/inbox-tags/plan";
+import { listTags } from "@/lib/plusvibe-tags";
 import { JUDGE_WINDOW_DAYS, describeRemovalRule, judgeInbox, ratesOf, type InboxFigures } from "@/lib/blocked-inboxes/rules";
 import { isLastOnDomain, planCancellation, shouldCancel } from "@/lib/blocked-inboxes/domain-endings";
 import { bucketOf } from "@/lib/plusvibe-providers";
@@ -35,7 +38,9 @@ import { daysAgo, toApiDate } from "@/lib/format";
 import {
   MAX_INBOX_ERRORS,
   MAX_INBOX_HISTORY,
+  NO_GOOGLE_TAG,
   type BlockedInboxJob,
+  type GoogleStopState,
   type InboxDomainState,
 } from "@/lib/jobs/blocked-inboxes-types";
 import { domainsTab, googleInboxesToCancelTab, notActiveStatus, tenantsToCancelTab } from "@/lib/general-settings/settings";
@@ -81,7 +86,7 @@ const MAX_RUNS = 3;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** An inbox to check, a confirmed deletion, or a whole domain to cancel (its id is the domain). */
-type QueueKind = "run" | "delete" | "cancel";
+type QueueKind = "run" | "delete" | "cancel" | "google-stop";
 
 // One copy of the state per process, however many times Next.js loads this
 // module (the start-up hook and the API routes are bundled apart).
@@ -221,7 +226,16 @@ async function load() {
   for (const { rec, kind } of resume.sort((a, b) => a.rec.createdAt - b.rec.createdAt)) enqueue(rec.id, kind);
   // A domain cancellation asked for and not finished.
   for (const d of domains.values()) if (d.cancelRequestedAt !== undefined && d.cancelledAt === undefined) enqueue(d.domain, "cancel");
+  // A Stop Sending to Google asked for and not finished.
+  for (const d of domains.values()) {
+    if (d.googleStop && d.googleStop.doneAt === undefined) {
+      d.googleStop.running = false;
+      enqueue(googleStopId(d.domain), "google-stop");
+    }
+  }
 }
+
+const googleStopId = (domain: string) => `google-stop:${domain}`;
 
 /** Loads the log at boot, so runs a deploy cut off carry on with nobody looking. */
 export async function bootResume(): Promise<void> {
@@ -234,6 +248,15 @@ export async function bootResume(): Promise<void> {
 const RUN_LIMIT_MS = 10 * 60 * 1000;
 
 async function timedOut(id: string, kind: QueueKind) {
+  if (kind === "google-stop") {
+    const d = domains.get(id.slice("google-stop:".length));
+    if (d?.googleStop?.running) {
+      d.googleStop.running = false;
+      d.googleStop.errors.push(`Tagging took over ${RUN_LIMIT_MS / 60000} minutes; the line moved on without it.`);
+      await persistDomains();
+    }
+    return;
+  }
   if (kind === "cancel") {
     const d = domains.get(id);
     if (d?.cancelling) domainError(d, `Blocking ${id} has taken over ${RUN_LIMIT_MS / 60000} minutes; the line moved on without it.`);
@@ -261,7 +284,14 @@ function pump() {
   while (shared.active < MAX_RUNS && shared.queue.length > 0) {
     const next = shared.queue.shift()!;
     shared.active += 1;
-    const task = next.kind === "run" ? runInbox(next.id) : next.kind === "delete" ? runDelete(next.id) : cancelDomain(next.id);
+    const task =
+      next.kind === "run"
+        ? runInbox(next.id)
+        : next.kind === "delete"
+          ? runDelete(next.id)
+          : next.kind === "google-stop"
+            ? stopSendingToGoogle(next.id.slice("google-stop:".length))
+            : cancelDomain(next.id);
     // A run that outlasts its limit gives its place up, so one that hangs
     // can't hold the line; it is marked, and still finishes if it ever does.
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -884,7 +914,13 @@ export type TenantBlockResult =
  * inbox Clay sent (or a bare domain), and asked for once — a domain already
  * cancelled, or waiting to be, only counts the hit.
  */
-export async function intakeTenantBlock(args: { email?: unknown; domain?: unknown; source?: string }): Promise<TenantBlockResult> {
+export async function intakeTenantBlock(args: {
+  email?: unknown;
+  domain?: unknown;
+  source?: string;
+  /** The Clay column that said YES. Both block the whole domain the same way. */
+  column?: "domain-blocked" | "tenant-block";
+}): Promise<TenantBlockResult> {
   await loadOnce();
   const email = args.email === undefined ? null : normalizeEmail(args.email);
   const raw = email ? email.slice(email.lastIndexOf("@") + 1) : typeof args.domain === "string" ? args.domain : "";
@@ -900,6 +936,7 @@ export async function intakeTenantBlock(args: { email?: unknown; domain?: unknow
     return { outcome: "duplicate", domain, state: d };
   }
   d.cancelReason = "tenant-block";
+  d.blockColumn = args.column ?? "tenant-block";
   d.cancelRequestedAt = Date.now();
   d.tenantBlockEmail = email ?? undefined;
   d.tenantBlockSource = args.source || "clay";
@@ -908,6 +945,94 @@ export async function intakeTenantBlock(args: { email?: unknown; domain?: unknow
   await persistDomains();
   enqueue(domain, "cancel");
   return { outcome: "accepted", domain };
+}
+
+export type GoogleStopResult =
+  | { outcome: "accepted"; domain: string }
+  | { outcome: "duplicate"; domain: string; state: GoogleStopState }
+  | { outcome: "invalid"; reason: string };
+
+/** A domain tagged within this long isn't tagged again: Clay fires once per bounce row. */
+const GOOGLE_STOP_REPEAT_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Clay's Stop Sending to Google column said YES: every inbox on the domain,
+ * in every workspace, gets the No Sending to Google tag. Nothing else — no
+ * stopping, deleting or sheet. Asked for once a day per domain; a repeat in
+ * between only counts the hit.
+ */
+export async function intakeGoogleStop(args: { email?: unknown; domain?: unknown; source?: string }): Promise<GoogleStopResult> {
+  await loadOnce();
+  const email = args.email === undefined ? null : normalizeEmail(args.email);
+  const raw = email ? email.slice(email.lastIndexOf("@") + 1) : typeof args.domain === "string" ? args.domain : "";
+  const domain = raw.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+  if (!DOMAIN_RE.test(domain)) {
+    return { outcome: "invalid", reason: `"${String(args.email ?? args.domain ?? "")}" is neither an email address nor a domain` };
+  }
+  const d = domainState(domain);
+  const g = d.googleStop;
+  if (g && (g.running || g.doneAt === undefined || Date.now() - g.doneAt < GOOGLE_STOP_REPEAT_MS)) {
+    g.hits += 1;
+    d.updatedAt = Date.now();
+    await persistDomains();
+    return { outcome: "duplicate", domain, state: g };
+  }
+  d.googleStop = { requestedAt: Date.now(), email: email ?? undefined, source: args.source || "clay", tagged: 0, alreadyTagged: 0, workspaces: [], hits: 0, errors: [] };
+  d.updatedAt = Date.now();
+  await persistDomains();
+  enqueue(googleStopId(domain), "google-stop");
+  return { outcome: "accepted", domain };
+}
+
+async function stopSendingToGoogle(domain: string): Promise<void> {
+  await loadOnce();
+  const d = domainState(domain);
+  const g = d.googleStop;
+  if (!g || g.running || g.doneAt !== undefined) return;
+  g.running = true;
+  g.errors = [];
+  await persistDomains();
+  const apiKey = serverApiKey();
+  try {
+    if (!apiKey) throw new Error("PLUSVIBE_API_KEY is not set on the server");
+    const places = await inboxesOnDomain(apiKey, domain, g.requestedAt);
+    g.workspaces = places.map((p) => ({ workspaceId: p.workspaceId, workspaceName: p.workspaceName, inboxes: p.inboxes.length }));
+    if (places.length === 0) g.errors.push(`No inboxes on ${domain} were found in any workspace.`);
+    for (const place of places) {
+      try {
+        const tag = await resolveTag(apiKey, place.workspaceId, await listTags(apiKey, place.workspaceId), NO_GOOGLE_TAG, "#ff5722");
+        // The account list carries each inbox's tags: the ones already
+        // tagged are counted, not sent again.
+        const pages: InboxLite[] = [];
+        for (let page = 0; page < ACCOUNTS_MAX_PAGES; page++) {
+          const rows = await readInboxPage(apiKey, place.workspaceId, page * ACCOUNTS_PAGE, ACCOUNTS_PAGE);
+          pages.push(...rows.filter((r) => r.email.trim().toLowerCase().endsWith(`@${domain}`)));
+          if (rows.length < ACCOUNTS_PAGE) break;
+        }
+        const ids = new Set(place.inboxes.map((i) => i.id));
+        const have = new Set(pages.filter((r) => ids.has(r.id) && r.tags.includes(tag.id)).map((r) => r.id));
+        const todo = [...ids].filter((id) => !have.has(id));
+        g.alreadyTagged += have.size;
+        for (let i = 0; i < todo.length; i += 100) {
+          const part = todo.slice(i, i + 100);
+          await assignTag(apiKey, place.workspaceId, part, tag.id);
+          g.tagged += part.length;
+          await persistDomains();
+        }
+      } catch (err) {
+        g.errors.push(`${place.workspaceName || place.workspaceId}: ${msg(err)}`);
+      }
+    }
+    g.doneAt = Date.now();
+  } catch (err) {
+    g.errors.push(`Could not tag ${domain}'s inboxes: ${msg(err)}`);
+    // Not done: the next trigger asks again.
+    g.doneAt = Date.now() - GOOGLE_STOP_REPEAT_MS;
+  } finally {
+    g.running = false;
+    d.updatedAt = Date.now();
+    await persistDomains();
+  }
 }
 
 /** Every workspace holding inboxes on the domain, read at `readSince` or later. */
@@ -1019,14 +1144,14 @@ async function cancelDomain(domain: string): Promise<void> {
         providerRaw: g.inbox.provider,
         ...(g.figures ? { window, figures: g.figures, rates: ratesOf(g.figures) } : {}),
         verdict: "block",
-        tier: reason === "tenant-block" ? "tenant blocked" : "domain cancelled",
+        tier: reason === "tenant-block" ? (d.blockColumn === "domain-blocked" ? "domain blocked" : "tenant blocked") : "domain cancelled",
         rule:
           reason === "tenant-block"
             ? "every inbox on the domain goes"
             : `kept only at an OOO reply rate of ${settings.cancelKeepReplyRate}% or more`,
         reasons: [
           reason === "tenant-block"
-            ? `Clay's Tenant Block column said YES for ${domain}${d.tenantBlockEmail ? ` (sent with ${d.tenantBlockEmail})` : ""}, so every inbox on it goes`
+            ? `Clay's ${d.blockColumn === "domain-blocked" ? "Domain Blocked" : "Tenant Block"} column said YES for ${domain}${d.tenantBlockEmail ? ` (sent with ${d.tenantBlockEmail})` : ""}, so every inbox on it goes`
             : `${domain} was cancelled after ${d.deletedByRules} of its inboxes were deleted, and this one's OOO reply rate ${
                 g.oooReplyRate === null ? "could not be read" : `is ${g.oooReplyRate}%, under the ${settings.cancelKeepReplyRate}% keep bar`
               }`,

@@ -175,6 +175,14 @@ export interface InboxDomainState {
    * `cancelRequestedAt`; a restart before `cancelledAt` picks it up again.
    */
   cancelReason?: "deleted-count" | "tenant-block";
+  /**
+   * Which Clay column asked for a whole-domain block: Domain Blocked or
+   * Tenant Block. Both do the same; this is only what it is called. Absent on
+   * older records, which were all Tenant Block.
+   */
+  blockColumn?: "domain-blocked" | "tenant-block";
+  /** Clay's Stop Sending to Google: every inbox on the domain tagged No Sending to Google. */
+  googleStop?: GoogleStopState;
   cancelRequestedAt?: number;
   /** Tenant Block: the inbox Clay sent it with, and later hits for the same domain. */
   tenantBlockEmail?: string;
@@ -193,6 +201,25 @@ export interface InboxDomainState {
   tenantAlreadyQueued?: boolean;
   errors: string[];
   updatedAt: number;
+}
+
+export const NO_GOOGLE_TAG = "No Sending to Google";
+
+export interface GoogleStopState {
+  requestedAt: number;
+  /** The inbox Clay sent it with. */
+  email?: string;
+  source: string;
+  running?: boolean;
+  doneAt?: number;
+  /** Tagged by this run, and already carrying the tag. */
+  tagged: number;
+  alreadyTagged: number;
+  /** Where its inboxes were, with how many each. */
+  workspaces: { workspaceId: string; workspaceName: string; inboxes: number }[];
+  /** Clay sent it again after it was done. */
+  hits: number;
+  errors: string[];
 }
 
 export interface BlockedInboxesView {

@@ -6,7 +6,7 @@
 // tenant on 🚯 Tenants to Cancel.
 
 import { Fragment, useMemo, useState } from "react";
-import type { BlockedInboxJob, InboxDomainState } from "@/lib/jobs/blocked-inboxes-types";
+import { NO_GOOGLE_TAG, type BlockedInboxJob, type InboxDomainState } from "@/lib/jobs/blocked-inboxes-types";
 import { formatNumber } from "@/lib/format";
 import { EmptyState } from "@/components/ui";
 import { ChevronDownIcon, TrashIcon } from "@/components/icons";
@@ -19,7 +19,7 @@ export function isTenantBlock(d: InboxDomainState): boolean {
 }
 
 function why(d: InboxDomainState, cancelAfter: number): string {
-  if (d.cancelReason === "tenant-block") return d.tenantBlockSource === "manual" ? "Blocked by hand" : "Clay: Tenant Block";
+  if (d.cancelReason === "tenant-block") return d.tenantBlockSource === "manual" ? "Blocked by hand" : `Clay: ${(d.blockColumn === "domain-blocked" ? "Domain Blocked" : "Tenant Block")}`;
   return `More than ${cancelAfter} deleted`;
 }
 
@@ -64,15 +64,19 @@ export function TenantBlocksView({
 
   if (blocks.length === 0) {
     return (
+      <>
+      <GoogleStops states={states} />
       <EmptyState icon={<TrashIcon />} title="No tenant blocks yet">
-        A domain lands here when Clay&apos;s Tenant Block column says YES for one of its inboxes, when it is blocked by hand on Settings, or
+        A domain lands here when Clay&apos;s Domain Blocked or Tenant Block column says YES for one of its inboxes, when it is blocked by hand on Settings, or
         when more than {cancelAfter} of its Microsoft inboxes have been deleted.
       </EmptyState>
+      </>
     );
   }
 
   return (
     <div className="space-y-3" data-tenant-blocks>
+      <GoogleStops states={states} />
       <div className="flex flex-wrap items-center gap-3">
         <input
           className="pv-input max-w-xs"
@@ -207,7 +211,7 @@ export function DomainEventCard({
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
         {d.cancelledAt !== undefined
-          ? `${tenantBlock ? (d.tenantBlockSource === "manual" ? "Blocked by hand" : "Clay's Tenant Block said YES") : "More than the allowed inboxes deleted"}: ${formatNumber(stopped)} inbox${stopped === 1 ? "" : "es"} stopped${d.notActiveAt ? ", set Not Active" : ""}${d.tenantQueued || d.tenantAlreadyQueued ? `, tenant ${d.tenantEmail} on 🚯 Tenants to Cancel` : ""}.`
+          ? `${tenantBlock ? (d.tenantBlockSource === "manual" ? "Blocked by hand" : `Clay's ${(d.blockColumn === "domain-blocked" ? "Domain Blocked" : "Tenant Block")} said YES`) : "More than the allowed inboxes deleted"}: ${formatNumber(stopped)} inbox${stopped === 1 ? "" : "es"} stopped${d.notActiveAt ? ", set Not Active" : ""}${d.tenantQueued || d.tenantAlreadyQueued ? `, tenant ${d.tenantEmail} on 🚯 Tenants to Cancel` : ""}.`
           : inProgress
             ? "Every inbox on it will be stopped, the domain set Not Active and its tenant queued to cancel."
             : `Its last Google inbox${d.lastInboxEmail ? `, ${d.lastInboxEmail},` : ""} was blocked, so it was set Not Active in 📋 Domains.`}
@@ -228,5 +232,39 @@ export function DomainEventCard({
         </div>
       )}
     </div>
+  );
+}
+
+/** Domains Clay's Stop Sending to Google column tagged: their inboxes carry No Sending to Google. */
+function GoogleStops({ states }: { states: InboxDomainState[] }) {
+  const list = states.filter((d) => d.googleStop).sort((a, b) => (b.googleStop!.requestedAt ?? 0) - (a.googleStop!.requestedAt ?? 0));
+  if (list.length === 0) return null;
+  return (
+    <section className="pv-card p-4 sm:p-5" data-google-stops>
+      <h3 className="text-sm font-semibold">Stop Sending to Google</h3>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        Every inbox on these domains is tagged <span className="font-medium">{NO_GOOGLE_TAG}</span>. Nothing else is done to them.
+      </p>
+      <ul className="mt-2 space-y-1 text-xs">
+        {list.map((d) => {
+          const g = d.googleStop!;
+          const total = g.tagged + g.alreadyTagged;
+          return (
+            <li key={d.domain} className="flex flex-wrap items-baseline justify-between gap-x-3" data-google-stop={d.domain}>
+              <span className="font-mono">{d.domain}</span>
+              <span className={g.errors.length > 0 ? "text-warning" : "text-muted-foreground"}>
+                {g.running || g.doneAt === undefined
+                  ? "tagging…"
+                  : `${formatNumber(total)} inbox${total === 1 ? "" : "es"} tagged${g.alreadyTagged ? ` (${formatNumber(g.alreadyTagged)} already were)` : ""}${
+                      g.workspaces.length ? ` in ${g.workspaces.map((w) => w.workspaceName || w.workspaceId).join(", ")}` : ""
+                    } · ${relativeTime(g.doneAt)}`}
+                {g.hits > 0 ? ` · Clay sent it ${formatNumber(g.hits)} more time${g.hits === 1 ? "" : "s"}` : ""}
+                {g.errors.length > 0 ? ` · ${g.errors.join(" ")}` : ""}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
