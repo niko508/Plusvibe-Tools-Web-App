@@ -95,17 +95,25 @@ export function WinningVariantsTool() {
     };
   }, [ws]);
 
-  // The campaigns' figures and the cloned one's tags. The name and tags start
-  // as its own. A moment's pause first, so ticking several reads them once.
+  // The campaigns' figures and the cloned one's tags are read only when asked
+  // for, so several campaigns can be ticked first. Changing the pick clears
+  // what was read: it no longer matches.
+  const pickKey = `${ws}|${campaignId}|${alsoKey}`;
+  const [loadKey, setLoadKey] = useState<string | null>(null);
   useEffect(() => {
     setPreview(null);
     setResult(null);
     setArmed(false);
-    if (!ws || !campaignId) return;
+    setLoadKey(null);
+    setPreviewLoading(false);
+  }, [pickKey]);
+
+  // The name and tags start as the cloned campaign's own.
+  useEffect(() => {
+    if (!loadKey || loadKey !== pickKey || !ws || !campaignId) return;
     let cancelled = false;
     setPreviewLoading(true);
     setError(null);
-    const t = setTimeout(() => {
     previewWinningVariants({ workspaceId: ws, campaignId, ...(alsoIds.length > 0 ? { alsoIds } : {}) })
       .then((p) => {
         if (cancelled) return;
@@ -117,13 +125,11 @@ export function WinningVariantsTool() {
       })
       .catch((err) => !cancelled && setError(errMessage(err)))
       .finally(() => !cancelled && setPreviewLoading(false));
-    }, 400);
     return () => {
       cancelled = true;
-      clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws, campaignId, alsoKey]);
+  }, [loadKey]);
 
   const plan = preview?.plan ?? null;
   const problems = planProblems({ workspaceId: ws, campaignId, name }, { steps: plan ? plan.rows.length + plan.followUps.length : undefined });
@@ -213,11 +219,21 @@ export function WinningVariantsTool() {
           onFilter={setCampaignFilter}
           onToggle={(id) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))}
         />
-        {previewLoading && (
-          <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-            <Spinner size={12} /> Reading {picked.length > 1 ? `${picked.length} campaigns and their` : "the campaign and its"} variant stats…
-          </p>
-        )}
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            className="pv-btn-primary disabled:opacity-50"
+            disabled={!campaignId || previewLoading || (loadKey === pickKey && !!preview)}
+            onClick={() => setLoadKey(pickKey)}
+            data-find-winners
+          >
+            {previewLoading ? <Spinner /> : null}
+            {previewLoading
+              ? `Reading ${picked.length > 1 ? `${picked.length} campaigns and their` : "the campaign and its"} variant stats…`
+              : `Find the winners${picked.length > 0 ? ` in ${picked.length} campaign${picked.length === 1 ? "" : "s"}` : ""}`}
+          </button>
+          {!campaignId && ws && <span className="text-xs text-muted-foreground">Tick the campaigns, then find the winners.</span>}
+        </div>
       </div>
 
       {plan && preview && (
