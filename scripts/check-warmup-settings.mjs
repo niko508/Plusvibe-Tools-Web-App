@@ -22,6 +22,7 @@ console.log("--- defaults, and runs from before the settings tab");
 // Exactly what the tool sent when these values were fixed in code — which
 // is what a run from before the signature setting still sends.
 eq("a run from before the settings tab still sends what the tool always sent", toPlusvibeWarmup(LEGACY, { withSignature: false }), {
+  bulk_is_slow_rampup: "no",
   warmup_max_daily_limit: 18,
   bulk_warmup_is_slow_rampup: "yes",
   warmup_initial_daily_limit: 2,
@@ -40,7 +41,7 @@ eq("the signature is on by default: {{sender_first_name}}, used in warmup",
   [D.signature, D.warmupSignature, toPlusvibeWarmup(D).signature, toPlusvibeWarmup(D).warmup_signature],
   ["{{sender_first_name}}", true, "{{sender_first_name}}", "yes"]);
 eq("the default time zone is New York", [D.timezone, toPlusvibeWarmup(D).warmup_schedule.tz], ["America/New_York", "America/New_York"]);
-eq("…and read as", describeWarmup(D), "18/day, ramp-up from 2 (+3 a day) ±10% · 46% replies · every day, all day (America/New_York) · signature “{{sender_first_name}}”, in warmup emails");
+eq("…and read as", describeWarmup(D), "18/day, ramp-up from 2 (+3 a day) ±10% · 46% replies · every day, all day (America/New_York) · signature “{{sender_first_name}}”, in warmup emails · campaign ramp-up off");
 
 console.log("--- the signature");
 eq("a typed line break becomes <br>", signatureHtml("Best,\n{{sender_first_name}} {{sender_last_name}}\n"), "Best,<br>{{sender_first_name}} {{sender_last_name}}");
@@ -49,7 +50,7 @@ eq("a typed line break becomes <br>", signatureHtml("Best,\n{{sender_first_name}
   eq("warmup signature off is sent as no", off.warmup_signature, "no");
   const empty = toPlusvibeWarmup({ ...D, signature: "  " });
   eq("an empty signature leaves each inbox's own alone: the field isn't sent", ["signature" in empty, empty.warmup_signature], [false, "yes"]);
-  eq("…and is described so", describeWarmup({ ...D, signature: "" }).endsWith("· each inbox's own signature, in warmup emails"), true);
+  eq("…and is described so", describeWarmup({ ...D, signature: "" }).endsWith("· each inbox's own signature, in warmup emails · campaign ramp-up off"), true);
 }
 eq("a signature is saved trimmed", validateWarmupSettings({ ...D, signature: "  Hi  " }).settings.signature, "Hi");
 eq("a runaway signature is refused", validateWarmupSettings({ ...D, signature: "x".repeat(5001) }).problems, ["The signature can be at most 5000 characters."]);
@@ -65,8 +66,9 @@ const form = (patch) => ({ ...D, ...patch });
     [5, 2, 30, 0.355, "no", "no"]);
   eq("…days in week order, whatever order they were ticked", body.warmup_schedule.days, ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]);
   eq("…with the business type", body.warmup_business_type, "Consulting Firms");
-  eq("…read back as", describeWarmup(r.settings), "30/day, no ramp-up · 35.5% replies · Consulting Firms · weekdays, 08:00–18:30 (Europe/Helsinki) · signature “{{sender_first_name}}”, in warmup emails");
+  eq("…read back as", describeWarmup(r.settings), "30/day, no ramp-up · 35.5% replies · Consulting Firms · weekdays, 08:00–18:30 (Europe/Helsinki) · signature “{{sender_first_name}}”, in warmup emails · campaign ramp-up off");
 }
+eq("Campaign Email Ramp-Up is always switched off, whatever the warmup ramp-up", [toPlusvibeWarmup(D).bulk_is_slow_rampup, toPlusvibeWarmup({ ...D, slowRampup: false }).bulk_is_slow_rampup], ["no", "no"]);
 eq("the generic business type isn't sent, so each inbox keeps its own", "warmup_business_type" in toPlusvibeWarmup(D), false);
 eq("the Range in % goes over as a percentage", [toPlusvibeWarmup({ ...D, randomizeNum: 20 }).warmup_randomize_num, describeWarmup({ ...D, randomizeNum: 20 }).includes("±20%")], [20, true]);
 const problems = (patch) => validateWarmupSettings(form(patch)).problems;

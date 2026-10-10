@@ -245,6 +245,8 @@ export function toPlusvibeWarmup(s: WarmupSettings, { withSignature = true }: { 
     ...signature,
     // Left out for the generic type, so it stays whatever the inbox has.
     ...(s.businessType ? { warmup_business_type: s.businessType } : {}),
+    // Campaign Email Ramp-Up (not the warmup one) is always switched off.
+    bulk_is_slow_rampup: "no",
     warmup_max_daily_limit: s.maxDailyLimit,
     bulk_warmup_is_slow_rampup: s.slowRampup ? "yes" : "no",
     warmup_initial_daily_limit: s.initialDailyLimit,
@@ -278,5 +280,5 @@ export function describeWarmup(s: WarmupSettings): string {
       ? " · each inbox's own signature, in warmup emails"
       : "";
   const type = s.businessType ? ` · ${s.businessType}` : "";
-  return `${ramp}${vary} · ${s.replyRatePct}% replies${type} · ${when}, ${hours} (${s.timezone})${sig}`;
+  return `${ramp}${vary} · ${s.replyRatePct}% replies${type} · ${when}, ${hours} (${s.timezone})${sig} · campaign ramp-up off`;
 }
