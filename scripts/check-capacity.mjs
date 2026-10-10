@@ -39,9 +39,10 @@ eq("the rates read back in words", describeRates(),
 // --- the workspaces that never count -----------------------------------------
 console.log("--- the exclusions");
 const EXCLUDED_WORKSPACES = excludedWorkspaces();
-eq("the two that never send to prospects are named (General Settings default)",
-  EXCLUDED_WORKSPACES, ["Ikoni Digital Lead Nurturing + Duplicate Workspace", "Inbox Warmup"]);
-eq("…and are recognised", EXCLUDED_WORKSPACES.map(isExcluded), [true, true]);
+eq("the General Settings two, then this tool's own Google Inboxes Warmup",
+  EXCLUDED_WORKSPACES, ["Ikoni Digital Lead Nurturing + Duplicate Workspace", "Inbox Warmup", "Google Inboxes Warmup"]);
+eq("…and are recognised", EXCLUDED_WORKSPACES.map(isExcluded), [true, true, true]);
+eq("Google Inboxes Warmup is left out whatever the case or padding", isExcluded(" google inboxes warmup "), true);
 // Matched on the name, so stray spacing or case in Plusvibe cannot slip one in.
 eq("…whatever the case or padding", isExcluded("  inbox warmup "), true);
 eq("anything else counts", ["Ikoni Digital", "Warmup", "Media Manager", ""].map(isExcluded), [false, false, false, false]);

@@ -185,7 +185,10 @@ export function CapacityTool() {
           · Azure 25 is a domain with 25 mailboxes or fewer, Azure 50 one with more · every inbox counts, sending or not
         </p>
         <p className="text-xs text-muted-foreground" data-excluded>
-          Always left out: {excludedWorkspaces().map((w) => `“${w}”`).join(" and ")}
+          Always left out: {(() => {
+            const names = excludedWorkspaces().map((w) => `“${w}”`);
+            return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+          })()}
           {job && job.excluded.length > 0 ? ` · ${formatNumber(job.excluded.length)} skipped this run` : ""}
         </p>
       </div>

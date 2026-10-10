@@ -39,10 +39,21 @@ export const DAILY_PER_INBOX: Record<Category, number> = {
  * other a duplicate kept for reference, so counting either would inflate the
  * number this tool exists to give.
  */
-export const excludedWorkspaces = (): string[] => generalSettings().workspaces.excluded;
+export const excludedWorkspaces = (): string[] => {
+  const shared = generalSettings().workspaces.excluded;
+  const extra = CAPACITY_ONLY_EXCLUDED.filter((w) => !shared.some((x) => x.trim().toLowerCase() === w.toLowerCase()));
+  return [...shared, ...extra];
+};
 
-/** The list lives in General Settings (Workspaces); case and padding don't matter. */
-export const isExcluded = isExcludedWorkspace;
+/**
+ * Left out of this tool only, on top of the General Settings list (which other
+ * tools share): Google Inboxes Warmup holds inboxes still warming, not sending.
+ */
+export const CAPACITY_ONLY_EXCLUDED = ["Google Inboxes Warmup"];
+
+/** The General Settings list plus this tool's own; case and padding don't matter. */
+export const isExcluded = (name: string): boolean =>
+  isExcludedWorkspace(name) || CAPACITY_ONLY_EXCLUDED.some((w) => w.toLowerCase() === name.trim().toLowerCase());
 
 /** The order the columns read in, Google first. */
 export const CAPACITY_ORDER: Category[] = ["google", "azure50", "azure25"];
