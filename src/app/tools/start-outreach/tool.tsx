@@ -870,6 +870,13 @@ function DomainRows({
   onExpand: () => void;
 }) {
   const verdict = domainVerdict(group);
+  const [copied, setCopied] = useState(false);
+  async function copyDomain() {
+    if (await copyToClipboard(group.domain)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  }
   const label =
     verdict === "partly"
       ? `Partly ready`
@@ -907,6 +914,18 @@ function DomainRows({
             aria-expanded={expanded}
           >
             <span className="font-mono text-sm font-medium">{group.domain}</span>
+          </button>
+          <button
+            type="button"
+            className="ml-1.5 inline-flex h-6 w-6 items-center justify-center rounded-md align-middle text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            onClick={copyDomain}
+            aria-label={`Copy ${group.domain}`}
+            title={copied ? "Copied" : "Copy domain"}
+            data-copy-domain={group.domain}
+          >
+            {copied ? <CheckIcon size={13} className="text-success" /> : <CopyIcon size={13} />}
+          </button>
+          <button type="button" className="block text-left" onClick={onExpand} tabIndex={-1} aria-hidden>
             <span className="mt-0.5 block text-xs text-muted-foreground" data-domain-sub>
               {formatNumber(group.total)} inbox{group.total === 1 ? "" : "es"}
               {providers ? ` · ${providers}` : ""}
