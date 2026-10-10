@@ -134,6 +134,22 @@ export function AzureWarmupTool() {
     }
   }, []);
 
+  // A run a server restart cut off carries on without anyone pressing Resume.
+  // The server does it at start-up when it has a key of its own; otherwise the
+  // page does it with the key it holds, once per interruption.
+  const resumeTried = useRef(new Set<string>());
+  useEffect(() => {
+    for (const j of jobs) {
+      if (j.status !== "interrupted") continue;
+      const key = `${j.id}:${j.updatedAt}`;
+      if (resumeTried.current.has(key)) continue;
+      resumeTried.current.add(key);
+      void resumeAzureWarmup(j.id)
+        .then(() => refreshJobs())
+        .catch(() => undefined);
+    }
+  }, [jobs, refreshJobs]);
+
   useEffect(() => {
     if (!(ready && hasKey)) return;
     void refreshJobs();
@@ -806,8 +822,9 @@ function JobCard({
 
       {job.status === "interrupted" && (
         <p className="mt-2 text-xs text-warning">
-          Interrupted by a server restart. Everything already warming is
-          unaffected — Resume picks up from where it stopped.
+          Interrupted by a server restart — picking it up again by itself.
+          Everything already warming is unaffected; if it stays like this,
+          press Resume.
         </p>
       )}
 

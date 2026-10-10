@@ -83,9 +83,22 @@ interface StoredJob extends AzureWarmupJob {
   done: string[];
 }
 
-const records = new Map<string, StoredJob>();
-const meta = new Map<string, JobMeta>();
-let loaded = false;
+// One copy of the jobs per process. Next.js bundles the start-up hook and the
+// API routes apart, so this module loads twice; with state kept per copy, the
+// run the start-up hook resumed would look interrupted to the routes, and the
+// page would start it a second time.
+interface SharedState {
+  records: Map<string, StoredJob>;
+  meta: Map<string, JobMeta>;
+  loaded: boolean;
+}
+const shared: SharedState = ((globalThis as { __pvAzureWarmupJobs?: SharedState }).__pvAzureWarmupJobs ??= {
+  records: new Map(),
+  meta: new Map(),
+  loaded: false,
+});
+const records = shared.records;
+const meta = shared.meta;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -148,8 +161,8 @@ function flushRunningSync() {
 onShutdownFlush(flushRunningSync);
 
 async function loadOnce() {
-  if (loaded) return;
-  loaded = true;
+  if (shared.loaded) return;
+  shared.loaded = true;
   try {
     await fs.mkdir(JOBS_DIR, { recursive: true });
     for (const f of await fs.readdir(JOBS_DIR)) {
@@ -298,6 +311,23 @@ export async function resumeJob(apiKey: string, id: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * At server start: every run a restart cut off carries on by itself, with the
+ * server's own key, for runs started with that same key. Anything else is
+ * picked up as soon as the tool is opened, with the key the browser holds.
+ */
+export async function bootResume(): Promise<void> {
+  await loadOnce();
+  const serverKey = process.env.PLUSVIBE_API_KEY?.trim();
+  if (!serverKey) return;
+  const fp = fingerprintKey(serverKey);
+  for (const [id, rec] of records) {
+    const m = meta.get(id);
+    if (!m || m.fingerprint !== fp || rec.status !== "interrupted" || rec.rows.length === 0) continue;
+    await resumeJob(serverKey, id);
+  }
+}
+
 // --- Runner ----------------------------------------------------------------
 
 async function runJob(id: string) {
@@ -340,7 +370,9 @@ async function runJob(id: string) {
     const doneSet = new Set(rec.done);
 
     let consecutiveFailures = 0;
-    let hadSuccess = false;
+    // A run picked up after a restart has checked before: a failed first
+    // check now is a blip (the server barely up), not a bad key — retried, not fatal.
+    let hadSuccess = rec.checks > 0;
 
     while (true) {
       if (m.aborted) throw new Aborted();

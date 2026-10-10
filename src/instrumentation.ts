@@ -41,6 +41,10 @@ export async function register() {
     const outreach = await import("@/lib/jobs/outreach-schedule");
     outreach.bootScheduler();
 
+    // Azure Start Warmup: a run a deploy cut off carries on checking hourly.
+    const azureWarmup = await import("@/lib/jobs/azure-warmup");
+    void azureWarmup.bootResume().catch(() => undefined);
+
     // Create All Campaign Types: a run a deploy cut off is picked up again,
     // finishing the split it had started.
     const campaignTypes = await import("@/lib/jobs/campaign-types");
