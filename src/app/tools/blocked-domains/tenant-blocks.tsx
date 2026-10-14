@@ -208,7 +208,9 @@ export function DomainEventCard({
   onDeleteAll?: (domain: string) => void;
   onKeepAll?: (domain: string) => void;
 }) {
-  const waiting = inboxes.filter((j) => j.status === "awaiting_confirmation").length;
+  // Confirmed but not reached yet: deletes run one after another.
+  const waiting = inboxes.filter((j) => j.status === "awaiting_confirmation" && !j.confirmedAt).length;
+  const queued = inboxes.filter((j) => j.status === "awaiting_confirmation" && !!j.confirmedAt).length;
   const deleting = inboxes.filter((j) => j.status === "deleting").length;
   const deleted = inboxes.filter((j) => j.status === "deleted").length;
   const kept = inboxes.filter((j) => j.status === "dismissed").length;
@@ -243,7 +245,7 @@ export function DomainEventCard({
       {inboxes.length > 0 && (
         <p className="mt-1 text-xs" data-domain-inboxes={d.domain}>
           {waiting > 0 && <span className="text-warning">{formatNumber(waiting)} waiting for you to delete. </span>}
-          {deleting > 0 && <span className="text-accent">Deleting {formatNumber(deleting)}… </span>}
+          {(deleting > 0 || queued > 0) && <span className="text-accent">Deleting — {formatNumber(queued + deleting)} to go… </span>}
           {deleted > 0 && <span className="text-muted-foreground">{formatNumber(deleted)} deleted. </span>}
           {kept > 0 && <span className="text-muted-foreground">{formatNumber(kept)} kept stopped. </span>}
           {failed > 0 && <span className="text-danger">{formatNumber(failed)} couldn&apos;t be deleted — see Blocked Inboxes. </span>}
@@ -263,7 +265,7 @@ export function DomainEventCard({
           )}
         </div>
       )}
-      {!inProgress && waiting === 0 && deleting === 0 && (
+      {!inProgress && waiting === 0 && deleting === 0 && queued === 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
           <button
             type="button"

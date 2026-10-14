@@ -45,6 +45,9 @@ export function BlockedDomainsTool() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [recentShown, setRecentShown] = useState(RECENT);
   const [passedOpen, setPassedOpen] = useState(false);
+  /** Domains whose inboxes were just deleted or kept here: folded away at once, before the server catches up. */
+  const [decidedNow, setDecidedNow] = useState<Set<string>>(() => new Set());
+  const [decidedOpen, setDecidedOpen] = useState(false);
   const [otherOpen, setOtherOpen] = useState(false);
   const [passedShown, setPassedShown] = useState(RECENT);
   const [otherShown, setOtherShown] = useState(RECENT);
@@ -144,6 +147,30 @@ export function BlockedDomainsTool() {
       .filter((d) => d.hiddenAt === undefined && (isWholeDomainBlock(d) || d.notActiveAt !== undefined))
       .map((d) => ({ kind: "domain" as const, key: `domain:${d.domain}`, at: d.cancelledAt ?? d.notActiveAt ?? d.cancelRequestedAt ?? d.updatedAt, d })),
   ].sort((a, b) => b.at - a.at);
+  // A domain whose inboxes have all been decided — deleting, deleted or kept
+  // stopped — folds away under Home, so what still needs you stays on top.
+  const decided = (domain: string) => {
+    if (decidedNow.has(domain)) return true;
+    const list = domainInboxes(domain);
+    return list.length > 0 && !list.some((j) => j.status === "awaiting_confirmation" && !j.confirmedAt);
+  };
+  const mainFeed = blockedFeed.filter((item) => item.kind === "inbox" || !decided(item.d.domain));
+  const decidedFeed = blockedFeed.filter((item) => item.kind === "domain" && decided(item.d.domain));
+  const decideDomain = (key: string, domain: string, action: "confirm-domain" | "dismiss-domain") => {
+    setDecidedNow((s) => new Set(s).add(domain));
+    return withBusy(key, () => blockedInboxAction({ action, domain }));
+  };
+  const domainCard = (item: Extract<(typeof blockedFeed)[number], { kind: "domain" }>) => (
+    <DomainEventCard
+      key={item.key}
+      d={item.d}
+      inboxes={domainInboxes(item.d.domain)}
+      busy={busyId === item.key}
+      onDeleteAll={(domain) => decideDomain(item.key, domain, "confirm-domain")}
+      onKeepAll={(domain) => decideDomain(item.key, domain, "dismiss-domain")}
+      onRemove={(domain) => withBusy(item.key, () => blockedInboxAction({ action: "hide-domain", domain }))}
+    />
+  );
   const passedJobs = onHome.filter((j) => j.status === "passed");
   const otherJobs = onHome.filter((j) => !isBlocked(j) && j.status !== "passed");
   const otherErrors = otherJobs.filter((j) => j.status === "error" || j.status === "interrupted").length;
@@ -294,31 +321,17 @@ export function BlockedDomainsTool() {
             </div>
           )}
 
-          {blockedFeed.length > 0 ? (
+          {mainFeed.length > 0 ? (
             <div className="space-y-3" data-recent>
               <h2 className="text-sm font-semibold">Blocked Inboxes &amp; Domains</h2>
-              {blockedFeed.slice(0, recentShown).map((item) =>
-                item.kind === "inbox" ? (
-                  inboxCard(item.job)
-                ) : (
-                  <DomainEventCard
-                    key={item.key}
-                    d={item.d}
-                    inboxes={domainInboxes(item.d.domain)}
-                    busy={busyId === item.key}
-                    onDeleteAll={(domain) => withBusy(item.key, () => blockedInboxAction({ action: "confirm-domain", domain }))}
-                    onKeepAll={(domain) => withBusy(item.key, () => blockedInboxAction({ action: "dismiss-domain", domain }))}
-                    onRemove={(domain) => withBusy(item.key, () => blockedInboxAction({ action: "hide-domain", domain }))}
-                  />
-                )
-              )}
-              {blockedFeed.length > recentShown && (
+              {mainFeed.slice(0, recentShown).map((item) => (item.kind === "inbox" ? inboxCard(item.job) : domainCard(item)))}
+              {mainFeed.length > recentShown && (
                 <button type="button" className="text-xs text-muted-foreground underline" onClick={() => setRecentShown((n) => n + RECENT)}>
-                  {formatNumber(blockedFeed.length - recentShown)} more
+                  {formatNumber(mainFeed.length - recentShown)} more
                 </button>
               )}
             </div>
-          ) : (
+          ) : decidedFeed.length > 0 ? null : (
             waiting.length === 0 &&
             inboxJobs.length === 0 && (
               <EmptyState icon={<FireIcon />} title="No inboxes yet">
@@ -326,6 +339,18 @@ export function BlockedDomainsTool() {
                 sender inbox and every bounce lands here.
               </EmptyState>
             )
+          )}
+
+          {decidedFeed.length > 0 && (
+            <Fold
+              id="decided"
+              title={`Deleted & kept domains (${formatNumber(decidedFeed.length)})`}
+              note="Every inbox decided: deleting, deleted or kept stopped. Deletes carry on in the background."
+              open={decidedOpen}
+              onToggle={() => setDecidedOpen((v) => !v)}
+            >
+              {decidedFeed.map((item) => (item.kind === "domain" ? domainCard(item) : null))}
+            </Fold>
           )}
 
           {passedJobs.length > 0 && (
