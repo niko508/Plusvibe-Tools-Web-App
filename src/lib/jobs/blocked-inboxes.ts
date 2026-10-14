@@ -242,6 +242,10 @@ const googleStopId = (domain: string) => `google-stop:${domain}`;
 export async function bootResume(): Promise<void> {
   await loadOnce();
   void backfillGoogleStops().catch(() => undefined);
+  // A registry that didn't answer is asked again later, so a domain's
+  // platform is found even when the first lookup failed.
+  const g = globalThis as { __pvPlatformBackfill?: ReturnType<typeof setInterval> };
+  g.__pvPlatformBackfill ??= setInterval(() => void backfillGoogleStops().catch(() => undefined), 60 * 60 * 1000);
 }
 
 /** Where a domain was bought: the 📋 Domains sheet's host, else the registrar. */
