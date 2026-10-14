@@ -248,8 +248,35 @@ export async function bootResume(): Promise<void> {
   g.__pvPlatformBackfill ??= setInterval(() => void backfillGoogleStops().catch(() => undefined), 60 * 60 * 1000);
 }
 
-/** Where a domain was bought: the 📋 Domains sheet's host, else the registrar. */
-async function hostOf(domain: string): Promise<{ domainHost?: string; registrar?: string }> {
+/**
+ * The platform tag (porkbun, dynadot, … — General Settings) the domain's
+ * inboxes carry in Plusvibe, if any: what the domain was bought on.
+ */
+async function platformFromTags(apiKey: string, places: { workspaceId: string; inboxes: Inbox[] }[]): Promise<string | undefined> {
+  const platforms = generalSettings().tags.platform;
+  for (const place of places) {
+    const tagged = place.inboxes.find((i) => (i.tags ?? []).length > 0);
+    if (!tagged) continue;
+    try {
+      const names = new Map((await listTags(apiKey, place.workspaceId)).map((t) => [t.id, t.name]));
+      for (const id of tagged.tags ?? []) {
+        // Exact names only: an ending tag (".co") must never pass for a platform ("name.com").
+        const name = String(names.get(id) ?? id).trim().toLowerCase();
+        const hit = platforms.find((p) => p.name.trim().toLowerCase() === name);
+        if (hit) return hit.name;
+      }
+    } catch {
+      // the tag is only a hint here
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Where a domain was bought: the 📋 Domains sheet's host, else the platform
+ * tag on its inboxes, else the registrar on its public record.
+ */
+async function hostOf(domain: string, fromTags?: () => Promise<string | undefined>): Promise<{ domainHost?: string; registrar?: string }> {
   let domainHost: string | undefined;
   try {
     const grid = await domainsGrid();
@@ -269,6 +296,8 @@ async function hostOf(domain: string): Promise<{ domainHost?: string; registrar?
     // the sheet is only a hint here
   }
   if (domainHost) return { domainHost };
+  const tagged = fromTags ? await fromTags().catch(() => undefined) : undefined;
+  if (tagged) return { domainHost: tagged };
   const registrar = (await registrarOf(domain)) ?? undefined;
   return registrar ? { registrar } : {};
 }
@@ -278,7 +307,11 @@ async function backfillGoogleStops() {
   // Whole-domain blocks from before the platform was kept on them.
   for (const d of domains.values()) {
     if (d.cancelledAt === undefined || d.domainHost || d.registrar) continue;
-    Object.assign(d, await hostOf(d.domain));
+    const apiKey = serverApiKey();
+    Object.assign(
+      d,
+      await hostOf(d.domain, apiKey ? async () => platformFromTags(apiKey, await inboxesOnDomain(apiKey, d.domain, Date.now() - CACHE_MS)) : undefined)
+    );
     await persistDomains();
   }
   for (const d of domains.values()) {
@@ -1066,7 +1099,7 @@ async function stopSendingToGoogle(domain: string): Promise<void> {
     g.workspaces = places.map((p) => ({ workspaceId: p.workspaceId, workspaceName: p.workspaceName, inboxes: p.inboxes.length }));
     g.providers = { google: 0, microsoft: 0, other: 0 };
     for (const p of places) for (const i of p.inboxes) g.providers[bucketOf(i.provider)] += 1;
-    Object.assign(g, await hostOf(domain));
+    Object.assign(g, await hostOf(domain, () => platformFromTags(apiKey, places)));
     if (places.length === 0) g.errors.push(`No inboxes on ${domain} were found in any workspace.`);
     for (const place of places) {
       try {
@@ -1217,7 +1250,7 @@ async function cancelDomain(domain: string): Promise<void> {
       for (const c of plan.cancel) going.push({ place, inbox: c.inbox, email: c.email, figures: c.figures, oooReplyRate: c.oooReplyRate });
     }
     d.cancelledInboxes = going.map((g) => g.email);
-    if (!d.domainHost && !d.registrar) Object.assign(d, await hostOf(domain));
+    if (!d.domainHost && !d.registrar) Object.assign(d, await hostOf(domain, () => platformFromTags(apiKey, places)));
 
     // 3. A record each — the inbox's own, if it was judged before — and
     //    stopped together, workspace by workspace.

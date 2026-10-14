@@ -33,6 +33,8 @@ export interface Inbox {
    * plain SMTP mailbox. Read through bucketOf rather than compared directly.
    */
   provider?: string;
+  /** Tag ids (or names) the inbox carries. */
+  tags?: string[];
 }
 
 /**
@@ -108,6 +110,9 @@ export async function listInboxes(
         dailyLimit: readLimit(a, payload),
         warmupStatus: a.warmup_status ? String(a.warmup_status) : undefined,
         provider: a.provider ? String(a.provider) : undefined,
+        tags: (Array.isArray(payload.tags) ? payload.tags : Array.isArray(a.tags) ? a.tags : [])
+          .map((t: unknown) => (t && typeof t === "object" ? String((t as { id?: unknown; _id?: unknown }).id ?? (t as { _id?: unknown })._id ?? "") : String(t)))
+          .filter(Boolean),
       });
     }
     if (raw.length < PAGE_SIZE) break;
