@@ -183,6 +183,9 @@ export interface InboxDomainState {
   blockColumn?: "domain-blocked" | "tenant-block";
   /** Clay's Stop Sending to Google: every inbox on the domain tagged No Sending to Google. */
   googleStop?: GoogleStopState;
+  /** Where the domain was bought (📋 Domains' host column), or its registrar when the sheet has none. */
+  domainHost?: string;
+  registrar?: string;
   cancelRequestedAt?: number;
   /** Tenant Block: the inbox Clay sent it with, and later hits for the same domain. */
   tenantBlockEmail?: string;

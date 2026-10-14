@@ -140,6 +140,12 @@ export function statsEntries(
       fromDomainRun: true,
     });
   }
+  // A whole-domain block keeps its platform on the domain itself, not on the
+  // inboxes it stopped.
+  for (const d of states) {
+    const e = entries.get(d.domain);
+    if (e && e.platform === UNKNOWN_PLATFORM && (d.domainHost || d.registrar)) e.platform = platformKey(d.domainHost, d.registrar);
+  }
   // A domain blocked as a whole — Domain Blocked, Tenant Block, or the
   // deletion count — counts even with no inbox record of its own (a block that
   // found none left, or whose records were removed).
@@ -149,7 +155,7 @@ export function statsEntries(
     entries.set(d.domain, {
       domain: d.domain,
       tld: tldOf(d.domain) ?? UNKNOWN_TLD,
-      platform: UNKNOWN_PLATFORM,
+      platform: platformKey(d.domainHost, d.registrar),
       provider: d.provider ? PROVIDER_LABELS[d.provider] : UNKNOWN_PROVIDER,
       workspaceName: d.workspaceName,
       inboxes: [],

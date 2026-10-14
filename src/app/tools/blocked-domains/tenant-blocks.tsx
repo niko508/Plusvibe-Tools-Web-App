@@ -11,6 +11,8 @@ import { formatNumber } from "@/lib/format";
 import { EmptyState } from "@/components/ui";
 import { ChevronDownIcon, TrashIcon } from "@/components/icons";
 import { DomainDetail } from "./blocked-lists";
+import { platformKey } from "@/lib/blocked-inboxes/domains";
+import { dominantProvider, PROVIDER_LABELS } from "@/lib/plusvibe-providers";
 import { INBOX_STATUS, relativeTime } from "./inbox-card";
 
 /** A domain blocked as a whole, or asked to be — by any column or rule. */
@@ -224,6 +226,14 @@ export function DomainEventCard({
       ? { text: domainBlocked ? "Domain blocked" : tenantBlock ? "Tenant blocked" : "Domain cancelled", className: "bg-danger/10 text-danger" }
       : { text: "Not Active · last inbox", className: "bg-danger/10 text-danger" };
   const stopped = d.cancelledInboxes?.length ?? 0;
+  // Where it was bought, and whose mailboxes: what the domain is, at a glance.
+  const host = d.domainHost || inboxes.find((j) => j.domainHost)?.domainHost;
+  const registrar = d.registrar || inboxes.find((j) => j.registrar)?.registrar;
+  const platform = host || registrar ? platformKey(host, registrar) : null;
+  const counts = { google: 0, microsoft: 0, other: 0 };
+  for (const j of inboxes) if (j.provider) counts[j.provider] += 1;
+  const top = counts.google + counts.microsoft + counts.other > 0 ? dominantProvider(counts) : d.provider ?? null;
+  const mailbox = top ? PROVIDER_LABELS[top] : null;
   return (
     <div className="pv-card p-4 sm:p-5" data-domain-event={d.domain}>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -231,6 +241,16 @@ export function DomainEventCard({
           <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${label.className}`}>{label.text}</span>
           <span className="truncate font-mono text-sm font-medium">{d.domain}</span>
           {d.workspaceName && <span className="pv-chip shrink-0">{d.workspaceName}</span>}
+          {platform && (
+            <span className="pv-chip shrink-0" title="Where the domain was bought" data-domain-platform={d.domain}>
+              {platform}
+            </span>
+          )}
+          {mailbox && (
+            <span className="pv-chip shrink-0" title="Mailbox provider" data-domain-mailbox={d.domain}>
+              {mailbox}
+            </span>
+          )}
         </div>
         <span className="shrink-0 text-xs text-muted-foreground">{relativeTime(d.cancelledAt ?? d.notActiveAt ?? d.cancelRequestedAt ?? d.updatedAt)}</span>
       </div>

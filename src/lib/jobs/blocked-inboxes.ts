@@ -271,6 +271,12 @@ async function hostOf(domain: string): Promise<{ domainHost?: string; registrar?
 
 /** Stop Sending to Google domains tagged before their platform was kept: looked up once, for Stats. */
 async function backfillGoogleStops() {
+  // Whole-domain blocks from before the platform was kept on them.
+  for (const d of domains.values()) {
+    if (d.cancelledAt === undefined || d.domainHost || d.registrar) continue;
+    Object.assign(d, await hostOf(d.domain));
+    await persistDomains();
+  }
   for (const d of domains.values()) {
     const g = d.googleStop;
     if (!g || g.doneAt === undefined || g.domainHost || g.registrar) continue;
@@ -1207,6 +1213,7 @@ async function cancelDomain(domain: string): Promise<void> {
       for (const c of plan.cancel) going.push({ place, inbox: c.inbox, email: c.email, figures: c.figures, oooReplyRate: c.oooReplyRate });
     }
     d.cancelledInboxes = going.map((g) => g.email);
+    if (!d.domainHost && !d.registrar) Object.assign(d, await hostOf(domain));
 
     // 3. A record each — the inbox's own, if it was judged before — and
     //    stopped together, workspace by workspace.
