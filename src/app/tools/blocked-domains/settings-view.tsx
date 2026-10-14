@@ -193,8 +193,9 @@ export function SettingsView({
         </p>
         <p className="mt-2 text-xs text-muted-foreground" data-google-stop-doc>
           <strong>Stop Sending to Google:</strong> every inbox on the sender&apos;s domain, in every workspace, gets the{" "}
-          <span className="font-mono">No Sending to Google</span> tag (created where it&apos;s missing). Nothing is stopped or deleted
-          and the sheet isn&apos;t touched. Once a day per domain; later YES rows are only counted.
+          <span className="font-mono">No Sending to Google</span> tag (created where it&apos;s missing), and the google-pool tag comes
+          off any inbox that carries it. Nothing is stopped or deleted
+          and the sheet isn&apos;t touched. Every YES row checks the domain again and tags any inbox still missing the tag.
         </p>
         <p className="mt-2 text-xs text-muted-foreground" data-tenant-block-doc>
           <strong>Domain Blocked or Tenant Block:</strong> the sender&apos;s whole domain is blocked: every inbox on it

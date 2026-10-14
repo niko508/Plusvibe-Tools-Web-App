@@ -17,6 +17,7 @@ import { formatNumber } from "@/lib/format";
 import { InboxCard } from "./inbox-card";
 import { BlockedDomainsList, BlockedInboxesView } from "./blocked-lists";
 import { StatsView } from "./stats-view";
+import { GoogleStopsView, isGoogleStop } from "./google-stops";
 import { SettingsView } from "./settings-view";
 import { DomainEventCard, TenantBlocksView, isTenantBlock } from "./tenant-blocks";
 
@@ -26,12 +27,13 @@ const POLL_IDLE_MS = 20000;
 /** Recent runs shown on Home before "more". */
 const RECENT = 15;
 
-type Section = "home" | "inboxes" | "domains" | "tenants" | "stats" | "settings";
+type Section = "home" | "inboxes" | "domains" | "tenants" | "google" | "stats" | "settings";
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "home", label: "Home" },
   { id: "inboxes", label: "Blocked Inboxes" },
   { id: "domains", label: "Blocked Domains" },
   { id: "tenants", label: "Tenant Blocks" },
+  { id: "google", label: "Stop Sending to Google" },
   { id: "stats", label: "Stats" },
   { id: "settings", label: "Settings" },
 ];
@@ -168,7 +170,9 @@ export function BlockedDomainsTool() {
           ? domainCount
           : id === "tenants"
             ? (view?.inboxDomains ?? []).filter(isTenantBlock).length
-            : 0;
+            : id === "google"
+              ? (view?.inboxDomains ?? []).filter(isGoogleStop).length
+              : 0;
 
   return (
     <div className="space-y-5">
@@ -223,7 +227,14 @@ export function BlockedDomainsTool() {
       {section === "tenants" && (
         <TenantBlocksView states={view?.inboxDomains ?? []} jobs={inboxJobs} cancelAfter={view?.settings.cancelAfterDeleted ?? 13} />
       )}
-      {section === "stats" && <StatsView inboxJobs={inboxJobs} domainJobs={domainJobs} />}
+      {section === "google" && (
+        <GoogleStopsView
+          states={view?.inboxDomains ?? []}
+          busy={busyId?.startsWith("google:") ? busyId.slice("google:".length) : null}
+          onTagAgain={(domain) => withBusy(`google:${domain}`, () => blockedInboxAction({ action: "google-stop", domain }))}
+        />
+      )}
+      {section === "stats" && <StatsView inboxJobs={inboxJobs} domainJobs={domainJobs} states={view?.inboxDomains ?? []} />}
       {section === "settings" && <SettingsView view={view} onChanged={refresh} onError={setError} />}
 
       {section === "home" && (

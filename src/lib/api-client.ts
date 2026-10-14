@@ -1520,7 +1520,8 @@ export type BlockedInboxAction =
   | { action: "check"; email: string }
   | { action: "tenant-block"; domain: string }
   | { action: "hide-domain"; domain: string }
-  | { action: "confirm-domain" | "dismiss-domain"; domain: string };
+  | { action: "confirm-domain" | "dismiss-domain"; domain: string }
+  | { action: "google-stop"; domain: string };
 
 /** Acts on the inbox-level log: delete, keep, forget, delete all waiting, or check one inbox. */
 export function blockedInboxAction(body: BlockedInboxAction) {

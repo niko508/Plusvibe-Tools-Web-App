@@ -215,11 +215,18 @@ export interface GoogleStopState {
   /** Tagged by this run, and already carrying the tag. */
   tagged: number;
   alreadyTagged: number;
+  /** Inboxes the google-pool tag was taken off, this run. */
+  poolRemoved?: number;
   /** Where its inboxes were, with how many each. */
   workspaces: { workspaceId: string; workspaceName: string; inboxes: number }[];
   /** Clay sent it again after it was done. */
   hits: number;
   errors: string[];
+  /** Where the domain was bought (📋 Domains), or its registrar: what Stats groups by. */
+  domainHost?: string;
+  registrar?: string;
+  /** Its inboxes by mailbox provider, as found when tagging. */
+  providers?: { google: number; microsoft: number; other: number };
 }
 
 export interface BlockedInboxesView {

@@ -15,7 +15,7 @@ import { tldOf, findPlatformTag } from "@/lib/tags/domain-tags";
 import { platformLabel } from "@/lib/blocked-domains/registrar";
 import { dominantProvider, PROVIDER_LABELS, type ProviderBucket } from "@/lib/plusvibe-providers";
 import type { BlockedDomainJob } from "@/lib/jobs/blocked-domains-types";
-import { isBlocked, type BlockedInboxJob, type BlockedInboxStatus } from "@/lib/jobs/blocked-inboxes-types";
+import { isBlocked, type BlockedInboxJob, type BlockedInboxStatus, type InboxDomainState } from "@/lib/jobs/blocked-inboxes-types";
 import { generalSettings } from "@/lib/general-settings/settings";
 
 export const UNKNOWN_PLATFORM = "Unknown platform";
@@ -57,6 +57,8 @@ export interface BlockedDomainEntry {
   lastBlockedAt: number;
   /** Also flagged by the old domain-level automation. */
   fromDomainRun: boolean;
+  /** Clay's Stop Sending to Google tagged it (its inboxes keep sending to everyone else). */
+  googleStop?: boolean;
 }
 
 function providerName(buckets: (ProviderBucket | undefined)[]): string {
@@ -103,7 +105,11 @@ export function blockedDomains(inboxJobs: BlockedInboxJob[]): BlockedDomainEntry
  * An old domain-level run adds the inboxes it stopped and deleted to the
  * domain's counts.
  */
-export function statsEntries(inboxJobs: BlockedInboxJob[], domainJobs: BlockedDomainJob[]): BlockedDomainEntry[] {
+export function statsEntries(
+  inboxJobs: BlockedInboxJob[],
+  domainJobs: BlockedDomainJob[],
+  states: InboxDomainState[] = []
+): BlockedDomainEntry[] {
   const entries = new Map(blockedDomains(inboxJobs).map((e) => [e.domain, e]));
   for (const d of domainJobs) {
     const existing = entries.get(d.domain);
@@ -132,6 +138,35 @@ export function statsEntries(inboxJobs: BlockedInboxJob[], domainJobs: BlockedDo
       firstBlockedAt: d.createdAt,
       lastBlockedAt: d.createdAt,
       fromDomainRun: true,
+    });
+  }
+  // Stop Sending to Google: a domain flagged too, counted once like the rest.
+  // Its tagged inboxes stand in for blocked ones; none of them is deleted.
+  for (const d of states) {
+    const g = d.googleStop;
+    if (!g) continue;
+    const existing = entries.get(d.domain);
+    if (existing) {
+      existing.googleStop = true;
+      if (existing.platform === UNKNOWN_PLATFORM) existing.platform = platformKey(g.domainHost, g.registrar);
+      continue;
+    }
+    const tagged = g.tagged + g.alreadyTagged;
+    const p = g.providers;
+    const top = p && p.google + p.microsoft + p.other > 0 ? dominantProvider(p) : null;
+    entries.set(d.domain, {
+      domain: d.domain,
+      tld: tldOf(d.domain) ?? UNKNOWN_TLD,
+      platform: platformKey(g.domainHost, g.registrar),
+      provider: p && p.google + p.microsoft + p.other > 0 ? (top ? PROVIDER_LABELS[top] : MIXED_PROVIDER) : UNKNOWN_PROVIDER,
+      workspaceName: g.workspaces[0]?.workspaceName,
+      inboxes: [],
+      blockedInboxes: tagged,
+      deletedInboxes: 0,
+      firstBlockedAt: g.requestedAt,
+      lastBlockedAt: g.doneAt ?? g.requestedAt,
+      fromDomainRun: false,
+      googleStop: true,
     });
   }
   return [...entries.values()];

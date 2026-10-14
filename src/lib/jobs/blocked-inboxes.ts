@@ -28,7 +28,8 @@ import { deleteInbox, fetchInboxStats, listInboxes, listWorkspaces, quarantineIn
 import type { Workspace } from "@/lib/plusvibe-types";
 import { loadSettings } from "@/lib/blocked-domains/settings";
 import { lookupRegistrar } from "@/lib/blocked-domains/registrar";
-import { ACCOUNTS_MAX_PAGES, ACCOUNTS_PAGE, assignTag, readInboxPage, resolveTag } from "@/lib/inbox-tags/api";
+import { ACCOUNTS_MAX_PAGES, ACCOUNTS_PAGE, assignTag, readInboxPage, resolveTag, unassignTag } from "@/lib/inbox-tags/api";
+import { findExisting } from "@/lib/tags/bulk-tags";
 import type { InboxLite } from "@/lib/inbox-tags/plan";
 import { listTags } from "@/lib/plusvibe-tags";
 import { JUDGE_WINDOW_DAYS, describeRemovalRule, judgeInbox, ratesOf, type InboxFigures } from "@/lib/blocked-inboxes/rules";
@@ -43,7 +44,7 @@ import {
   type GoogleStopState,
   type InboxDomainState,
 } from "@/lib/jobs/blocked-inboxes-types";
-import { domainsTab, googleInboxesToCancelTab, notActiveStatus, tenantsToCancelTab } from "@/lib/general-settings/settings";
+import { domainsTab, generalSettings, googleInboxesToCancelTab, notActiveStatus, tenantsToCancelTab } from "@/lib/general-settings/settings";
 
 // Server-side manager for the inbox-level Blocked Domains automation.
 //
@@ -240,6 +241,42 @@ const googleStopId = (domain: string) => `google-stop:${domain}`;
 /** Loads the log at boot, so runs a deploy cut off carry on with nobody looking. */
 export async function bootResume(): Promise<void> {
   await loadOnce();
+  void backfillGoogleStops().catch(() => undefined);
+}
+
+/** Where a domain was bought: the 📋 Domains sheet's host, else the registrar. */
+async function hostOf(domain: string): Promise<{ domainHost?: string; registrar?: string }> {
+  let domainHost: string | undefined;
+  try {
+    const grid = await domainsGrid();
+    if (grid) {
+      const header = grid[0] ?? [];
+      const hit = findDomainRow(grid, domain, {
+        domain: headerIndex(header, COL_DOMAIN),
+        status: headerIndex(header, COL_STATUS),
+        tenantEmail: headerIndex(header, COL_TENANT_EMAIL),
+        tenantSource: headerIndex(header, COL_TENANT_SOURCE),
+        client: headerIndex(header, "Client"),
+        domainHost: headerIndex(header, COL_DOMAIN_HOST),
+      });
+      domainHost = hit.row?.domainHost || undefined;
+    }
+  } catch {
+    // the sheet is only a hint here
+  }
+  if (domainHost) return { domainHost };
+  const registrar = (await registrarOf(domain)) ?? undefined;
+  return registrar ? { registrar } : {};
+}
+
+/** Stop Sending to Google domains tagged before their platform was kept: looked up once, for Stats. */
+async function backfillGoogleStops() {
+  for (const d of domains.values()) {
+    const g = d.googleStop;
+    if (!g || g.doneAt === undefined || g.domainHost || g.registrar) continue;
+    Object.assign(g, await hostOf(d.domain));
+    await persistDomains();
+  }
 }
 
 // --- The line --------------------------------------------------------------
@@ -252,7 +289,8 @@ async function timedOut(id: string, kind: QueueKind) {
     const d = domains.get(id.slice("google-stop:".length));
     if (d?.googleStop?.running) {
       d.googleStop.running = false;
-      d.googleStop.errors.push(`Tagging took over ${RUN_LIMIT_MS / 60000} minutes; the line moved on without it.`);
+      d.googleStop.errors.push(`Tagging took over ${RUN_LIMIT_MS / 60000} minutes; the line moved on without it. The next YES row tags it again.`);
+      d.googleStop.doneAt = Date.now();
       await persistDomains();
     }
     return;
@@ -275,7 +313,7 @@ function enqueue(id: string, kind: QueueKind) {
   if (shared.queue.some((q) => q.id === id)) return;
   // A whole domain goes ahead of single inboxes: there are few of them, and
   // each stops every inbox it covers at once.
-  if (kind === "cancel") shared.queue.unshift({ id, kind });
+  if (kind === "cancel" || kind === "google-stop") shared.queue.unshift({ id, kind });
   else shared.queue.push({ id, kind });
   pump();
 }
@@ -952,16 +990,20 @@ export type GoogleStopResult =
   | { outcome: "duplicate"; domain: string; state: GoogleStopState }
   | { outcome: "invalid"; reason: string };
 
-/** A domain tagged within this long isn't tagged again: Clay fires once per bounce row. */
-const GOOGLE_STOP_REPEAT_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Clay's Stop Sending to Google column said YES: every inbox on the domain,
  * in every workspace, gets the No Sending to Google tag. Nothing else — no
- * stopping, deleting or sheet. Asked for once a day per domain; a repeat in
- * between only counts the hit.
+ * stopping, deleting or sheet. Every YES row checks again and tags what's
+ * missing; a row arriving while a check is running or in line only counts.
  */
-export async function intakeGoogleStop(args: { email?: unknown; domain?: unknown; source?: string }): Promise<GoogleStopResult> {
+export async function intakeGoogleStop(args: {
+  email?: unknown;
+  domain?: unknown;
+  source?: string;
+  /** Tag again now, whenever it was last done (the page's button). */
+  force?: boolean;
+}): Promise<GoogleStopResult> {
   await loadOnce();
   const email = args.email === undefined ? null : normalizeEmail(args.email);
   const raw = email ? email.slice(email.lastIndexOf("@") + 1) : typeof args.domain === "string" ? args.domain : "";
@@ -971,13 +1013,28 @@ export async function intakeGoogleStop(args: { email?: unknown; domain?: unknown
   }
   const d = domainState(domain);
   const g = d.googleStop;
-  if (g && (g.running || g.doneAt === undefined || Date.now() - g.doneAt < GOOGLE_STOP_REPEAT_MS)) {
+  const inLine = g !== undefined && g.doneAt === undefined && shared.queue.some((q) => q.id === googleStopId(domain));
+  // Every YES row checks the domain again and tags whatever is missing the
+  // tag — only a check already running or in line for it makes this a repeat.
+  if (g && (g.running || inLine)) {
     g.hits += 1;
     d.updatedAt = Date.now();
     await persistDomains();
     return { outcome: "duplicate", domain, state: g };
   }
-  d.googleStop = { requestedAt: Date.now(), email: email ?? undefined, source: args.source || "clay", tagged: 0, alreadyTagged: 0, workspaces: [], hits: 0, errors: [] };
+  d.googleStop = {
+    requestedAt: Date.now(),
+    email: email ?? g?.email ?? undefined,
+    source: args.source || "clay",
+    tagged: 0,
+    alreadyTagged: 0,
+    poolRemoved: 0,
+    workspaces: [],
+    hits: g ? g.hits + 1 : 0,
+    errors: [],
+    ...(g?.domainHost ? { domainHost: g.domainHost } : {}),
+    ...(g?.registrar ? { registrar: g.registrar } : {}),
+  };
   d.updatedAt = Date.now();
   await persistDomains();
   enqueue(googleStopId(domain), "google-stop");
@@ -997,20 +1054,45 @@ async function stopSendingToGoogle(domain: string): Promise<void> {
     if (!apiKey) throw new Error("PLUSVIBE_API_KEY is not set on the server");
     const places = await inboxesOnDomain(apiKey, domain, g.requestedAt);
     g.workspaces = places.map((p) => ({ workspaceId: p.workspaceId, workspaceName: p.workspaceName, inboxes: p.inboxes.length }));
+    g.providers = { google: 0, microsoft: 0, other: 0 };
+    for (const p of places) for (const i of p.inboxes) g.providers[bucketOf(i.provider)] += 1;
+    Object.assign(g, await hostOf(domain));
     if (places.length === 0) g.errors.push(`No inboxes on ${domain} were found in any workspace.`);
     for (const place of places) {
       try {
-        const tag = await resolveTag(apiKey, place.workspaceId, await listTags(apiKey, place.workspaceId), NO_GOOGLE_TAG, "#ff5722");
-        // The account list carries each inbox's tags: the ones already
-        // tagged are counted, not sent again.
-        const pages: InboxLite[] = [];
-        for (let page = 0; page < ACCOUNTS_MAX_PAGES; page++) {
-          const rows = await readInboxPage(apiKey, place.workspaceId, page * ACCOUNTS_PAGE, ACCOUNTS_PAGE);
-          pages.push(...rows.filter((r) => r.email.trim().toLowerCase().endsWith(`@${domain}`)));
-          if (rows.length < ACCOUNTS_PAGE) break;
-        }
+        const wsTags = await listTags(apiKey, place.workspaceId);
+        const tag = await resolveTag(apiKey, place.workspaceId, wsTags, NO_GOOGLE_TAG, "#ff5722");
+        // The Google pool tag (General Settings), if this workspace has one.
+        const poolName = generalSettings().tags.googlePool.name;
+        const pool = findExisting(poolName, wsTags);
+        // The account list carries each inbox's tags (by id, or by name):
+        // the ones already tagged are counted, not sent again.
+        const readDomain = async () => {
+          const out: InboxLite[] = [];
+          for (let page = 0; page < ACCOUNTS_MAX_PAGES; page++) {
+            const rows = await readInboxPage(apiKey, place.workspaceId, page * ACCOUNTS_PAGE, ACCOUNTS_PAGE);
+            out.push(...rows.filter((r) => r.email.trim().toLowerCase().endsWith(`@${domain}`)));
+            if (rows.length < ACCOUNTS_PAGE) break;
+          }
+          return out;
+        };
+        const tagged = (r: InboxLite) => r.tags.includes(tag.id) || r.tags.some((t) => t.trim().toLowerCase() === NO_GOOGLE_TAG.toLowerCase());
+        const pages = await readDomain();
         const ids = new Set(place.inboxes.map((i) => i.id));
-        const have = new Set(pages.filter((r) => ids.has(r.id) && r.tags.includes(tag.id)).map((r) => r.id));
+        const have = new Set(pages.filter((r) => ids.has(r.id) && tagged(r)).map((r) => r.id));
+        // No sending to Google means out of the Google pool: the tag comes off
+        // every inbox on the domain that carries it.
+        if (pool) {
+          const inPool = pages
+            .filter((r) => ids.has(r.id) && (r.tags.includes(pool.id) || r.tags.some((t) => t.trim().toLowerCase() === poolName.toLowerCase())))
+            .map((r) => r.id);
+          for (let i = 0; i < inPool.length; i += 100) {
+            const part = inPool.slice(i, i + 100);
+            await unassignTag(apiKey, place.workspaceId, part, pool.id);
+            g.poolRemoved = (g.poolRemoved ?? 0) + part.length;
+            await persistDomains();
+          }
+        }
         const todo = [...ids].filter((id) => !have.has(id));
         g.alreadyTagged += have.size;
         for (let i = 0; i < todo.length; i += 100) {
@@ -1019,15 +1101,28 @@ async function stopSendingToGoogle(domain: string): Promise<void> {
           g.tagged += part.length;
           await persistDomains();
         }
+        // Read back: an inbox Plusvibe didn't tag is named, not counted as done.
+        if (todo.length > 0) {
+          const after = await readDomain();
+          const missing = after.filter((r) => ids.has(r.id) && !tagged(r));
+          if (missing.length > 0) {
+            g.tagged -= missing.length;
+            g.errors.push(
+              `${place.workspaceName || place.workspaceId}: ${missing.length} inbox${missing.length === 1 ? "" : "es"} still don't show the tag after tagging (${missing
+                .slice(0, 3)
+                .map((r) => r.email)
+                .join(", ")}${missing.length > 3 ? "…" : ""}). The next YES row tries again.`
+            );
+          }
+        }
       } catch (err) {
         g.errors.push(`${place.workspaceName || place.workspaceId}: ${msg(err)}`);
       }
     }
     g.doneAt = Date.now();
   } catch (err) {
-    g.errors.push(`Could not tag ${domain}'s inboxes: ${msg(err)}`);
-    // Not done: the next trigger asks again.
-    g.doneAt = Date.now() - GOOGLE_STOP_REPEAT_MS;
+    g.errors.push(`Could not tag ${domain}'s inboxes: ${msg(err)}. The next YES row tries again.`);
+    g.doneAt = Date.now();
   } finally {
     g.running = false;
     d.updatedAt = Date.now();

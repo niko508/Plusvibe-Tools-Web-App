@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { BlockedDomainJob } from "@/lib/jobs/blocked-domains-types";
-import type { BlockedInboxJob } from "@/lib/jobs/blocked-inboxes-types";
+import type { BlockedInboxJob, InboxDomainState } from "@/lib/jobs/blocked-inboxes-types";
 import {
   byPlatform,
   byPlatformAndTld,
@@ -26,8 +26,18 @@ import { GaugeIcon } from "@/components/icons";
 // blocked; the domain-level runs from before the move to inboxes count too.
 // Inbox counts are left out: what matters is which domains go.
 
-export function StatsView({ inboxJobs, domainJobs }: { inboxJobs: BlockedInboxJob[]; domainJobs: BlockedDomainJob[] }) {
-  const entries = useMemo(() => statsEntries(inboxJobs, domainJobs), [inboxJobs, domainJobs]);
+export function StatsView({
+  inboxJobs,
+  domainJobs,
+  states = [],
+}: {
+  inboxJobs: BlockedInboxJob[];
+  domainJobs: BlockedDomainJob[];
+  /** Domain records, for Stop Sending to Google. */
+  states?: InboxDomainState[];
+}) {
+  const entries = useMemo(() => statsEntries(inboxJobs, domainJobs, states), [inboxJobs, domainJobs, states]);
+  const googleStops = entries.filter((e) => e.googleStop).length;
   if (entries.length === 0) {
     return (
       <EmptyState icon={<GaugeIcon />} title="Nothing to count yet">
@@ -50,7 +60,14 @@ export function StatsView({ inboxJobs, domainJobs }: { inboxJobs: BlockedInboxJo
         <Figure
           label="Blocked domains"
           value={formatNumber(entries.length)}
-          hint={fromOld > 0 ? `${formatNumber(fromOld)} from the old domain-level runs` : undefined}
+          hint={
+            [
+              googleStops > 0 ? `${formatNumber(googleStops)} Stop Sending to Google` : null,
+              fromOld > 0 ? `${formatNumber(fromOld)} from the old domain-level runs` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || undefined
+          }
         />
         <Figure label="Endings" value={formatNumber(tld.rows.length)} />
         <Figure

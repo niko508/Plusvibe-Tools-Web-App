@@ -6,6 +6,7 @@ import {
   confirmDomainInboxes,
   confirmInbox,
   dismissDomainInboxes,
+  intakeGoogleStop,
   dismissInbox,
   hideInboxDomain,
   intakeInbox,
@@ -19,6 +20,7 @@ export const dynamic = "force-dynamic";
 // Body: { action: "confirm" | "dismiss" | "remove", jobId }
 //     | { action: "confirm-all" }
 //     | { action: "confirm-domain" | "dismiss-domain", domain } — every inbox a domain block stopped
+//     | { action: "google-stop", domain } — tag a domain's inboxes No Sending to Google now
 //     | { action: "check", email }   — run one inbox by hand, as Clay would
 //     | { action: "tenant-block", domain } — block a whole domain by hand
 //     | { action: "hide-domain", domain }  — take a domain's card off Home
@@ -46,6 +48,11 @@ export async function POST(request: Request) {
         if (!body.domain) return NextResponse.json({ error: "domain is required" }, { status: 400 });
         const n = await (body.action === "confirm-domain" ? confirmDomainInboxes : dismissDomainInboxes)(body.domain);
         return NextResponse.json({ ok: true, inboxes: n });
+      }
+      case "google-stop": {
+        const r = await intakeGoogleStop({ domain: body.domain, email: body.email, source: "manual", force: true });
+        if (r.outcome === "invalid") return NextResponse.json({ error: r.reason }, { status: 400 });
+        return NextResponse.json({ ok: true, outcome: r.outcome, domain: r.domain });
       }
       case "check": {
         const r = await intakeInbox({ email: body.email, source: "manual" });

@@ -123,7 +123,7 @@ export async function handleBlockedDomainWebhook(request: Request) {
         action: "stop_sending_to_google",
         domain: r.domain,
         repeatHits: g.hits,
-        message: g.doneAt === undefined || g.running ? `${r.domain} is being tagged. Nothing to do.` : `${r.domain}'s inboxes were tagged ${NO_GOOGLE_TAG} in the last 24 hours. Nothing to do.`,
+        message: `${r.domain} is being checked and tagged ${NO_GOOGLE_TAG} right now. Nothing more to do.`,
       });
     }
     return NextResponse.json({ status: "accepted", action: "stop_sending_to_google", domain: r.domain }, { status: 202 });
