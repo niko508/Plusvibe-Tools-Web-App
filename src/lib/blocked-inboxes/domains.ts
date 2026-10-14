@@ -140,6 +140,26 @@ export function statsEntries(
       fromDomainRun: true,
     });
   }
+  // A domain blocked as a whole — Domain Blocked, Tenant Block, or the
+  // deletion count — counts even with no inbox record of its own (a block that
+  // found none left, or whose records were removed).
+  for (const d of states) {
+    if (entries.has(d.domain) || (d.cancelledAt === undefined && d.notActiveAt === undefined)) continue;
+    const at = d.cancelledAt ?? d.notActiveAt ?? d.updatedAt;
+    entries.set(d.domain, {
+      domain: d.domain,
+      tld: tldOf(d.domain) ?? UNKNOWN_TLD,
+      platform: UNKNOWN_PLATFORM,
+      provider: d.provider ? PROVIDER_LABELS[d.provider] : UNKNOWN_PROVIDER,
+      workspaceName: d.workspaceName,
+      inboxes: [],
+      blockedInboxes: d.cancelledInboxes?.length ?? 0,
+      deletedInboxes: 0,
+      firstBlockedAt: at,
+      lastBlockedAt: at,
+      fromDomainRun: false,
+    });
+  }
   // Stop Sending to Google: a domain flagged too, counted once like the rest.
   // Its tagged inboxes stand in for blocked ones; none of them is deleted.
   for (const d of states) {

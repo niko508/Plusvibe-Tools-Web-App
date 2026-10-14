@@ -133,17 +133,47 @@ export function BlockedInboxesView({
 function domainStatus(state: InboxDomainState | undefined, cancelAfter: number): { text: string; tone: string } {
   if (!state) return { text: "—", tone: "text-muted-foreground" };
   const tenantBlock = state.cancelReason === "tenant-block";
-  if (state.cancelling) return { text: tenantBlock ? "Tenant blocking…" : "Cancelling…", tone: "text-accent" };
+  const domainBlocked = tenantBlock && state.blockColumn === "domain-blocked";
+  if (state.cancelling) return { text: domainBlocked ? "Domain blocking…" : tenantBlock ? "Tenant blocking…" : "Cancelling…", tone: "text-accent" };
   if (state.cancelledAt !== undefined) {
-    const what = tenantBlock ? "Tenant blocked" : "Cancelled";
+    const what = domainBlocked ? "Domain blocked" : tenantBlock ? "Tenant blocked" : "Cancelled";
     return { text: state.tenantQueued || state.tenantAlreadyQueued ? `${what} · tenant queued` : what, tone: "text-danger" };
   }
-  if (state.cancelRequestedAt !== undefined) return { text: tenantBlock ? "Tenant block in line" : "Cancellation in line", tone: "text-accent" };
+  if (state.cancelRequestedAt !== undefined)
+    return { text: domainBlocked ? "Domain block in line" : tenantBlock ? "Tenant block in line" : "Cancellation in line", tone: "text-accent" };
   if (state.notActiveReason === "last-google-inbox") return { text: "Not Active · last inbox", tone: "text-danger" };
   if (state.provider === "microsoft") {
     return { text: `${state.deletedByRules} deleted · cancels at ${cancelAfter + 1}`, tone: state.deletedByRules > 0 ? "text-warning" : "text-muted-foreground" };
   }
   return { text: "Active", tone: "text-muted-foreground" };
+}
+
+/** The Blocked Domains tab's rows: every domain with a blocked inbox or a Domain Blocked, but not the Tenant Blocks. */
+export function blockedDomainRows(jobs: BlockedInboxJob[], states: InboxDomainState[]): BlockedDomainEntry[] {
+  // Domains blocked as a whole by Tenant Block (or the deletion count) are
+  // listed on Tenant Blocks instead; Domain Blocked ones stay here.
+  const tenantDomains = new Set(states.filter((st) => (st.cancelRequestedAt !== undefined || st.cancelledAt !== undefined) && !(st.cancelReason === "tenant-block" && st.blockColumn === "domain-blocked")).map((st) => st.domain));
+  const list = blockedDomains(jobs).filter((d) => !tenantDomains.has(d.domain));
+  const seen = new Set(list.map((d) => d.domain));
+  const extra: BlockedDomainEntry[] = states
+    .filter((st) => !seen.has(st.domain) && !tenantDomains.has(st.domain) && (st.cancelRequestedAt !== undefined || st.cancelledAt !== undefined || st.notActiveAt !== undefined))
+    .map((st) => {
+      const at = st.cancelledAt ?? st.notActiveAt ?? st.cancelRequestedAt ?? st.updatedAt;
+      return {
+        domain: st.domain,
+        tld: st.domain.slice(st.domain.lastIndexOf(".")),
+        platform: UNKNOWN_PLATFORM,
+        provider: st.provider ? PROVIDER_LABELS[st.provider] : "—",
+        workspaceName: st.workspaceName,
+        inboxes: [],
+        blockedInboxes: 0,
+        deletedInboxes: 0,
+        firstBlockedAt: at,
+        lastBlockedAt: at,
+        fromDomainRun: false,
+      };
+    });
+  return [...extra, ...list].sort((a, b) => b.lastBlockedAt - a.lastBlockedAt || a.domain.localeCompare(b.domain));
 }
 
 export function BlockedDomainsList({
@@ -159,29 +189,7 @@ export function BlockedDomainsList({
   // A domain dealt with as a whole shows here even with no blocked inbox on
   // record: a Tenant Block still in line or one that found no inboxes left,
   // or one whose inbox records were removed before Remove kept them.
-  const domains = useMemo(() => {
-    const list = blockedDomains(jobs);
-    const seen = new Set(list.map((d) => d.domain));
-    const extra: BlockedDomainEntry[] = states
-      .filter((st) => !seen.has(st.domain) && (st.cancelRequestedAt !== undefined || st.cancelledAt !== undefined || st.notActiveAt !== undefined))
-      .map((st) => {
-        const at = st.cancelledAt ?? st.notActiveAt ?? st.cancelRequestedAt ?? st.updatedAt;
-        return {
-          domain: st.domain,
-          tld: st.domain.slice(st.domain.lastIndexOf(".")),
-          platform: UNKNOWN_PLATFORM,
-          provider: st.provider ? PROVIDER_LABELS[st.provider] : "—",
-          workspaceName: st.workspaceName,
-          inboxes: [],
-          blockedInboxes: 0,
-          deletedInboxes: 0,
-          firstBlockedAt: at,
-          lastBlockedAt: at,
-          fromDomainRun: false,
-        };
-      });
-    return [...extra, ...list].sort((a, b) => b.lastBlockedAt - a.lastBlockedAt || a.domain.localeCompare(b.domain));
-  }, [jobs, states]);
+  const domains = useMemo(() => blockedDomainRows(jobs, states), [jobs, states]);
   const [open, setOpen] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [shown, setShown] = useState(PAGE);
@@ -207,8 +215,8 @@ export function BlockedDomainsList({
           onChange={(e) => setFilter(e.target.value)}
         />
         <span className="text-xs text-muted-foreground">
-          {formatNumber(domains.length)} domain{domains.length === 1 ? "" : "s"} with a blocked inbox. A Google domain goes Not Active when its last inbox is blocked; a Microsoft
-          one is cancelled once more than {cancelAfter} of its inboxes have been deleted, or straight away when Clay&apos;s Tenant Block says YES.
+          {formatNumber(domains.length)} domain{domains.length === 1 ? "" : "s"}: blocked as a whole when Clay&apos;s Domain Blocked says YES, or with
+          a blocked inbox. Tenant Block domains are on Tenant Blocks.
         </span>
       </div>
       <div className="pv-card overflow-x-auto p-0">
@@ -310,7 +318,7 @@ export function DomainDetail({ state }: { state: InboxDomainState | undefined })
     <div className="rounded-lg border border-border p-2" data-domain-detail>
       {state.cancelRequestedAt !== undefined && state.cancelledAt === undefined && (
         <p>
-          {tenantBlock ? "Tenant Block" : "Cancellation"} asked for {relativeTime(state.cancelRequestedAt)}
+          {tenantBlock ? (state.blockColumn === "domain-blocked" ? "Domain Blocked" : "Tenant Block") : "Cancellation"} asked for {relativeTime(state.cancelRequestedAt)}
           {state.tenantBlockEmail ? ` (Clay sent ${state.tenantBlockEmail})` : ""} — {state.cancelling ? "under way." : "in line."}
         </p>
       )}

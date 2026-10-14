@@ -13,9 +13,23 @@ import { ChevronDownIcon, TrashIcon } from "@/components/icons";
 import { DomainDetail } from "./blocked-lists";
 import { INBOX_STATUS, relativeTime } from "./inbox-card";
 
-/** A domain blocked as a whole, or asked to be. */
-export function isTenantBlock(d: InboxDomainState): boolean {
+/** A domain blocked as a whole, or asked to be — by any column or rule. */
+export function isWholeDomainBlock(d: InboxDomainState): boolean {
   return d.cancelRequestedAt !== undefined || d.cancelledAt !== undefined;
+}
+
+/** Blocked as a whole because Clay's Domain Blocked column said YES: listed on Blocked Domains. */
+export function isDomainBlocked(d: InboxDomainState): boolean {
+  return d.cancelReason === "tenant-block" && d.blockColumn === "domain-blocked";
+}
+
+/**
+ * Listed on Tenant Blocks: Clay's Tenant Block column (or by hand on
+ * Settings), and Microsoft domains cancelled after too many deletions — not
+ * the Domain Blocked ones.
+ */
+export function isTenantBlock(d: InboxDomainState): boolean {
+  return isWholeDomainBlock(d) && !isDomainBlocked(d);
 }
 
 function why(d: InboxDomainState, cancelAfter: number): string {
@@ -200,11 +214,12 @@ export function DomainEventCard({
   const kept = inboxes.filter((j) => j.status === "dismissed").length;
   const failed = inboxes.filter((j) => j.status === "error").length;
   const tenantBlock = d.cancelReason === "tenant-block";
+  const domainBlocked = isDomainBlocked(d);
   const inProgress = d.cancelledAt === undefined && d.cancelRequestedAt !== undefined;
   const label = inProgress
     ? { text: d.cancelling ? "Blocking domain…" : "Domain block in line", className: "bg-accent/10 text-accent" }
     : d.cancelledAt !== undefined
-      ? { text: tenantBlock ? "Tenant blocked" : "Domain cancelled", className: "bg-danger/10 text-danger" }
+      ? { text: domainBlocked ? "Domain blocked" : tenantBlock ? "Tenant blocked" : "Domain cancelled", className: "bg-danger/10 text-danger" }
       : { text: "Not Active · last inbox", className: "bg-danger/10 text-danger" };
   const stopped = d.cancelledInboxes?.length ?? 0;
   return (

@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { BlockedDomainsView } from "@/lib/jobs/blocked-domains-types";
 import { isBlocked } from "@/lib/jobs/blocked-inboxes-types";
-import { blockedDomains } from "@/lib/blocked-inboxes/domains";
 import {
   fetchBlockedDomains,
   blockedInboxAction,
@@ -15,11 +14,11 @@ import { EmptyState, Spinner } from "@/components/ui";
 import { AlertIcon, ChevronDownIcon, FireIcon } from "@/components/icons";
 import { formatNumber } from "@/lib/format";
 import { InboxCard } from "./inbox-card";
-import { BlockedDomainsList, BlockedInboxesView } from "./blocked-lists";
+import { BlockedDomainsList, blockedDomainRows } from "./blocked-lists";
 import { StatsView } from "./stats-view";
 import { GoogleStopsView, isGoogleStop } from "./google-stops";
 import { SettingsView } from "./settings-view";
-import { DomainEventCard, TenantBlocksView, isTenantBlock } from "./tenant-blocks";
+import { DomainEventCard, TenantBlocksView, isTenantBlock, isWholeDomainBlock } from "./tenant-blocks";
 
 /** Polled while anything is in flight; slower otherwise, since Clay drives it. */
 const POLL_ACTIVE_MS = 2000;
@@ -27,10 +26,9 @@ const POLL_IDLE_MS = 20000;
 /** Recent runs shown on Home before "more". */
 const RECENT = 15;
 
-type Section = "home" | "inboxes" | "domains" | "tenants" | "google" | "stats" | "settings";
+type Section = "home" | "domains" | "tenants" | "google" | "stats" | "settings";
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "home", label: "Home" },
-  { id: "inboxes", label: "Blocked Inboxes" },
   { id: "domains", label: "Blocked Domains" },
   { id: "tenants", label: "Tenant Blocks" },
   { id: "google", label: "Stop Sending to Google" },
@@ -117,7 +115,7 @@ export function BlockedDomainsTool() {
   // Inboxes stopped with their whole domain are decided on the domain's card, not one by one.
   const waiting = inboxJobs.filter((j) => j.status === "awaiting_confirmation" && !j.cancelledWithDomain);
   const domainInboxes = (domain: string) => inboxJobs.filter((j) => j.cancelledWithDomain && j.domain === domain);
-  const domainCount = blockedDomains(inboxJobs).length;
+  const domainCount = blockedDomainRows(inboxJobs, view?.inboxDomains ?? []).length;
   const domainsWaiting = new Set(inboxJobs.filter((j) => j.cancelledWithDomain && j.status === "awaiting_confirmation").map((j) => j.domain)).size;
   const stats = {
     checked: inboxJobs.length,
@@ -143,7 +141,7 @@ export function BlockedDomainsTool() {
       .filter((j) => isBlocked(j) && j.status !== "awaiting_confirmation" && !j.cancelledWithDomain)
       .map((job) => ({ kind: "inbox" as const, key: job.id, at: job.blockedAt ?? job.createdAt, job })),
     ...(view?.inboxDomains ?? [])
-      .filter((d) => d.hiddenAt === undefined && (isTenantBlock(d) || d.notActiveAt !== undefined))
+      .filter((d) => d.hiddenAt === undefined && (isWholeDomainBlock(d) || d.notActiveAt !== undefined))
       .map((d) => ({ kind: "domain" as const, key: `domain:${d.domain}`, at: d.cancelledAt ?? d.notActiveAt ?? d.cancelRequestedAt ?? d.updatedAt, d })),
   ].sort((a, b) => b.at - a.at);
   const passedJobs = onHome.filter((j) => j.status === "passed");
@@ -164,9 +162,7 @@ export function BlockedDomainsTool() {
   const badge = (id: Section) =>
     id === "home"
       ? stats.waiting
-      : id === "inboxes"
-        ? stats.blocked
-        : id === "domains"
+      : id === "domains"
           ? domainCount
           : id === "tenants"
             ? (view?.inboxDomains ?? []).filter(isTenantBlock).length
@@ -211,16 +207,6 @@ export function BlockedDomainsTool() {
         </div>
       )}
 
-      {section === "inboxes" && (
-        <BlockedInboxesView
-          jobs={inboxJobs}
-          busyId={busyId}
-          onConfirm={(id) => withBusy(id, () => blockedInboxAction({ action: "confirm", jobId: id }))}
-          onDismiss={(id) => withBusy(id, () => blockedInboxAction({ action: "dismiss", jobId: id }))}
-          onConfirmAll={confirmAll}
-          confirmingAll={confirmingAll}
-        />
-      )}
       {section === "domains" && (
         <BlockedDomainsList jobs={inboxJobs} states={view?.inboxDomains ?? []} cancelAfter={view?.settings.cancelAfterDeleted ?? 13} />
       )}
