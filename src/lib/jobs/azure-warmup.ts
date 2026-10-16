@@ -495,7 +495,11 @@ async function updateDomainsSheet(rec: StoredJob) {
   const iSource = header.indexOf(COL_TENANT_SOURCE.toLowerCase());
   let byEmail = new Map<string, string>();
   let vocabulary = new Map<string, string>();
-  if (iSource !== -1) {
+  const needsSource = (d: string) => {
+    const r = grid.findIndex((row, i) => i > 0 && (row[iDomain] ?? "").trim().toLowerCase() === d);
+    return r > 0 && (grid[r][iSource] ?? "").trim() === "";
+  };
+  if (iSource !== -1 && rec.domains.some((d) => needsSource(d.domain))) {
     vocabulary = buildSourceVocabulary(grid, iSource);
     const tenantsTab = rec.tenantsTab || tenantsTabSetting();
     try {
@@ -556,7 +560,10 @@ async function updateDomainsSheet(rec: StoredJob) {
       value: warmingUpStatus(),
     });
 
-    if (iSource !== -1 && byEmail.size > 0) {
+    // A row that already names its source keeps it: the Domains tab is where
+    // that is kept now, and the Tenants tab may no longer list the tenant.
+    const hasSource = iSource !== -1 && (grid[rowNo - 1]?.[iSource] ?? "").trim() !== "";
+    if (iSource !== -1 && !hasSource && byEmail.size > 0) {
       const resolved = resolveSource(d.orderEmail, byEmail, vocabulary);
       if (resolved.value) {
         updates.push({
@@ -583,7 +590,7 @@ async function updateDomainsSheet(rec: StoredJob) {
   if (noProvider.size > 0) {
     pushError(
       rec,
-      `${noProvider.size} tenant email(s) weren't found in the Tenants tab, so their ${COL_TENANT_SOURCE} was left blank: ${[...noProvider].slice(0, 5).join(", ")}${noProvider.size > 5 ? " …" : ""}`
+      `${noProvider.size} domain(s) have no ${COL_TENANT_SOURCE} in the sheet and their tenant isn't in the Tenants tab, so it was left blank: ${[...noProvider].slice(0, 5).join(", ")}${noProvider.size > 5 ? " …" : ""}`
     );
   }
   if (unknownProviders.size > 0) {
@@ -691,7 +698,12 @@ async function writeWarmupStarted(rec: StoredJob) {
 interface AccountLite {
   id: string;
   email: string;
+  /** The inbox's campaign Daily Limit, sent back unchanged: Plusvibe requires it whenever campaign ramp-up is switched off. */
+  dailyLimit: number;
 }
+
+/** Plusvibe's own default campaign Daily Limit, for an inbox that reports none. */
+const DEFAULT_DAILY_LIMIT = 5;
 
 /** Every inbox in the workspace, keyed by lowercased email. */
 async function fetchWorkspaceInboxes(
@@ -714,7 +726,10 @@ async function fetchWorkspaceInboxes(
     for (const a of batch) {
       const email = String(a.email ?? "").trim().toLowerCase();
       const accId = String(a.id ?? a._id ?? "");
-      if (email && accId) out.set(email, { id: accId, email });
+      const payload = (a.payload ?? {}) as Record<string, unknown>;
+      const limit = Number(payload.daily_limit);
+      const dailyLimit = Number.isFinite(limit) && limit > 0 ? limit : DEFAULT_DAILY_LIMIT;
+      if (email && accId) out.set(email, { id: accId, email, dailyLimit });
     }
     if (batch.length < ACCOUNTS_PAGE) break;
   }
@@ -730,16 +745,22 @@ async function runCheck(rec: StoredJob, apiKey: string, doneSet: Set<string>) {
   const inboxes = await fetchWorkspaceInboxes(apiKey, rec.workspaceId);
 
   // Present in Plusvibe but not yet configured.
-  const pending: { email: string; id: string; domain: string }[] = [];
+  const pending: { email: string; id: string; domain: string; dailyLimit: number }[] = [];
   for (const row of rec.rows) {
     if (doneSet.has(row.email)) continue;
     const acc = inboxes.get(row.email);
-    if (acc) pending.push({ email: row.email, id: acc.id, domain: row.domain });
+    if (acc) pending.push({ email: row.email, id: acc.id, domain: row.domain, dailyLimit: acc.dailyLimit });
   }
 
-  for (let i = 0; i < pending.length; i += BULK_CHUNK) {
+  // One bulk update carries one daily_limit, so inboxes are batched by their
+  // own limit — switching campaign ramp-up off must not change it.
+  const chunks: (typeof pending)[] = [];
+  const byLimit = new Map<number, typeof pending>();
+  for (const p of pending) byLimit.set(p.dailyLimit, [...(byLimit.get(p.dailyLimit) ?? []), p]);
+  for (const group of byLimit.values()) for (let i = 0; i < group.length; i += BULK_CHUNK) chunks.push(group.slice(i, i + BULK_CHUNK));
+
+  for (const chunk of chunks) {
     if (Date.now() >= rec.deadlineAt) break;
-    const chunk = pending.slice(i, i + BULK_CHUNK);
     const ids = chunk.map((c) => c.id);
     try {
       await acquireSlot();
@@ -749,6 +770,7 @@ async function runCheck(rec: StoredJob, apiKey: string, doneSet: Set<string>) {
         body: {
           workspace_id: rec.workspaceId,
           ids,
+          daily_limit: chunk[0].dailyLimit,
           // A run started before the signature was a setting never touched
           // it, and keeps not touching it.
           ...toPlusvibeWarmup(rec.warmup ? normalizeWarmupSettings(rec.warmup) : LEGACY_WARMUP_SETTINGS, {
