@@ -1435,6 +1435,17 @@ export async function confirmDomainInboxes(domain: string): Promise<number> {
   return waiting.length;
 }
 
+/** Deletes every waiting inbox of every blocked domain at once — Home's Delete all. */
+export async function confirmAllDomainInboxes(): Promise<{ domains: number; inboxes: number }> {
+  await loadOnce();
+  const waiting = [...records.values()].filter((r) => r.cancelledWithDomain && r.status === "awaiting_confirmation" && r.confirmedAt === undefined);
+  for (const r of waiting) r.confirmedAt = Date.now();
+  void (async () => {
+    for (const r of waiting) await runDelete(r.id);
+  })();
+  return { domains: new Set(waiting.map((r) => r.domain)).size, inboxes: waiting.length };
+}
+
 /** Keeps every inbox a domain block stopped: not deleted, left stopped. */
 export async function dismissDomainInboxes(domain: string): Promise<number> {
   await loadOnce();

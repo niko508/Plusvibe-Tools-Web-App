@@ -11,7 +11,7 @@ import {
 import { useApiKey } from "@/lib/use-api-key";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { EmptyState, Spinner } from "@/components/ui";
-import { AlertIcon, ChevronDownIcon, FireIcon } from "@/components/icons";
+import { AlertIcon, ChevronDownIcon, FireIcon, TrashIcon } from "@/components/icons";
 import { formatNumber } from "@/lib/format";
 import { InboxCard } from "./inbox-card";
 import { BlockedDomainsList, blockedDomainRows } from "./blocked-lists";
@@ -159,6 +159,25 @@ export function BlockedDomainsTool() {
   const decideDomain = (key: string, domain: string, action: "confirm-domain" | "dismiss-domain") => {
     setDecidedNow((s) => new Set(s).add(domain));
     return withBusy(key, () => blockedInboxAction({ action, domain }));
+  };
+  // Every domain on Home still waiting on its inboxes, for Delete all.
+  const waitingDomainItems = mainFeed.filter(
+    (item): item is Extract<(typeof blockedFeed)[number], { kind: "domain" }> =>
+      item.kind === "domain" && domainInboxes(item.d.domain).some((j) => j.status === "awaiting_confirmation" && !j.confirmedAt)
+  );
+  const waitingDomainInboxes = waitingDomainItems.reduce(
+    (n, item) => n + domainInboxes(item.d.domain).filter((j) => j.status === "awaiting_confirmation" && !j.confirmedAt).length,
+    0
+  );
+  const deleteAllDomains = () => {
+    const n = waitingDomainItems.length;
+    if (!window.confirm(`Delete all ${formatNumber(waitingDomainInboxes)} inboxes on ${formatNumber(n)} blocked domain${n === 1 ? "" : "s"}? This can't be undone.`)) return;
+    setDecidedNow((s) => {
+      const next = new Set(s);
+      for (const item of waitingDomainItems) next.add(item.d.domain);
+      return next;
+    });
+    return withBusy("domains:all", () => blockedInboxAction({ action: "confirm-all-domains" }));
   };
   const domainCard = (item: Extract<(typeof blockedFeed)[number], { kind: "domain" }>) => (
     <DomainEventCard
@@ -323,7 +342,21 @@ export function BlockedDomainsTool() {
 
           {mainFeed.length > 0 ? (
             <div className="space-y-3" data-recent>
-              <h2 className="text-sm font-semibold">Blocked Inboxes &amp; Domains</h2>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold">Blocked Inboxes &amp; Domains</h2>
+                {waitingDomainItems.length > 1 && (
+                  <button
+                    type="button"
+                    className="pv-btn-ghost text-danger disabled:opacity-50"
+                    disabled={busyId === "domains:all"}
+                    onClick={deleteAllDomains}
+                    data-delete-all-domains
+                  >
+                    {busyId === "domains:all" ? <Spinner size={14} /> : <TrashIcon size={14} />} Delete all ({formatNumber(waitingDomainInboxes)} inboxes on{" "}
+                    {formatNumber(waitingDomainItems.length)} domains)
+                  </button>
+                )}
+              </div>
               {mainFeed.slice(0, recentShown).map((item) => (item.kind === "inbox" ? inboxCard(item.job) : domainCard(item)))}
               {mainFeed.length > recentShown && (
                 <button type="button" className="text-xs text-muted-foreground underline" onClick={() => setRecentShown((n) => n + RECENT)}>

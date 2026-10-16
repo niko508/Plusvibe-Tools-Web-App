@@ -1517,6 +1517,7 @@ export function rearmBlockedDomain(jobId: string, signal?: AbortSignal) {
 export type BlockedInboxAction =
   | { action: "confirm" | "dismiss" | "remove"; jobId: string }
   | { action: "confirm-all" }
+  | { action: "confirm-all-domains" }
   | { action: "check"; email: string }
   | { action: "tenant-block"; domain: string }
   | { action: "hide-domain"; domain: string }

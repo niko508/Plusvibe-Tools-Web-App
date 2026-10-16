@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireAccountKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import {
+  confirmAllDomainInboxes,
   confirmAllInboxes,
   confirmDomainInboxes,
   confirmInbox,
@@ -20,6 +21,7 @@ export const dynamic = "force-dynamic";
 // Body: { action: "confirm" | "dismiss" | "remove", jobId }
 //     | { action: "confirm-all" }
 //     | { action: "confirm-domain" | "dismiss-domain", domain } — every inbox a domain block stopped
+//     | { action: "confirm-all-domains" } — every waiting inbox of every blocked domain
 //     | { action: "google-stop", domain } — tag a domain's inboxes No Sending to Google now
 //     | { action: "check", email }   — run one inbox by hand, as Clay would
 //     | { action: "tenant-block", domain } — block a whole domain by hand
@@ -43,6 +45,10 @@ export async function POST(request: Request) {
       }
       case "confirm-all":
         return NextResponse.json({ ok: true, deleting: await confirmAllInboxes() });
+      case "confirm-all-domains": {
+        const r = await confirmAllDomainInboxes();
+        return NextResponse.json({ ok: true, deleting: r.inboxes, domains: r.domains });
+      }
       case "confirm-domain":
       case "dismiss-domain": {
         if (!body.domain) return NextResponse.json({ error: "domain is required" }, { status: 400 });
