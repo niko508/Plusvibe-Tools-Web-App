@@ -116,9 +116,12 @@ async function plusvibeRequest<T>({
   query,
   method = "GET",
   body,
-  retries = 2,
+  retries,
   signal,
 }: FullRequestOptions): Promise<T> {
+  // Reads are safe to repeat, so they get a few more tries: a long paging run
+  // (tens of thousands of leads) shouldn't die on one dropped connection.
+  const maxRetries = retries ?? (method === "GET" ? 4 : 2);
   const url = buildUrl(path, query);
   const headers: Record<string, string> = {
     "x-api-key": apiKey,
@@ -142,7 +145,7 @@ async function plusvibeRequest<T>({
         cache: "no-store",
       });
     } catch (err) {
-      if (attempt < retries) {
+      if (attempt < maxRetries) {
         await sleep(300 * Math.pow(2, attempt));
         attempt++;
         continue;
@@ -154,7 +157,7 @@ async function plusvibeRequest<T>({
     }
 
     if (res.status === 429 || res.status >= 500) {
-      if (attempt < retries) {
+      if (attempt < maxRetries) {
         const retryAfter = Number(res.headers.get("retry-after"));
         const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
           ? retryAfter * 1000
@@ -165,7 +168,20 @@ async function plusvibeRequest<T>({
       }
     }
 
-    const text = await res.text();
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (err) {
+      // The connection dropped while the body was arriving ("terminated").
+      // A read is simply asked again; a write may already have been applied,
+      // so it is reported rather than sent twice.
+      if (method === "GET" && attempt < maxRetries) {
+        await sleep(500 * Math.pow(2, attempt));
+        attempt++;
+        continue;
+      }
+      throw new PlusvibeError(`Network error reading Plusvibe's answer: ${(err as Error).message}`, 502);
+    }
     let respBody: unknown = undefined;
     if (text) {
       try {
