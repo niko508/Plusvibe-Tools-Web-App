@@ -50,10 +50,13 @@ const KEEP_FINISHED_MS = 30 * 86_400_000;
 interface SharedState {
   cache: ScheduledSwitch[] | null;
   started: boolean;
+  /** A check is running; the next one waits rather than starting the same switches again. */
+  ticking: boolean;
 }
 const shared: SharedState = ((globalThis as { __pvOutreachSchedule?: SharedState }).__pvOutreachSchedule ??= {
   cache: null,
   started: false,
+  ticking: false,
 });
 
 export function serverApiKey(): string | null {
@@ -304,6 +307,19 @@ export async function apply(rec: ScheduledSwitch, apiKey: string): Promise<void>
 
 
 async function tick() {
+  // Switches run one after another and a big batch takes minutes: without
+  // this, the next minute's check would find the ones still waiting their
+  // turn and start them a second time alongside.
+  if (shared.ticking) return;
+  shared.ticking = true;
+  try {
+    await runDue();
+  } finally {
+    shared.ticking = false;
+  }
+}
+
+async function runDue() {
   const all = await load();
   const now = Date.now();
 
