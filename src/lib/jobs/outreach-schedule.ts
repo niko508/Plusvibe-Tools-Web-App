@@ -43,7 +43,18 @@ const TICK_MS = 60_000;
 /** Finished switches are kept this long so the list still shows what happened. */
 const KEEP_FINISHED_MS = 30 * 86_400_000;
 
-let cache: ScheduledSwitch[] | null = null;
+// Kept on globalThis: instrumentation.ts (which runs the scheduler) and the
+// route handlers (which book, list and cancel) load this module separately,
+// and two copies of the cache would each write their own stale view over the
+// other's — a switch booked after boot never reached the scheduler.
+interface SharedState {
+  cache: ScheduledSwitch[] | null;
+  started: boolean;
+}
+const shared: SharedState = ((globalThis as { __pvOutreachSchedule?: SharedState }).__pvOutreachSchedule ??= {
+  cache: null,
+  started: false,
+});
 
 export function serverApiKey(): string | null {
   const key = process.env.PLUSVIBE_API_KEY?.trim();
@@ -53,10 +64,10 @@ export function serverApiKey(): string | null {
 // --- Persistence -----------------------------------------------------------
 
 async function load(): Promise<ScheduledSwitch[]> {
-  if (cache) return cache;
+  if (shared.cache) return shared.cache;
   try {
     const parsed = JSON.parse(await fs.readFile(FILE, "utf8")) as ScheduledSwitch[];
-    cache = Array.isArray(parsed)
+    shared.cache = Array.isArray(parsed)
       ? parsed.map((s) => ({
           ...s,
           categories: Array.isArray(s.categories) ? s.categories : [],
@@ -67,17 +78,17 @@ async function load(): Promise<ScheduledSwitch[]> {
         }))
       : [];
   } catch {
-    cache = [];
+    shared.cache = [];
   }
-  return cache;
+  return shared.cache;
 }
 
 async function save() {
-  if (!cache) return;
+  if (!shared.cache) return;
   try {
     await fs.mkdir(DIR, { recursive: true });
     const tmp = `${FILE}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(cache), "utf8");
+    await fs.writeFile(tmp, JSON.stringify(shared.cache), "utf8");
     await fs.rename(tmp, FILE);
   } catch {
     // best-effort; a failed write must not stop a switch from being applied
@@ -291,7 +302,6 @@ export async function apply(rec: ScheduledSwitch, apiKey: string): Promise<void>
 
 // --- The scheduler ----------------------------------------------------------
 
-let started = false;
 
 async function tick() {
   const all = await load();
@@ -333,8 +343,8 @@ async function tick() {
 
 /** Starts the due check. Idempotent — instrumentation.ts calls it at boot. */
 export function bootScheduler() {
-  if (started) return;
-  started = true;
+  if (shared.started) return;
+  shared.started = true;
   const timer = setInterval(() => void tick(), TICK_MS);
   // Never keep the process alive just for this.
   timer.unref?.();
