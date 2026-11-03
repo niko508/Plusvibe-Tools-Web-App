@@ -1,0 +1,116 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 240 20% 99%;
+    --foreground: 240 10% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 12%;
+
+    --muted: 240 12% 96%;
+    --muted-foreground: 240 5% 45%;
+
+    --accent: 258 82% 60%;
+    --accent-foreground: 0 0% 100%;
+
+    --border: 240 12% 90%;
+    --input: 240 12% 90%;
+    --ring: 258 82% 60%;
+
+    --success: 152 62% 40%;
+    --warning: 38 92% 48%;
+    --danger: 0 74% 55%;
+  }
+
+  .dark {
+    --background: 240 12% 7%;
+    --foreground: 240 12% 94%;
+
+    --card: 240 11% 10%;
+    --card-foreground: 240 12% 94%;
+
+    --muted: 240 8% 16%;
+    --muted-foreground: 240 6% 60%;
+
+    --accent: 258 84% 68%;
+    --accent-foreground: 240 12% 7%;
+
+    --border: 240 8% 20%;
+    --input: 240 8% 22%;
+    --ring: 258 84% 68%;
+
+    --success: 152 55% 48%;
+    --warning: 38 90% 55%;
+    --danger: 0 72% 62%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01";
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    @apply bg-accent/25;
+  }
+}
+
+@layer components {
+  .pv-card {
+    @apply rounded-2xl border border-border bg-card text-card-foreground shadow-card;
+  }
+
+  .pv-input {
+    @apply w-full rounded-xl border border-input bg-background px-3.5 py-2.5 text-sm
+      text-foreground shadow-soft outline-none transition
+      placeholder:text-muted-foreground
+      focus:border-accent focus:ring-2 focus:ring-accent/25;
+  }
+
+  .pv-btn {
+    @apply inline-flex select-none items-center justify-center gap-2 rounded-xl px-4 py-2.5
+      text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .pv-btn-primary {
+    @apply pv-btn bg-accent text-accent-foreground shadow-soft
+      hover:brightness-110 active:brightness-95;
+  }
+
+  .pv-btn-ghost {
+    @apply pv-btn border border-border bg-card text-foreground
+      hover:bg-muted;
+  }
+
+  .pv-chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-border bg-card
+      px-3 py-1.5 text-xs font-medium text-muted-foreground transition;
+  }
+
+  .pv-chip-active {
+    @apply border-accent/40 bg-accent/10 text-accent;
+  }
+}
+
+/* Thin, unobtrusive scrollbars */
+.pv-scroll::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+.pv-scroll::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-border;
+}
+.pv-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
