@@ -16,7 +16,7 @@ const eq = (label, got, want) => {
   }
 };
 
-const { parseVariationStats, planWinners, planMultiWinners, planProblems, tagChanges, cleanTagName, defaultName, emptyVariant, withWinnerMark, winnerBar, WINNER_MARK } = await importTs("@/lib/winning-variants/plan");
+const { parseVariationStats, planWinners, planMultiWinners, planProblems, tagChanges, cleanTagName, defaultName, emptyVariant, withWinnerMark, winnerBar, WINNER_MARK, segmentOf, segmentCloneName, withCloneMark, groupBySegment, defaultCloneTags, POOL_TAG } = await importTs("@/lib/winning-variants/plan");
 
 // As the documented endpoint answers, grouped by step.
 const RAW = [
@@ -214,6 +214,38 @@ console.log("--- (Previous Winner) on the best variant");
   eq("…and the plan names them by their new letters", planWinners(seq, at([["A", 1], ["B", 2], ["C", 0], ["D", 2]])).marked, ["A", "B"]);
   eq("none marked: letters as they were", names(planWinners(seq, at([["A", 0], ["B", 1], ["C", 0], ["D", 1]]))), [["B", "Angle B"], ["D", "Old"]]);
   eq("all at one positive reply: none marked", planWinners(seq, at([["A", 1], ["B", 1], ["C", 0], ["D", 0]])).marked, []);
+}
+
+{
+  console.log("\n--- one clone per segment");
+  eq("colour, version, signature and month don't make a segment", segmentOf("🔵 Manufacturing - Custom V2 - Signature (September)"), "Manufacturing - Custom");
+  eq("…so the 🟡 October one is the same segment", segmentOf("🟡 Manufacturing - Custom (October)"), "Manufacturing - Custom");
+  eq("opt-out and unsub variants too", segmentOf("Consulting - Opt Out (August)"), "Consulting");
+  eq("…and Unsub", segmentOf("SaaS - New Accounts V2 - Unsub (August)"), "SaaS - New Accounts");
+  eq("an & in the name stays", segmentOf("Manufacturing & Industrial (August)"), "Manufacturing & Industrial");
+  eq("a name with nothing to strip is its own segment", segmentOf("General - Evergreen - Step 3"), "General - Evergreen - Step 3");
+  eq("the clone is 🟡 and the segment, no month", segmentCloneName("Manufacturing - Product"), "🟡 Manufacturing - Product");
+  eq("a 🔵 name becomes 🟡", withCloneMark("🔵 Roof Repair (August)"), "🟡 Roof Repair (August)");
+  eq("…a plain one gets it", withCloneMark("Roof Repair"), "🟡 Roof Repair");
+  const camps = [
+    { id: "p1", name: "🟡 Manufacturing - Product (October)", createdAt: 300 },
+    { id: "c1", name: "🟡 Manufacturing - Custom (October)", createdAt: 300 },
+    { id: "c2", name: "🔵 Manufacturing - Custom V2 - Signature (September)", createdAt: 200 },
+    { id: "c3", name: "🟡 Manufacturing - Custom V2 - Signature (September)", createdAt: 200 },
+    { id: "c4", name: "🔵 Manufacturing - Custom V2 (September)", createdAt: 200 },
+    { id: "p2", name: "🔵 Manufacturing - Product V2 (September)", createdAt: 200 },
+    { id: "s1", name: "🔵 Manufacturing - Service - Signature (September)", createdAt: 100 },
+    { id: "s2", name: "🟡 Manufacturing - Service - Signature (September)", createdAt: 100 },
+  ];
+  const g = groupBySegment(camps);
+  eq("three segments, in the order met", g.map((x) => x.segment), ["Manufacturing - Product", "Manufacturing - Custom", "Manufacturing - Service"]);
+  eq("each segment holds all its campaigns", g.map((x) => x.ids), [["p1", "p2"], ["c1", "c2", "c3", "c4"], ["s1", "s2"]]);
+  eq("cloned from the newest plain 🟡 one", g[1].baseId, "c1");
+  eq("no plain one: the newest 🟡 of what there is", groupBySegment([camps[6], camps[7]])[0].baseId, "s1");
+  eq("no 🟡 plain one: the newest plain one", groupBySegment([camps[3], camps[4], camps[2]])[0].baseId, "c4");
+  eq("without dates, the list order (newest first) decides", groupBySegment([{ id: "a", name: "🟡 X (Oct)" }, { id: "b", name: "🟡 X (Sep)" }])[0].baseId, "a");
+  eq("the pool tag is picked when the workspace has it", defaultCloneTags([{ id: "t1", name: "Cheap Inboxes" }, { id: "t2", name: "google-pool" }]), { tagIds: ["t2"], newTags: [] });
+  eq("…and created when it doesn't", defaultCloneTags([{ id: "t1", name: "x" }]), { tagIds: [], newTags: [POOL_TAG] });
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);

@@ -478,6 +478,91 @@ export function defaultName(sourceName: string): string {
   return (sourceName ?? "").trim().slice(0, 200);
 }
 
+// --- One clone per segment --------------------------------------------------
+//
+// Ticking every campaign of a client at once: the campaigns fall into
+// segments by name, and each segment gets its own clone with its own winners.
+// "🔵 Manufacturing - Custom V2 - Signature (September)" and
+// "🟡 Manufacturing - Custom (October)" are the same segment,
+// "Manufacturing - Custom": the colour, version, sign-off or opt-out variant
+// and month are what tell a segment's campaigns apart, not what it is. The clone
+// is named after the segment alone, with 🟡 in front and no month.
+
+/** The tag every clone carries unless it is taken off: the pool the 🟡 campaigns send from. */
+export const POOL_TAG = "google-pool";
+/** Every clone's name starts with this. */
+export const CLONE_MARK = "🟡";
+
+/** A campaign's segment: its name without colour, month, version or variant suffixes. */
+export function segmentOf(name: string): string {
+  return (name ?? "")
+    .replace(/^[^\p{L}\p{N}]+/u, "")
+    .replace(/\s*\([^)]*\)\s*$/, "")
+    .replace(/\s*-\s*(signature|opt[ -]?out|unsub(scribe)?|no opening line|opening line|copy)\b/gi, "")
+    .replace(/\s+v\d+\b/gi, "")
+    .replace(/\s+-\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** "🟡 Manufacturing - Product": the segment, no month — the clone's own creation date says when. */
+export function segmentCloneName(segment: string): string {
+  return `${CLONE_MARK} ${segment.trim()}`.slice(0, 200);
+}
+
+/** A name with the 🟡 mark in front, whatever colour it started with. */
+export function withCloneMark(name: string): string {
+  const bare = (name ?? "").replace(/^[^\p{L}\p{N}]+/u, "").trim();
+  return `${CLONE_MARK} ${bare}`.slice(0, 200);
+}
+
+export interface SegmentGroup {
+  segment: string;
+  /** Every picked campaign of the segment, in the order given. */
+  ids: string[];
+  /** The one cloned: settings, follow-ups and sub-sequences come from it. */
+  baseId: string;
+}
+
+const isPlain = (name: string) => !/\b(signature|opt[ -]?out|unsub)/i.test(name);
+const isYellow = (name: string) => name.trim().startsWith(CLONE_MARK);
+
+/**
+ * The picked campaigns, one group per segment, in the order the segments were
+ * first met. Each is cloned from its newest 🟡 campaign without a signature or
+ * opt-out variant — the closest to what the clone will be — falling back to
+ * the newest plain one, then the newest of all. Newest is by creation time;
+ * without one, the list's own order (newest first) decides.
+ */
+export function groupBySegment(campaigns: { id: string; name: string; createdAt?: number }[]): SegmentGroup[] {
+  const order: string[] = [];
+  const by = new Map<string, { id: string; name: string; createdAt?: number; at: number }[]>();
+  campaigns.forEach((c, at) => {
+    const key = segmentOf(c.name) || c.name.trim();
+    const k = key.toLowerCase();
+    if (!by.has(k)) {
+      by.set(k, []);
+      order.push(key);
+    }
+    by.get(k)!.push({ ...c, at });
+  });
+  return order.map((segment) => {
+    const list = by.get(segment.toLowerCase())!;
+    const newest = (a: (typeof list)[number], b: (typeof list)[number]) => (b.createdAt ?? 0) - (a.createdAt ?? 0) || a.at - b.at;
+    const pick =
+      [...list].filter((c) => isYellow(c.name) && isPlain(c.name)).sort(newest)[0] ??
+      [...list].filter((c) => isPlain(c.name)).sort(newest)[0] ??
+      [...list].sort(newest)[0];
+    return { segment, ids: list.map((c) => c.id), baseId: pick.id };
+  });
+}
+
+/** The tags a clone starts with: the pool tag, by id when the workspace has it, by name to create when not. */
+export function defaultCloneTags(workspaceTags: TagRef[]): { tagIds: string[]; newTags: string[] } {
+  const t = workspaceTags.find((x) => x.name.trim().toLowerCase() === POOL_TAG);
+  return t ? { tagIds: [t.id], newTags: [] } : { tagIds: [], newTags: [POOL_TAG] };
+}
+
 // --- What the routes answer (shared by the server and the page) ------------
 
 export interface TagRef {
