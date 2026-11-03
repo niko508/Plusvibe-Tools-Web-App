@@ -478,6 +478,135 @@ export function defaultName(sourceName: string): string {
   return (sourceName ?? "").trim().slice(0, 200);
 }
 
+// --- Positive replies to follow-ups, credited to the first email -----------
+//
+// Plusvibe credits a positive reply to the email it answered: a lead who got
+// step 1 B, said nothing, and said yes to the step 2 follow-up counts for step
+// 2. But it was step 1 B that started that conversation, and step 1 is what
+// this tool judges — so each positive reply to a follow-up is added to the
+// step-1 variant that lead was sent. One number per first email, whichever
+// email the yes came after.
+//
+//   lead still in the campaign  its sent emails say the step-1 variant, and
+//                               which step was last sent before the reply
+//   lead deleted since          only the thread is left: the reply's quoted
+//                               text is matched against the step-1 variants
+
+/** One email the campaign sent a lead. */
+export interface SentEmail {
+  step: number;
+  variation: string;
+  sentAt: number;
+}
+
+/**
+ * The step-1 variant a lead was sent and the step its first reply answered:
+ * the last step sent before that reply. No step 1 among the sent emails: none.
+ */
+export function stepOneOf(sent: SentEmail[], replyAt: number): { stepOne: string | null; repliedStep: number } {
+  const first = sent.filter((e) => e.step === 1).sort((a, b) => a.sentAt - b.sentAt)[0];
+  const before = sent.filter((e) => e.sentAt <= replyAt).sort((a, b) => b.step - a.step)[0];
+  return { stepOne: first?.variation ?? null, repliedStep: before?.step ?? 1 };
+}
+
+/** Lower case, letters and digits only, single spaces: how quoted text and copy are compared. */
+export function textKey(s: string): string {
+  return decodeBasic(String(s ?? "").replace(/<br\s*\/?>/gi, " ").replace(/<\/(p|div|li)>/gi, " ").replace(/<[^>]+>/g, " "))
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function decodeBasic(s: string): string {
+  return s
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&(rsquo|lsquo|#39|apos);/gi, "'")
+    .replace(/&(rdquo|ldquo|quot);/gi, '"')
+    .replace(/&[a-z]+;|&#\d+;/gi, " ");
+}
+
+/** Removes {{ … }} (nested too) and {% … %}, leaving the copy's own words, split where they were. */
+function literalPieces(body: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  for (let i = 0; i < body.length; ) {
+    if (body.startsWith("{%", i)) {
+      const end = body.indexOf("%}", i + 2);
+      out.push(cur), (cur = "");
+      i = end < 0 ? body.length : end + 2;
+      continue;
+    }
+    if (body.startsWith("{{", i)) {
+      let depth = 0, j = i;
+      for (; j < body.length - 1; j++) {
+        if (body.startsWith("{{", j)) (depth++, j++);
+        else if (body.startsWith("}}", j)) {
+          depth--;
+          j++;
+          if (depth === 0) break;
+        }
+      }
+      out.push(cur), (cur = "");
+      i = j + 1;
+      continue;
+    }
+    cur += body[i++];
+  }
+  out.push(cur);
+  return out;
+}
+
+/** The lines and sentences of a variant's own copy long enough to recognise in a quote: six words or more. */
+export function anchorsOf(body: string): string[] {
+  const out = new Set<string>();
+  for (const piece of literalPieces(body ?? "")) {
+    // Line by line and sentence by sentence: a reply often quotes only part.
+    for (const part of piece.split(/<br\s*\/?>|<\/(?:p|div|li)>|\n|(?<=[.!?])\s+/i)) {
+      const k = textKey(part);
+      if (k.split(" ").length >= 6) out.add(k);
+    }
+  }
+  return [...out];
+}
+
+/**
+ * The variant whose copy a reply quotes: the one with the most of its own
+ * phrases in the text, when exactly one leads. Phrases every candidate shares
+ * prove nothing and are not counted. None found, or a tie: null.
+ */
+export function matchQuoted(text: string, variants: { variation: string; body: string }[]): string | null {
+  const hay = ` ${textKey(text)} `;
+  const anchors = variants.map((v) => ({ v: v.variation, a: anchorsOf(v.body) }));
+  const seen = new Map<string, number>();
+  for (const x of anchors) for (const a of x.a) seen.set(a, (seen.get(a) ?? 0) + 1);
+  const hits = anchors
+    .map((x) => ({ v: x.v, n: x.a.filter((a) => (seen.get(a) ?? 0) < anchors.length && hay.includes(` ${a} `)).length }))
+    .sort((a, b) => b.n - a.n);
+  if (!hits.length || hits[0].n === 0 || (hits[1] && hits[1].n === hits[0].n)) return null;
+  return hits[0].v;
+}
+
+/** Adds the credited replies to step 1's positive replies, variant by variant. */
+export function creditStepOne(stats: StatsByStep, credits: Map<string, number>, firstStep = 1): StatsByStep {
+  const out: StatsByStep = new Map([...stats].map(([k, m]) => [k, new Map([...m].map(([l, v]) => [l, { ...v }]))]));
+  const step = out.get(firstStep) ?? new Map<string, VariantStat>();
+  for (const [letter, n] of credits) {
+    const v = step.get(letter) ?? { variation: letter, sent: 0, replies: 0, positiveReplies: 0, isActive: true, isDel: false };
+    v.positiveReplies += n;
+    step.set(letter, v);
+  }
+  out.set(firstStep, step);
+  return out;
+}
+
+/** Positive replies Plusvibe credits to steps after the first. */
+export function followUpPositives(stats: StatsByStep, firstStep = 1): number {
+  let n = 0;
+  for (const [step, m] of stats) if (step > firstStep) for (const v of m.values()) n += v.positiveReplies;
+  return n;
+}
+
 // --- One clone per segment --------------------------------------------------
 //
 // Ticking every campaign of a client at once: the campaigns fall into
@@ -582,6 +711,8 @@ export interface WinnersPreview {
   /** Every tag in the workspace, to choose from. */
   workspaceTags: TagRef[];
   subsequences: number;
+  /** Positive replies to follow-ups credited to the step-1 variant each lead was sent, and those that couldn't be traced. */
+  followUps?: { credited: number; untraced: number };
 }
 
 export interface CloneResult {

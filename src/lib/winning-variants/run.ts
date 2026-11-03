@@ -9,6 +9,13 @@ import { assignCampaignTag, tagIdsOf, unassignCampaignTag } from "@/lib/campaign
 import { compareShapes, shapeOf } from "@/lib/copy-campaign/plan";
 import { optOutState } from "@/lib/campaign-types/append-opt-out";
 import {
+  anchorsOf,
+  creditStepOne,
+  followUpPositives,
+  matchQuoted,
+  stepOneOf,
+  textKey,
+  type SentEmail,
   cleanTagName,
   parseVariationStats,
   planMultiWinners,
@@ -72,22 +79,137 @@ async function planFor(
   campaignId: string,
   alsoIds: string[],
   optOut: OptOutChoice = "keep"
-): Promise<{ raw: Record<string, unknown>; plan: WinnerPlan }> {
+): Promise<{ raw: Record<string, unknown>; plan: WinnerPlan; credit: FollowUpCredit }> {
+  const credit: FollowUpCredit = { credited: 0, untraced: 0 };
+  const labels: { keys: string[] | null } = { keys: null };
   const raw = await readCampaign(apiKey, workspaceId, campaignId);
-  const stats = await readStats(apiKey, workspaceId, campaignId);
+  const stats = await creditedStats(apiKey, workspaceId, campaignId, raw, await readStats(apiKey, workspaceId, campaignId), labels, credit);
   const others = [...new Set(alsoIds)].filter((id) => id && id !== campaignId).slice(0, MAX_WINNER_CAMPAIGNS - 1);
-  if (others.length === 0) return { raw, plan: planWinners(normalizeSequences(raw.sequences), stats, optOut) };
+  if (others.length === 0) return { raw, plan: planWinners(normalizeSequences(raw.sequences), stats, optOut), credit };
   const base: CampaignInput = { id: campaignId, name: nameOf(raw), sequence: normalizeSequences(raw.sequences), stats };
   const inputs: CampaignInput[] = [base];
   for (const id of others) {
     const r = await readCampaign(apiKey, workspaceId, id);
-    inputs.push({ id, name: nameOf(r), sequence: normalizeSequences(r.sequences), stats: await readStats(apiKey, workspaceId, id) });
+    const st = await creditedStats(apiKey, workspaceId, id, r, await readStats(apiKey, workspaceId, id), labels, credit);
+    inputs.push({ id, name: nameOf(r), sequence: normalizeSequences(r.sequences), stats: st });
   }
-  return { raw, plan: planMultiWinners(base, inputs, optOut) };
+  return { raw, plan: planMultiWinners(base, inputs, optOut), credit };
+}
+
+// --- Positive replies to follow-ups, credited to the first email ----------
+
+export interface FollowUpCredit {
+  /** Positive replies to follow-ups added to the step-1 variant the lead was sent. */
+  credited: number;
+  /** Positive replies Plusvibe gives a follow-up that couldn't be traced to a first email. */
+  untraced: number;
+}
+
+const asList = (data: unknown): Record<string, unknown>[] =>
+  Array.isArray(data) ? (data as Record<string, unknown>[]) : Array.isArray((data as { data?: unknown })?.data) ? ((data as { data: Record<string, unknown>[] }).data) : [];
+
+const bodyText = (body: unknown): string => {
+  if (typeof body === "string") return body;
+  const b = (body ?? {}) as { html?: string; text?: string };
+  return b.html || b.text || "";
+};
+
+/** The workspace's positive labels — Plusvibe's own and every custom one marked positive. */
+async function positiveLabelKeys(apiKey: string, workspaceId: string, cache: { keys: string[] | null }): Promise<string[]> {
+  if (cache.keys) return cache.keys;
+  await acquireSlot();
+  const labels = asList(await plusvibeGet<unknown>({ apiKey, path: "/workspace-settings/lead-labels", query: { workspace_id: workspaceId } }));
+  cache.keys = labels.filter((l) => String(l.sentiment ?? "").toUpperCase() === "POSITIVE").map((l) => String(l.key ?? "")).filter(Boolean);
+  return cache.keys;
+}
+
+/**
+ * The campaign's figures with every positive reply to a follow-up added to
+ * the step-1 variant that lead was sent. Only campaigns Plusvibe says have
+ * such replies are looked into, so the rest cost nothing extra.
+ */
+async function creditedStats(
+  apiKey: string,
+  workspaceId: string,
+  campaignId: string,
+  raw: Record<string, unknown>,
+  stats: StatsByStep,
+  labels: { keys: string[] | null },
+  tally: FollowUpCredit
+): Promise<StatsByStep> {
+  const owed = followUpPositives(stats);
+  if (owed === 0) return stats;
+  const sequence = normalizeSequences(raw.sequences).sort((a, b) => a.step - b.step);
+  const firstStep = sequence[0]?.step ?? 1;
+  const stepOneVariants = (sequence[0]?.variations ?? []).map((v) => ({ variation: v.variation, body: v.body ?? "" }));
+  const followUpAnchors = sequence.slice(1).flatMap((s) => s.variations.flatMap((v) => anchorsOf(v.body ?? "")));
+
+  // Every positive thread of this campaign, whatever positive label it has
+  // now: the campaign's threads read once and sorted here, rather than one
+  // read per label.
+  const positive = new Set(await positiveLabelKeys(apiKey, workspaceId, labels));
+  const threads = new Map<string, Record<string, unknown>>();
+  let trail = "";
+  for (let page = 0; page < 60; page++) {
+    await acquireSlot();
+    const r = await plusvibeGet<{ data?: unknown; page_trail?: string }>({
+      apiKey,
+      path: "/unibox/threads",
+      query: { workspace_id: workspaceId, campaign_id: campaignId, limit: "100", page_trail: trail || undefined },
+    });
+    for (const t of asList(r)) if (t.thread_id && positive.has(String(t.label ?? ""))) threads.set(String(t.thread_id), t);
+    trail = String(r?.page_trail ?? "");
+    if (!trail) break;
+  }
+
+  const credits = new Map<string, number>();
+  let traced = 0;
+  // A few threads at a time: each needs two reads, and the shared rate limit
+  // still spaces every request start.
+  const queue = [...threads.values()];
+  const worker = async () => {
+    for (let t = queue.shift(); t; t = queue.shift()) {
+      const found = await traceThread(t);
+      if (!found) continue;
+      credits.set(found, (credits.get(found) ?? 0) + 1);
+      traced += 1;
+    }
+  };
+  /** The step-1 variant a positive reply to a follow-up is credited to; null when it isn't one, or can't be told. */
+  async function traceThread(t: Record<string, unknown>): Promise<string | null> {
+    await acquireSlot();
+    const emails = asList(await plusvibeGet<unknown>({ apiKey, path: "/unibox/emails", query: { workspace_id: workspaceId, thread_id: String(t.thread_id) } }));
+    const reply = emails
+      .filter((e) => String(e.direction ?? "").toUpperCase() === "IN")
+      .sort((a, b) => Date.parse(String(a.timestamp_created)) - Date.parse(String(b.timestamp_created)))[0];
+    if (!reply) return null;
+    const lead = String(t.lead ?? "").trim();
+    let sent: SentEmail[] = [];
+    if (lead) {
+      await acquireSlot();
+      sent = asList(await plusvibeGet<unknown>({ apiKey, path: "/unibox/campaign-emails", query: { workspace_id: workspaceId, lead, campaign_id: campaignId } }))
+        .map((e) => ({ step: Number(e.current_step), variation: String(e.variation ?? ""), sentAt: Date.parse(String(e.sent_on)) }))
+        .filter((e) => e.step > 0 && e.variation);
+    }
+    if (sent.length > 0) {
+      const r = stepOneOf(sent, Date.parse(String(reply.timestamp_created)));
+      // A yes to step 1 itself is already Plusvibe's step-1 figure.
+      return r.repliedStep > firstStep ? r.stepOne : null;
+    }
+    // A lead deleted since: its reply quotes what it answered.
+    const text = bodyText(reply.body);
+    const hay = ` ${textKey(text)} `;
+    if (!followUpAnchors.some((a) => hay.includes(` ${a} `))) return null;
+    return matchQuoted(text, stepOneVariants);
+  }
+  await Promise.all(Array.from({ length: Math.min(4, queue.length) }, worker));
+  tally.credited += traced;
+  tally.untraced += Math.max(0, owed - traced);
+  return creditStepOne(stats, credits, firstStep);
 }
 
 export async function previewWinners(apiKey: string, workspaceId: string, campaignId: string, alsoIds: string[] = []): Promise<WinnersPreview> {
-  const { raw, plan } = await planFor(apiKey, workspaceId, campaignId, alsoIds);
+  const { raw, plan, credit } = await planFor(apiKey, workspaceId, campaignId, alsoIds);
   await acquireSlot();
   const workspaceTags = await listTags(apiKey, workspaceId);
   const byId = new Map(workspaceTags.map((t) => [t.id, t]));
@@ -106,6 +228,7 @@ export async function previewWinners(apiKey: string, workspaceId: string, campai
     tags,
     workspaceTags,
     subsequences,
+    followUps: credit,
   };
 }
 

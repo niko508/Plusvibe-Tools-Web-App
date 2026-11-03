@@ -4,7 +4,8 @@
 //
 // Pick a workspace and one campaign or several; their first-step variants are shown with
 // their all-time sends, replies and positive replies, the top three, and which
-// would be kept. The campaigns picked fall into segments by name — "🔵 Manufacturing -
+// would be kept. A positive reply counts for the first email the lead was sent,
+// even when it came after a follow-up — deleted leads included. The campaigns picked fall into segments by name — "🔵 Manufacturing -
 // Custom V2 - Signature (September)" and "🟡 Manufacturing - Custom (October)" are one
 // segment — and each segment becomes its own clone: the winners of all its campaigns
 // in one step 1 (the same email twice counted once), the settings of the one cloned.
@@ -523,6 +524,17 @@ function SegmentSection({
                 {plan.firstStep} would be <strong>one empty variant</strong> to write in Plusvibe.
               </p>
             </div>
+          )}
+
+          {preview.followUps && (preview.followUps.credited > 0 || preview.followUps.untraced > 0) && (
+            <p className="text-xs text-muted-foreground" data-follow-up-credit>
+              {preview.followUps.credited > 0
+                ? `Includes ${formatNumber(preview.followUps.credited)} positive repl${preview.followUps.credited === 1 ? "y" : "ies"} to follow-ups, counted for the first email that lead was sent.`
+                : ""}
+              {preview.followUps.untraced > 0
+                ? ` ${formatNumber(preview.followUps.untraced)} positive repl${preview.followUps.untraced === 1 ? "y" : "ies"} to follow-ups couldn't be traced to a first email and ${preview.followUps.untraced === 1 ? "isn't" : "aren't"} counted.`
+                : ""}
+            </p>
           )}
 
           <div className="grid gap-3 sm:grid-cols-2">

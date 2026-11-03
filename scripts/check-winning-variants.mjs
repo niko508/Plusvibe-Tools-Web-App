@@ -16,7 +16,7 @@ const eq = (label, got, want) => {
   }
 };
 
-const { parseVariationStats, planWinners, planMultiWinners, planProblems, tagChanges, cleanTagName, defaultName, emptyVariant, withWinnerMark, winnerBar, WINNER_MARK, segmentOf, segmentCloneName, withCloneMark, groupBySegment, defaultCloneTags, POOL_TAG } = await importTs("@/lib/winning-variants/plan");
+const { parseVariationStats, planWinners, planMultiWinners, planProblems, tagChanges, cleanTagName, defaultName, emptyVariant, withWinnerMark, winnerBar, WINNER_MARK, segmentOf, segmentCloneName, withCloneMark, groupBySegment, defaultCloneTags, POOL_TAG, stepOneOf, anchorsOf, matchQuoted, creditStepOne, followUpPositives } = await importTs("@/lib/winning-variants/plan");
 
 // As the documented endpoint answers, grouped by step.
 const RAW = [
@@ -246,6 +246,28 @@ console.log("--- (Previous Winner) on the best variant");
   eq("without dates, the list order (newest first) decides", groupBySegment([{ id: "a", name: "🟡 X (Oct)" }, { id: "b", name: "🟡 X (Sep)" }])[0].baseId, "a");
   eq("the pool tag is picked when the workspace has it", defaultCloneTags([{ id: "t1", name: "Cheap Inboxes" }, { id: "t2", name: "google-pool" }]), { tagIds: ["t2"], newTags: [] });
   eq("…and created when it doesn't", defaultCloneTags([{ id: "t1", name: "x" }]), { tagIds: [], newTags: [POOL_TAG] });
+}
+
+{
+  console.log("\n--- positive replies to follow-ups go to the first email");
+  const sent = [{ step: 2, variation: "L", sentAt: 300 }, { step: 1, variation: "B", sentAt: 100 }];
+  eq("a yes after the follow-up: step 1 B, replied to step 2", stepOneOf(sent, 400), { stepOne: "B", repliedStep: 2 });
+  eq("a yes before the follow-up went: replied to step 1", stepOneOf(sent, 200), { stepOne: "B", repliedStep: 1 });
+  eq("no step 1 among what was sent: none", stepOneOf([{ step: 2, variation: "A", sentAt: 1 }], 5).stepOne, null);
+  const A = { variation: "A", body: "<div>{{Random | Hey {{first_name}}, | Hi,}}</div><div>We help manufacturers win more distributor accounts every single quarter.</div><div>Worth a quick chat?</div>" };
+  const B = { variation: "B", body: "<div>{{Random | Hey {{first_name}}, | Hi,}}</div><div>Our team books qualified sales calls with plant managers for you.</div><div>Worth a quick chat?</div>" };
+  eq("spintax and variables aren't phrases, the copy is", anchorsOf(A.body), ["we help manufacturers win more distributor accounts every single quarter"]);
+  const quote = "Sounds good, call me.\n\nOn Mon, Bob wrote:\n> Hi Mike,\n> Our team books qualified sales calls\n> with plant managers for you.\n> Worth a quick chat?";
+  eq("a quote wrapped over lines still matches its variant", matchQuoted(quote, [A, B]), "B");
+  eq("nothing quoted: no match", matchQuoted("Yes please", [A, B]), null);
+  eq("both quoted: a tie is no match", matchQuoted(quote + " we help manufacturers win more distributor accounts every single quarter", [A, B]), null);
+  const stats = new Map([[1, new Map([["A", { variation: "A", sent: 50, replies: 1, positiveReplies: 1, isActive: true, isDel: false }], ["B", { variation: "B", sent: 50, replies: 0, positiveReplies: 0, isActive: true, isDel: false }]])], [2, new Map([["D", { variation: "D", sent: 9, replies: 2, positiveReplies: 2, isActive: true, isDel: false }]])]]);
+  eq("Plusvibe's follow-up positives are counted", followUpPositives(stats), 2);
+  const credited = creditStepOne(stats, new Map([["B", 2]]));
+  eq("credited to step 1 B, A unchanged", [credited.get(1).get("A").positiveReplies, credited.get(1).get("B").positiveReplies], [1, 2]);
+  eq("…without touching the stats it was given", stats.get(1).get("B").positiveReplies, 0);
+  const seq2 = [{ step: 1, wait_time: 0, variations: [{ variation: "A", subject: "a", preheader: "", body: "a" }, { variation: "B", subject: "b", preheader: "", body: "b" }] }, { step: 2, wait_time: 2, variations: [{ variation: "D", subject: "", preheader: "", body: "d" }] }];
+  eq("B is now a winner", planWinners(seq2, credited).rows.filter((r) => r.kept).map((r) => r.variation).sort(), ["A", "B"]);
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
