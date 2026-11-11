@@ -140,6 +140,16 @@ export const TOOLS: Tool[] = [
     Icon: FireIcon,
   },
   {
+    slug: "tld-performance",
+    name: "TLD Performance Tracking",
+    tagline: "Which domain ending and registrar to buy next",
+    description:
+      "Every domain ending and registrar combo, month by month: emails sent, real reply rate against what its clients would predict, bounces and blocks. The combos worth buying are listed on top. Runs by itself on the 1st for the month before, and can write the result to a Google Sheet.",
+    status: "active",
+    color: "emerald",
+    Icon: GaugeIcon,
+  },
+  {
     slug: "start-outreach",
     name: "Start Outreach with New Inboxes",
     tagline: "Find the inboxes that have warmed long enough, then put them to work",

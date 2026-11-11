@@ -49,6 +49,10 @@ export async function register() {
     const burnedSchedule = await import("@/lib/jobs/burned-schedule");
     await burnedSchedule.bootScheduler();
 
+    // TLD Performance Tracking: last month's report, on the 1st at 06:00 Helsinki.
+    const tld = await import("@/lib/jobs/tld-performance");
+    await tld.bootScheduler();
+
     // Create All Campaign Types: a run a deploy cut off is picked up again,
     // finishing the split it had started.
     const campaignTypes = await import("@/lib/jobs/campaign-types");

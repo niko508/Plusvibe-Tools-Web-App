@@ -21,6 +21,8 @@ import type { BurnedJob, BurnedStartPayload } from "@/lib/jobs/burned-types";
 import type { BurnedRemovalJob, RemovalStartPayload } from "@/lib/jobs/burned-removal-types";
 import type { BurnedSettings, Esp, ScheduleSettings, Thresholds } from "@/lib/burned/settings";
 import type { WeeklyStatus } from "@/lib/jobs/burned-schedule-types";
+import type { TldReport, TldStatus } from "@/lib/jobs/tld-performance-types";
+import type { TldSettings } from "@/lib/tld-performance/schedule";
 import type { WeekSchedule } from "@/lib/campaign-settings/schedule";
 import type {
   Profile,
@@ -1362,3 +1364,32 @@ export function previewAddLeads(input: { workspaceId: string; campaignId: string
   );
 }
 
+
+// --- TLD Performance Tracking ----------------------------------------------------
+
+export function fetchTldStatus(signal?: AbortSignal) {
+  return request<TldStatus>("/api/jobs/tld-performance", { signal });
+}
+
+export function fetchTldReport(id: string, signal?: AbortSignal) {
+  return request<{ report: TldReport }>(`/api/jobs/tld-performance/report?id=${encodeURIComponent(id)}`, { signal });
+}
+
+export function runTldReport(month: string, signal?: AbortSignal) {
+  return request<{ started: boolean }>("/api/jobs/tld-performance/run", { method: "POST", body: { month }, signal });
+}
+
+export function deleteTldReport(id: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/tld-performance/delete", { method: "POST", body: { id }, signal });
+}
+
+export function saveTldSettings(
+  patch: Partial<Omit<TldSettings, "rules" | "updatedAt">> & { rules?: Partial<TldSettings["rules"]> },
+  signal?: AbortSignal
+) {
+  return request<{ settings: TldSettings }>("/api/jobs/tld-performance/settings", { method: "PUT", body: patch, signal });
+}
+
+export function resendTldSheet(id: string, signal?: AbortSignal) {
+  return request<{ sheet: TldReport["sheet"] }>("/api/jobs/tld-performance/sheet", { method: "POST", body: { id }, signal });
+}

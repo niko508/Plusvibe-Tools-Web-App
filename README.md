@@ -260,6 +260,35 @@ Switching it on midweek waits for next Monday; **Run now** runs it at once.
 A week is marked as run when the run starts, so a restart mid-run never repeats
 deletions — the run shows as interrupted instead.
 
+## How TLD Performance Tracking works
+
+A report covers one calendar month. It reads every workspace's inboxes and
+their figures for the month from Plusvibe, groups them by sending domain, and
+tags each domain with its registrar — the **Domain Host** in 📋 Domains, else
+the platform tag most of its inboxes carry, else the Blocked Domains record.
+Blocks are the domains the Blocked Domains automation caught in the month.
+
+Each domain ending × registrar combo gets:
+
+- **reply rate** — real replies (no OOO) over emails sent
+- **vs its clients** — its replies over what its domains would have had at
+  their own clients' rate on the same mailbox provider. Which client a domain
+  sends for decides most of its reply rate, so this is what compares combos
+  fairly
+- **blocked / block rate** — out of the domains that sent or were blocked
+
+Ratings, fixed so the answer is the same every month: **Buy** (15+ domains
+across 3+ clients, at or above its clients, none blocked), **OK** (within 10%,
+under 2% blocked), **Avoid** (20%+ below, or 5%+ blocked), **Caution** in
+between, **Too little data** under the minimums. Registrars no longer bought
+from (Spaceship, Porkbun by default) and Unknown platform are never listed
+under Buy these. The minimums and that list are editable under Rules.
+
+On the **1st of every month at 06:00 Helsinki** it makes the report for the
+month before with `PLUSVIBE_API_KEY`, and — when a sheet is set — rewrites one
+tab of it (created if missing). The sheet must be shared with the service
+account as an Editor.
+
 ## How Domain Performance Monitoring works
 
 Plusvibe's [Get email account stats for a date range](https://developer.plusvibe.ai/get-email-account-stats-for-a-date-range-38494510e0)

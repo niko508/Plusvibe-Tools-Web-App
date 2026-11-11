@@ -298,3 +298,36 @@ export function envSpreadsheetId(): string | null {
   const id = fromUrl ? fromUrl[1] : raw;
   return /^[a-zA-Z0-9-_]{20,}$/.test(id) ? id : null;
 }
+
+/**
+ * Makes sure a tab exists, adding it when it doesn't. Returns whether it had
+ * to be created.
+ */
+export async function ensureTab(spreadsheetId: string, tab: string): Promise<boolean> {
+  const meta = await sheetsFetch<{ sheets?: { properties?: { title?: string } }[] }>(
+    `/${spreadsheetId}?fields=sheets.properties.title`
+  );
+  if ((meta.sheets ?? []).some((s) => s.properties?.title === tab)) return false;
+  await sheetsFetch(`/${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    body: { requests: [{ addSheet: { properties: { title: tab } } }] },
+  });
+  return true;
+}
+
+/**
+ * Replaces a whole tab's values with a grid, starting at A1.
+ *
+ * Cleared first, so a shorter grid than last time leaves nothing behind.
+ * Formatting is kept: only values are cleared and written. USER_ENTERED, so
+ * "0.53%" lands as a real percentage and numbers as numbers.
+ */
+export async function replaceTabValues(spreadsheetId: string, tab: string, grid: string[][]): Promise<void> {
+  const range = encodeURIComponent(quoteTab(tab));
+  await sheetsFetch(`/${spreadsheetId}/values/${range}:clear`, { method: "POST", body: {} });
+  if (grid.length === 0) return;
+  await sheetsFetch(`/${spreadsheetId}/values/${encodeURIComponent(`${quoteTab(tab)}!A1`)}?valueInputOption=USER_ENTERED`, {
+    method: "PUT",
+    body: { range: `${quoteTab(tab)}!A1`, majorDimension: "ROWS", values: grid },
+  });
+}
