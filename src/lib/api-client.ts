@@ -282,37 +282,6 @@ export function deleteStartOutreachJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/start-outreach/delete", { method: "POST", body: { jobId }, signal });
 }
 
-// --- Copy Campaign to Other Workspace ---------------------------------------
-
-export interface CopyCampaignPayload {
-  sourceWorkspaceId: string;
-  sourceCampaignId: string;
-  destWorkspaceId: string;
-  destCampaignId: string;
-  name: string;
-  duplicateSubsequences?: boolean;
-}
-
-export interface CopyCampaignResponse {
-  createdId: string;
-  name: string;
-  stepsCopied: number;
-  variationsCopied: number;
-  droppedDeleted: number;
-  subsequences: number;
-  verified: boolean;
-  problems: string[];
-  warnings: string[];
-}
-
-export function runCopyCampaign(payload: CopyCampaignPayload, signal?: AbortSignal) {
-  return request<CopyCampaignResponse>("/api/copy-campaign/run", {
-    method: "POST",
-    body: payload,
-    signal,
-  });
-}
-
 // --- Clone Campaign with Winning Variants -----------------------------------
 
 export type { CloneResult, WinnersPreview } from "@/lib/winning-variants/plan";
@@ -1579,15 +1548,3 @@ export function previewAddLeads(input: { workspaceId: string; campaignId: string
   );
 }
 
-// --- Analyze Positive Reply Rates ------------------------------------------------
-
-export function fetchOptOutRates(
-  input: { workspaceId: string; workspaceName: string; start: string; end: string },
-  signal?: AbortSignal
-) {
-  return request<{ campaigns: import("@/lib/reply-rates/opt-out").CampaignFigures[]; errors: string[] }>("/api/reply-rates/opt-out", {
-    method: "POST",
-    body: input,
-    signal,
-  });
-}

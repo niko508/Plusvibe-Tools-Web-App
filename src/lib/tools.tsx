@@ -9,7 +9,6 @@ import {
   ZapIcon,
   ScissorsIcon,
   MoveIcon,
-  CopyIcon,
   PlayIcon,
   RefreshIcon,
   GaugeIcon,
@@ -141,16 +140,6 @@ export const TOOLS: Tool[] = [
     Icon: FireIcon,
   },
   {
-    slug: "inbox-performance",
-    name: "Inbox Performance Monitoring",
-    tagline: "Compare every sending inbox — in one workspace or across all of them",
-    description:
-      "Break email stats down by sending inbox over any date range — sent volume, reply rates on unique contacts, positive replies and bounces — for one workspace or every workspace at once. Nothing is fetched until you choose what to pull.",
-    status: "active",
-    color: "blue",
-    Icon: MailIcon,
-  },
-  {
     slug: "start-outreach",
     name: "Start Outreach with New Inboxes",
     tagline: "Find the inboxes that have warmed long enough, then put them to work",
@@ -169,26 +158,6 @@ export const TOOLS: Tool[] = [
     status: "active",
     color: "emerald",
     Icon: SparklesIcon,
-  },
-  {
-    slug: "reply-rates",
-    name: "Analyze Positive Reply Rates",
-    tagline: "Opt Out vs No Opt Out, and Step 1 vs Step 2: where the positive replies come from",
-    description:
-      "Pick a date range and one workspace or all of them. Opt Out vs No Opt Out puts every campaign in a group by its name and sets the two groups' positive replies side by side; Step 1 vs Step 2 counts how many positive replies came from the first email and how many from the first follow-up. Each with its rate and whether the gap is big enough to trust.",
-    status: "active",
-    color: "violet",
-    Icon: GaugeIcon,
-  },
-  {
-    slug: "copy-campaign",
-    name: "Copy Campaign to Other Workspace",
-    tagline: "Move a campaign's copy across, on another campaign's settings",
-    description:
-      "Pick the campaign whose email copy you want and a campaign in the destination workspace to take the settings from. The destination campaign is duplicated where it already lives — keeping its settings, schedule, sender accounts and sub-sequences — and the new campaign's own copy is replaced with the source's.",
-    status: "active",
-    color: "violet",
-    Icon: CopyIcon,
   },
   {
     slug: "change-limits",
