@@ -222,6 +222,44 @@ inboxes are acted on.
 **Best practice:** avoid deploying while a large job is running — the deploy will
 stop it. Kick off big trims when you're not about to push changes.
 
+## How Find Burned Domains & Inboxes works
+
+Microsoft is judged **domain by domain** (a tenant's mailboxes burn together)
+and Google **inbox by inbox**. Each row is compared with the **rest of its own
+workspace on the same provider**, never with one fixed bar for everyone: which
+client a domain sends for decides most of its reply rate, so a fixed bar burns
+every domain of a client whose leads reply less and misses weak domains of a
+client whose leads reply more.
+
+A row is **burned** when, over the window:
+
+- it has at least the minimum sends (default **750** per Microsoft domain,
+  **300** per Google inbox),
+- it has at least **14 days** of outreach (counted from its first send in the
+  window, read from Plusvibe's daily chart), and
+- its reply rate including OOO is under **50%** of the rest of the workspace's,
+  **and** its real reply rate is under 50% of theirs too.
+
+Rows that miss a minimum, or whose workspace has too little else on that
+provider to compare with, are listed as not judged rather than burned. All
+three numbers are saved per provider on the page.
+
+### The weekly check
+
+Every **Monday at 06:00 Helsinki** the server scans both providers in every
+workspace over the 30 days that ended yesterday, with `PLUSVIBE_API_KEY`. It is
+off until switched on, and has two modes:
+
+- **Report only** — the scans appear on the page; nothing is changed.
+- **Remove automatically** — each scan's burned rows then go through the same
+  removal as the Remove button: recorded in the Email Infrastructure sheet
+  first, then their inboxes deleted. It is never run on a scan that didn't
+  finish cleanly, or when more than 20% of what a scan judged came out burned.
+
+Switching it on midweek waits for next Monday; **Run now** runs it at once.
+A week is marked as run when the run starts, so a restart mid-run never repeats
+deletions — the run shows as interrupted instead.
+
 ## How Domain Performance Monitoring works
 
 Plusvibe's [Get email account stats for a date range](https://developer.plusvibe.ai/get-email-account-stats-for-a-date-range-38494510e0)

@@ -41,7 +41,7 @@ import {
   type RemovalTarget,
   type TargetResult,
 } from "@/lib/burned/removal";
-import { getJob as getScan } from "@/lib/jobs/burned";
+import { SCHEDULED, SCHEDULER_ACCESS, getJob as getScan, type Access } from "@/lib/jobs/burned";
 import type {
   BurnedRemovalJob,
   RemovalStartPayload,
@@ -79,9 +79,26 @@ interface JobMeta {
   aborted: boolean;
 }
 
-const records = new Map<string, BurnedRemovalJob>();
-const meta = new Map<string, JobMeta>();
-let loaded = false;
+// On globalThis for the same reason as the scans: the weekly run starts
+// removals from instrumentation.ts, and the route handlers have to see them.
+interface SharedState {
+  records: Map<string, BurnedRemovalJob>;
+  meta: Map<string, JobMeta>;
+  loaded: boolean;
+  done: Map<string, Promise<void>>;
+}
+const shared: SharedState = ((globalThis as { __pvBurnedRemovals?: SharedState }).__pvBurnedRemovals ??= {
+  records: new Map(),
+  meta: new Map(),
+  loaded: false,
+  done: new Map(),
+});
+const records = shared.records;
+const meta = shared.meta;
+
+function visible(m: JobMeta, who: Access): boolean {
+  return m.fingerprint === who.fp || (who.account && m.fingerprint === SCHEDULED);
+}
 
 // --- Persistence -----------------------------------------------------------
 
@@ -131,8 +148,8 @@ function flushRunningSync() {
 onShutdownFlush(flushRunningSync);
 
 async function loadOnce() {
-  if (loaded) return;
-  loaded = true;
+  if (shared.loaded) return;
+  shared.loaded = true;
   try {
     await fs.mkdir(JOBS_DIR, { recursive: true });
     for (const f of await fs.readdir(JOBS_DIR)) {
@@ -196,13 +213,25 @@ function emptySheet(): SheetOutcome {
   };
 }
 
-export async function createJob(apiKey: string, payload: RemovalStartPayload): Promise<string> {
+/**
+ * Starts a removal.
+ *
+ * `who` says which scans the caller may remove from: their own, and the
+ * weekly run's when their key is for the server's account. The weekly run
+ * itself passes `scheduled`, which files the removal with its scans.
+ */
+export async function createJob(
+  apiKey: string,
+  payload: RemovalStartPayload,
+  opts: { who?: Access; scheduled?: boolean } = {}
+): Promise<string> {
   await loadOnce();
-  const fp = fingerprintKey(apiKey);
+  const fp = opts.scheduled ? SCHEDULED : fingerprintKey(apiKey);
   const running = activeIdFor(fp);
   if (running) throw new ActiveJobError(running);
 
-  const scan = await getScan(apiKey, payload.scanJobId);
+  const who = opts.scheduled ? SCHEDULER_ACCESS : opts.who ?? { fp, account: false };
+  const scan = await getScan(who, payload.scanJobId);
   if (!scan) throw new RemovalProblem("That scan is no longer here — run one and try again.", 404);
   if (scan.status === "running") {
     throw new RemovalProblem("That scan is still running — let it finish first.", 409);
@@ -263,8 +292,17 @@ export async function createJob(apiKey: string, payload: RemovalStartPayload): P
   records.set(id, record);
   meta.set(id, { fingerprint: fp, apiKey, aborted: false });
   await persist(id);
-  void runJob(id, targets);
+  shared.done.set(
+    id,
+    runJob(id, targets).finally(() => shared.done.delete(id))
+  );
   return id;
+}
+
+/** Resolves when a removal has finished, however it finished. */
+export async function waitFor(id: string): Promise<BurnedRemovalJob | null> {
+  await shared.done.get(id);
+  return records.get(id) ?? null;
 }
 
 function workspacesOf(targets: RemovalTarget[]) {
@@ -609,12 +647,11 @@ async function runJob(id: string, targets: RemovalTarget[]) {
 
 // --- Query / control -------------------------------------------------------
 
-export async function listJobs(apiKey: string): Promise<BurnedRemovalJob[]> {
+export async function listJobs(who: Access): Promise<BurnedRemovalJob[]> {
   await loadOnce();
-  const fp = fingerprintKey(apiKey);
   const out: BurnedRemovalJob[] = [];
   for (const [id, m] of meta) {
-    if (m.fingerprint !== fp) continue;
+    if (!visible(m, who)) continue;
     const rec = records.get(id);
     if (rec) out.push(rec);
   }
@@ -622,20 +659,20 @@ export async function listJobs(apiKey: string): Promise<BurnedRemovalJob[]> {
   return out;
 }
 
-export async function abortJob(apiKey: string, id: string): Promise<boolean> {
+export async function abortJob(who: Access, id: string): Promise<boolean> {
   await loadOnce();
   const rec = records.get(id);
   const m = meta.get(id);
-  if (!rec || !m || m.fingerprint !== fingerprintKey(apiKey)) return false;
+  if (!rec || !m || !visible(m, who)) return false;
   m.aborted = true;
   return true;
 }
 
-export async function deleteJob(apiKey: string, id: string): Promise<boolean> {
+export async function deleteJob(who: Access, id: string): Promise<boolean> {
   await loadOnce();
   const rec = records.get(id);
   const m = meta.get(id);
-  if (!rec || !m || m.fingerprint !== fingerprintKey(apiKey)) return false;
+  if (!rec || !m || !visible(m, who)) return false;
   m.aborted = true;
   records.delete(id);
   meta.delete(id);

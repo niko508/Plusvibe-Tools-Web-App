@@ -45,6 +45,10 @@ export async function register() {
     const azureWarmup = await import("@/lib/jobs/azure-warmup");
     void azureWarmup.bootResume().catch(() => undefined);
 
+    // Find Burned Domains & Inboxes: the weekly scan, Monday 06:00 Helsinki.
+    const burnedSchedule = await import("@/lib/jobs/burned-schedule");
+    await burnedSchedule.bootScheduler();
+
     // Create All Campaign Types: a run a deploy cut off is picked up again,
     // finishing the split it had started.
     const campaignTypes = await import("@/lib/jobs/campaign-types");

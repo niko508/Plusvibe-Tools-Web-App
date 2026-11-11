@@ -19,7 +19,8 @@ import type {
 } from "@/lib/jobs/campaign-types-types";
 import type { BurnedJob, BurnedStartPayload } from "@/lib/jobs/burned-types";
 import type { BurnedRemovalJob, RemovalStartPayload } from "@/lib/jobs/burned-removal-types";
-import type { BurnedSettings, Esp } from "@/lib/burned/settings";
+import type { BurnedSettings, Esp, ScheduleSettings, Thresholds } from "@/lib/burned/settings";
+import type { WeeklyStatus } from "@/lib/jobs/burned-schedule-types";
 import type { WeekSchedule } from "@/lib/campaign-settings/schedule";
 import type {
   Profile,
@@ -672,10 +673,26 @@ export function fetchBurnedSettings(signal?: AbortSignal) {
 
 /** Only the providers given change; the other keeps what it had. */
 export function saveBurnedSettings(
-  patch: Partial<Record<Esp, { minSends: number; replyOooPct: number }>>,
+  patch: Partial<Record<Esp, Thresholds>>,
   signal?: AbortSignal
 ) {
   return request<{ settings: BurnedSettings }>("/api/jobs/burned/settings", { method: "PUT", body: patch, signal });
+}
+
+export function fetchBurnedSchedule(signal?: AbortSignal) {
+  return request<WeeklyStatus>("/api/jobs/burned/schedule", { signal });
+}
+
+export function saveBurnedSchedule(patch: Partial<ScheduleSettings>, signal?: AbortSignal) {
+  return request<{ settings: BurnedSettings }>("/api/jobs/burned/settings", {
+    method: "PUT",
+    body: { schedule: patch },
+    signal,
+  });
+}
+
+export function runBurnedScheduleNow(signal?: AbortSignal) {
+  return request<{ started: boolean }>("/api/jobs/burned/schedule/run", { method: "POST", body: {}, signal });
 }
 
 export function startBurnedScan(payload: BurnedStartPayload, signal?: AbortSignal) {

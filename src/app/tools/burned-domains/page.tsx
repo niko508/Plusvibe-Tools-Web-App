@@ -17,8 +17,8 @@ export default function BurnedDomainsPage() {
             Find Burned Domains &amp; Inboxes
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground sm:text-base">
-            Set the bar once per provider, then scan every workspace. Microsoft is
-            judged domain by domain, Google inbox by inbox.
+            Each Microsoft domain and Google inbox is compared with the rest of its own
+            workspace. Scan by hand, or let the weekly check do it every Monday.
           </p>
         </div>
         <BurnedTool />

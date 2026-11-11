@@ -2,13 +2,15 @@ import { NextResponse } from "next/server";
 import { requireAccountKey } from "@/lib/plusvibe-server";
 import { errorResponse } from "@/lib/api-response";
 import { loadSettings, saveSettings, SettingsProblem } from "@/lib/burned/store";
+import { switchedOn } from "@/lib/jobs/burned-schedule";
 
 export const dynamic = "force-dynamic";
 
 // GET /api/jobs/burned/settings  → { settings }
 // PUT /api/jobs/burned/settings  → { settings }
-//   Body: { google?: { minSends, replyOooPct }, microsoft?: { … } }
-//   The provider left out keeps what it had.
+//   Body: { google?: { minSends, minDays, relativePct }, microsoft?: { … },
+//           schedule?: { enabled?, mode?, sheetUrl? } }
+//   Whatever is left out keeps what it had.
 export async function GET(request: Request) {
   try {
     await requireAccountKey(request);
@@ -25,7 +27,10 @@ export async function PUT(request: Request) {
     if (!body || typeof body !== "object") {
       return NextResponse.json({ error: "Send the thresholds to save." }, { status: 400 });
     }
-    return NextResponse.json({ settings: await saveSettings(body) });
+    const before = await loadSettings();
+    const settings = await saveSettings(body);
+    if (settings.schedule.enabled && !before.schedule.enabled) await switchedOn();
+    return NextResponse.json({ settings });
   } catch (err) {
     if (err instanceof SettingsProblem) {
       return NextResponse.json({ error: err.problems.join(" "), problems: err.problems }, { status: 400 });

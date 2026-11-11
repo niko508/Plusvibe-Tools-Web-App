@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { BurnedJob } from "@/lib/jobs/burned-types";
 import type { BurnedRemovalJob } from "@/lib/jobs/burned-removal-types";
-import { ESP_LABELS, NOUNS, countNoun, levelOf } from "@/lib/burned/settings";
+import { ESP_LABELS, NOUNS, countNoun, levelOf, type Thresholds } from "@/lib/burned/settings";
 import { copyText, csvName, toCsv, verdictText, type ScanRow, type Verdict } from "@/lib/burned/scan";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatNumber } from "@/lib/format";
@@ -75,6 +75,8 @@ export function ResultsCard({
   const rescued = rows.filter((r) => r.rescued).length;
   const errors = job.errors ?? [];
   const open = listOpen ?? rows.length <= FOLD_ABOVE;
+  // A scan from before the workspace comparison carries the old numbers.
+  const relative = job.rule === "relative";
 
   async function handleCopy() {
     if (await copyToClipboard(copyText(shown))) {
@@ -104,10 +106,7 @@ export function ResultsCard({
           </span>
           <span className="truncate text-sm font-medium">{job.label}</span>
         </div>
-        <span className="shrink-0 text-xs text-muted-foreground">
-          under {job.thresholds.replyOooPct}% reply (OOO) and under {job.thresholds.replyPct}% reply, on{" "}
-          {formatNumber(job.thresholds.minSends)}+ sends
-        </span>
+        <span className="shrink-0 text-xs text-muted-foreground">{barText(job)}</span>
       </div>
 
       {/* Progress */}
@@ -139,13 +138,17 @@ export function ResultsCard({
         <StatCard
           label="Burned"
           value={formatNumber(burned.length)}
-          sub={`under both bars${rescued > 0 ? ` · ${formatNumber(rescued)} kept on real replies` : ""}`}
+          sub={`${relative ? `under ${job.thresholds.relativePct}% of workspace` : "under both bars"}${rescued > 0 ? ` · ${formatNumber(rescued)} kept on real replies` : ""}`}
           health={burned.length > 0 ? "bad" : "good"}
         />
         <StatCard
           label="Too quiet to judge"
           value={formatNumber(quiet.length)}
-          sub={`under ${formatNumber(job.thresholds.minSends)} sends, or no figures`}
+          sub={
+            relative
+              ? `under ${formatNumber(job.thresholds.minSends)} sends or ${job.thresholds.minDays} days, or nothing to compare with`
+              : `under ${formatNumber(job.thresholds.minSends)} sends, or no figures`
+          }
         />
         <StatCard label="Still pulling replies" value={formatNumber(rows.filter((r) => r.verdict === "ok").length)} sub="left alone" />
       </div>
@@ -207,7 +210,7 @@ export function ResultsCard({
           }
         >
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-sm">
+          <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-muted/50 text-xs text-muted-foreground">
               <tr>
                 <th className="px-3 py-2 text-left font-medium">{noun.one[0].toUpperCase()}{noun.one.slice(1)}</th>
@@ -217,6 +220,11 @@ export function ResultsCard({
                 <th className="px-3 py-2 text-right font-medium">Replies</th>
                 <th className="px-3 py-2 text-right font-medium">Reply %</th>
                 <th className="px-3 py-2 text-right font-medium">Reply % (OOO)</th>
+                <th className="px-3 py-2 text-right font-medium" title="The rest of the workspace on this provider: reply % with OOO">
+                  Workspace (OOO)
+                </th>
+                <th className="px-3 py-2 text-right font-medium" title="Reply % (OOO) as a share of the workspace's">vs workspace</th>
+                <th className="px-3 py-2 text-right font-medium" title="Days from the first send in the window to its end">Days</th>
                 <th className="px-3 py-2 text-right font-medium">Verdict</th>
               </tr>
             </thead>
@@ -238,7 +246,9 @@ export function ResultsCard({
           {running
             ? "Scanning…"
             : filter === "burned"
-              ? `Nothing is under ${job.thresholds.replyOooPct}% reply (OOO) with ${formatNumber(job.thresholds.minSends)}+ sends in this window.`
+              ? relative
+                ? `Nothing is under ${job.thresholds.relativePct}% of its workspace with ${formatNumber(job.thresholds.minSends)}+ sends and ${job.thresholds.minDays}+ days in this window.`
+                : "Nothing was burned on the older fixed bars."
               : "Nothing was judged."}
         </p>
       )}
@@ -408,14 +418,34 @@ function Row({ row, showInboxes }: { row: ScanRow; showInboxes: boolean }) {
       <td className="px-3 py-2 text-right tabular-nums">{formatNumber(row.replies + row.oooReplies)}</td>
       <td className="px-3 py-2 text-right tabular-nums">{row.replyRate}%</td>
       <td className="px-3 py-2 text-right font-medium tabular-nums">{row.replyRateOoo}%</td>
+      <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+        {row.baseline ? `${row.baseline.replyRateOoo}%` : "—"}
+      </td>
+      <td className={`px-3 py-2 text-right tabular-nums ${row.verdict === "burned" ? "font-medium text-danger" : ""}`}>
+        {row.vsWorkspace !== undefined ? `${row.vsWorkspace}%` : "—"}
+      </td>
+      <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{row.days ?? "—"}</td>
       <td className="px-3 py-2 text-right">
         <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${meta.className}`} title={verdictText(row)}>
           {row.verdict === "burned" && <FireIcon size={11} className="mr-0.5 inline" />}
-          {row.rescued ? "ok · replying" : meta.label}
+          {row.rescued ? "ok · replying" : row.verdict === "quiet" ? verdictText(row) : meta.label}
         </span>
       </td>
     </tr>
   );
+}
+
+/** The bar a scan was judged on, in words, whichever rule it ran under. */
+function barText(job: BurnedJob): string {
+  if (job.rule === "relative") {
+    const t = job.thresholds;
+    return `under ${t.relativePct}% of workspace · ${formatNumber(t.minSends)}+ sends · ${t.minDays}+ days`;
+  }
+  // The old fixed bars, as the record kept them.
+  const old = job.thresholds as Partial<Thresholds> & { replyOooPct?: number; replyPct?: number };
+  return `older rule: under ${old.replyOooPct ?? "?"}% reply (OOO) and ${old.replyPct ?? "?"}% reply, on ${formatNumber(
+    old.minSends ?? 0
+  )}+ sends`;
 }
 
 function statusLabel(s: BurnedJob["status"]): string {

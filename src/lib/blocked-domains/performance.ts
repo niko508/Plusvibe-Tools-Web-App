@@ -56,6 +56,12 @@ export interface InboxStats {
   /** Percentages, as the API reports them: 7.5 means 7.5%. */
   replyRate: number;
   replyRateOoo: number;
+  /**
+   * The first day in the window with a send, as YYYY-MM-DD. Only there when
+   * the stats were asked for with their daily chart; a chart with no sends
+   * on any day leaves it out.
+   */
+  firstSend?: string;
 }
 
 export interface InboxAssessment {
@@ -102,7 +108,9 @@ export function readStatsRow(raw: Record<string, unknown>): InboxStats | null {
     header.total_unique_contacted_count ??
     header.total_new_lead_contacted_count ??
     header.total_contacted_count;
+  const firstSend = firstSendOf(raw.chart);
   return {
+    ...(firstSend ? { firstSend } : {}),
     id,
     email,
     sent: num(header.total_sent_count),
@@ -113,6 +121,25 @@ export function readStatsRow(raw: Record<string, unknown>): InboxStats | null {
     replyRate: num(header.reply_rate),
     replyRateOoo: num(header.reply_rate_with_ooo),
   };
+}
+
+/**
+ * The earliest day a daily chart shows a send on.
+ *
+ * The chart's dates are read as their first ten characters, so a timestamp
+ * and a plain date both work; anything that isn't a date is skipped.
+ */
+export function firstSendOf(chart: unknown): string | undefined {
+  if (!Array.isArray(chart)) return undefined;
+  let first: string | undefined;
+  for (const p of chart) {
+    const c = (p ?? {}) as Record<string, unknown>;
+    const date = String(c.date ?? "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    if (num(c.total_sent_count) <= 0) continue;
+    if (!first || date < first) first = date;
+  }
+  return first;
 }
 
 /** Indexes stats by account id AND by address, since either may be missing. */

@@ -8,7 +8,7 @@ import { fetchInboxStats, listInboxes, listWorkspaces, type Inbox } from "@/lib/
 import { indexStats } from "@/lib/blocked-domains/performance";
 import { bucketOf } from "@/lib/plusvibe-providers";
 import { ESP_LABELS, levelOf, normalizeThresholds, type Esp, type Thresholds } from "@/lib/burned/settings";
-import { countRows, rowsFor, sortRows, type ScanRow } from "@/lib/burned/scan";
+import { countRows, emptyCounts, rowsFor, sortRows, type ScanRow } from "@/lib/burned/scan";
 import { thresholdsFor } from "@/lib/burned/store";
 import type { BurnedJob, BurnedStartPayload, WorkspaceScan } from "@/lib/jobs/burned-types";
 import { MAX_STORED_ERRORS } from "@/lib/jobs/burned-types";
@@ -26,6 +26,11 @@ import { MAX_STORED_ERRORS } from "@/lib/jobs/burned-types";
 // ONE JOB AT A TIME per API key: a second scan would only compete with the
 // first for the same 5 req/s budget and take twice as long to say the same
 // thing.
+//
+// The weekly run scans with the server's own key and files its scans under
+// SCHEDULED rather than a key's fingerprint, so anyone whose key is for the
+// same account sees them — the browser key and the server key need not be
+// the same string.
 
 const JOBS_BASE = process.env.JOBS_DIR || path.join(process.cwd(), ".jobs-data");
 const JOBS_DIR = path.join(JOBS_BASE, "burned");
@@ -38,9 +43,45 @@ interface JobMeta {
   aborted: boolean;
 }
 
-const records = new Map<string, BurnedJob>();
-const meta = new Map<string, JobMeta>();
-let loaded = false;
+/** The fingerprint the weekly run's scans are filed under. */
+export const SCHEDULED = "scheduled";
+
+/** Who is asking: their key's fingerprint, and whether that key is for the server's account. */
+export interface Access {
+  fp: string;
+  /** May see the weekly run's scans. */
+  account: boolean;
+}
+
+export function accessFor(apiKey: string, account: boolean): Access {
+  return { fp: fingerprintKey(apiKey), account };
+}
+
+/** The weekly run itself: its own scans, and only those. */
+export const SCHEDULER_ACCESS: Access = { fp: SCHEDULED, account: true };
+
+function visible(m: JobMeta, who: Access): boolean {
+  return m.fingerprint === who.fp || (who.account && m.fingerprint === SCHEDULED);
+}
+
+// Kept on globalThis: instrumentation.ts (which runs the weekly scan) and the
+// route handlers (which list and show it) load this module separately, and
+// two copies would each hold their own list of scans.
+interface SharedState {
+  records: Map<string, BurnedJob>;
+  meta: Map<string, JobMeta>;
+  loaded: boolean;
+  /** Settles when a scan finishes, so the weekly run can wait on it. */
+  done: Map<string, Promise<void>>;
+}
+const shared: SharedState = ((globalThis as { __pvBurnedScans?: SharedState }).__pvBurnedScans ??= {
+  records: new Map(),
+  meta: new Map(),
+  loaded: false,
+  done: new Map(),
+});
+const records = shared.records;
+const meta = shared.meta;
 
 // --- Persistence -----------------------------------------------------------
 
@@ -90,8 +131,8 @@ function flushRunningSync() {
 onShutdownFlush(flushRunningSync);
 
 async function loadOnce() {
-  if (loaded) return;
-  loaded = true;
+  if (shared.loaded) return;
+  shared.loaded = true;
   try {
     await fs.mkdir(JOBS_DIR, { recursive: true });
     for (const f of await fs.readdir(JOBS_DIR)) {
@@ -108,7 +149,11 @@ async function loadOnce() {
         parsed.errors = Array.isArray(parsed.errors) ? parsed.errors : [];
         // A record written before the Reply % rescue has no bar for it; the
         // card would otherwise read "under undefined%".
-        parsed.thresholds = normalizeThresholds(parsed.thresholds, parsed.esp === "google" ? "google" : "microsoft");
+        // A scan from the old fixed-bar rule keeps its own numbers for the
+        // card to show; only a scan on the current rule is read as one.
+        if (parsed.rule === "relative") {
+          parsed.thresholds = normalizeThresholds(parsed.thresholds, parsed.esp === "google" ? "google" : "microsoft");
+        }
         records.set(parsed.id, parsed);
         meta.set(parsed.id, { fingerprint, aborted: false });
       } catch {
@@ -138,11 +183,13 @@ function activeIdFor(fp: string): string | null {
   return null;
 }
 
-const emptyCounts = () => ({ scanned: 0, burned: 0, ok: 0, rescued: 0, fewSends: 0, noFigures: 0 });
-
-export async function createJob(apiKey: string, payload: BurnedStartPayload): Promise<string> {
+export async function createJob(
+  apiKey: string,
+  payload: BurnedStartPayload,
+  opts: { scheduled?: boolean } = {}
+): Promise<string> {
   await loadOnce();
-  const fp = fingerprintKey(apiKey);
+  const fp = opts.scheduled ? SCHEDULED : fingerprintKey(apiKey);
   const running = activeIdFor(fp);
   if (running) throw new ActiveJobError(running);
 
@@ -155,8 +202,10 @@ export async function createJob(apiKey: string, payload: BurnedStartPayload): Pr
   const now = Date.now();
   const record: BurnedJob = {
     id,
-    label: `${ESP_LABELS[payload.esp]} ${levelOf(payload.esp) === "inbox" ? "inboxes" : "domains"} · ${payload.start} → ${payload.end}`,
+    label: `${opts.scheduled ? "Weekly · " : ""}${ESP_LABELS[payload.esp]} ${levelOf(payload.esp) === "inbox" ? "inboxes" : "domains"} · ${payload.start} → ${payload.end}`,
     status: "running",
+    rule: "relative",
+    trigger: opts.scheduled ? "scheduled" : "manual",
     createdAt: now,
     updatedAt: now,
     esp: payload.esp,
@@ -171,8 +220,17 @@ export async function createJob(apiKey: string, payload: BurnedStartPayload): Pr
   records.set(id, record);
   meta.set(id, { fingerprint: fp, apiKey, aborted: false });
   await persist(id);
-  void runJob(id);
+  shared.done.set(
+    id,
+    runJob(id).finally(() => shared.done.delete(id))
+  );
   return id;
+}
+
+/** Resolves when a scan has finished, however it finished. */
+export async function waitFor(id: string): Promise<BurnedJob | null> {
+  await shared.done.get(id);
+  return records.get(id) ?? null;
 }
 
 // --- The run ---------------------------------------------------------------
@@ -223,17 +281,29 @@ async function scanWorkspace(
 
   check();
   ws.state = "stats";
-  const { rows: stats, errors } = await fetchInboxStats(apiKey, ws.workspaceId, mine, {
-    start: rec.start,
-    end: rec.end,
-  });
+  // With the daily chart: the first day each inbox sent is what says how
+  // long it has been in outreach.
+  const { rows: stats, errors } = await fetchInboxStats(
+    apiKey,
+    ws.workspaceId,
+    mine,
+    { start: rec.start, end: rec.end },
+    { chart: true }
+  );
   // A stats failure is reported and the workspace carries on: the rows it
   // could not read come out as "no figures", which is the honest answer and
   // never names a domain burned on no evidence.
   for (const e of errors) pushError(rec, `${ws.workspaceName}: ${e}`);
 
   check();
-  const rows = rowsFor(rec.esp, { workspaceId: ws.workspaceId, workspaceName: ws.workspaceName }, mine, indexStats(stats), thresholds);
+  const rows = rowsFor(
+    rec.esp,
+    { workspaceId: ws.workspaceId, workspaceName: ws.workspaceName },
+    mine,
+    indexStats(stats),
+    thresholds,
+    rec.end
+  );
   ws.counts = countRows(rows);
   ws.state = "done";
   return rows;
@@ -306,20 +376,19 @@ async function runJob(id: string) {
 
 // --- Query / control -------------------------------------------------------
 
-export async function getJob(apiKey: string, id: string): Promise<BurnedJob | null> {
+export async function getJob(who: Access, id: string): Promise<BurnedJob | null> {
   await loadOnce();
   const rec = records.get(id);
   const m = meta.get(id);
-  if (!rec || !m || m.fingerprint !== fingerprintKey(apiKey)) return null;
+  if (!rec || !m || !visible(m, who)) return null;
   return rec;
 }
 
-export async function listJobs(apiKey: string): Promise<BurnedJob[]> {
+export async function listJobs(who: Access): Promise<BurnedJob[]> {
   await loadOnce();
-  const fp = fingerprintKey(apiKey);
   const out: BurnedJob[] = [];
   for (const [id, m] of meta) {
-    if (m.fingerprint !== fp) continue;
+    if (!visible(m, who)) continue;
     const rec = records.get(id);
     if (rec) out.push(rec);
   }
@@ -327,20 +396,20 @@ export async function listJobs(apiKey: string): Promise<BurnedJob[]> {
   return out;
 }
 
-export async function abortJob(apiKey: string, id: string): Promise<boolean> {
+export async function abortJob(who: Access, id: string): Promise<boolean> {
   await loadOnce();
   const rec = records.get(id);
   const m = meta.get(id);
-  if (!rec || !m || m.fingerprint !== fingerprintKey(apiKey)) return false;
+  if (!rec || !m || !visible(m, who)) return false;
   m.aborted = true;
   return true;
 }
 
-export async function deleteJob(apiKey: string, id: string): Promise<boolean> {
+export async function deleteJob(who: Access, id: string): Promise<boolean> {
   await loadOnce();
   const rec = records.get(id);
   const m = meta.get(id);
-  if (!rec || !m || m.fingerprint !== fingerprintKey(apiKey)) return false;
+  if (!rec || !m || !visible(m, who)) return false;
   m.aborted = true;
   records.delete(id);
   meta.delete(id);
