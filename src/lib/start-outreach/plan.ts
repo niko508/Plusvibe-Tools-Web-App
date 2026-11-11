@@ -6,9 +6,9 @@
 // src/lib/jobs/start-outreach.ts calls these; the page uses the same ones for
 // its preview, so what is shown before the run is what the run does.
 
-import type { SignatureFields } from "@/app/tools/add-signatures/types";
-import { groupInboxes, type InboxLike } from "@/app/tools/add-signatures/filter";
-import type { PersonGroup } from "@/app/tools/add-signatures/types";
+import type { SignatureFields } from "@/lib/signatures/types";
+import { groupInboxes, type InboxLike } from "@/lib/signatures/filter";
+import type { PersonGroup } from "@/lib/signatures/types";
 import { findPlatformTag, findTldTag, tldOf } from "@/lib/tags/domain-tags";
 import type { TagInput } from "@/lib/tags/bulk-tags";
 import type { Category } from "@/lib/start-outreach/categories";

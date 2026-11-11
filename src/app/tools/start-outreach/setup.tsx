@@ -24,7 +24,7 @@ import {
   TITLE_SLOTS,
   padSlots,
   pickRandomRoles,
-} from "../add-signatures/slots";
+} from "@/components/signature-slots";
 import {
   ACTIVE_STATUS,
   countsInWords,

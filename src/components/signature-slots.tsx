@@ -1,8 +1,8 @@
 "use client";
 
 // The signature inputs — the fixed slots for titles, company names, phones and
-// addresses — shared by Add Signatures and any tool that sets signatures as one
-// of its steps, so both offer exactly the same fields.
+// addresses — shared by any tool that sets signatures as one
+// of its steps, so they all offer the same fields.
 
 export const TITLE_SLOTS = 5;
 export const COMPANY_SLOTS = 3;

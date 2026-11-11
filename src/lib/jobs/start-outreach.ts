@@ -18,7 +18,7 @@ import {
 } from "@/lib/google-sheets";
 import { extractSheetId, fetchSheetGrid } from "@/lib/sheet";
 import { savePreset } from "@/lib/signatures/store";
-import { buildSignature } from "@/app/tools/add-signatures/generate";
+import { buildSignature } from "@/lib/signatures/generate";
 import { prepareBatch, type TagSpec } from "@/lib/tags/bulk-tags";
 import { chunk, type InboxLite } from "@/lib/inbox-tags/plan";
 import { ACCOUNTS_MAX_PAGES, ACCOUNTS_PAGE, assignTag, readInboxPage, resolveTag } from "@/lib/inbox-tags/api";

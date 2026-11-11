@@ -160,16 +160,6 @@ export const TOOLS: Tool[] = [
     Icon: SparklesIcon,
   },
   {
-    slug: "change-limits",
-    name: "Change Limits with Best Performing Inboxes",
-    tagline: "Raise the limits on the inboxes that are actually replying",
-    description:
-      "Set a true reply rate for Google and for Microsoft inboxes plus a minimum number of sends, and it finds every inbox in the workspaces you pick that clears its own threshold — then raises their campaign emails, warmup emails, randomised warmup, warmup reply rate and email interval in one background run. Rates are worked out on unique contacts.",
-    status: "active",
-    color: "emerald",
-    Icon: ZapIcon,
-  },
-  {
     slug: "azure-warmup",
     name: "Azure Start Warmup",
     tagline: "Upload the mailbox export and start warmup as inboxes land",
@@ -188,16 +178,6 @@ export const TOOLS: Tool[] = [
     status: "active",
     color: "violet",
     Icon: LayersIcon,
-  },
-  {
-    slug: "copy-sections",
-    name: "Change Email Copy Sections",
-    tagline: "Change one thing across every variation — one step, or every campaign",
-    description:
-      "Find and replace a sentence or a variable, or swap out the subject line, the opening paragraph or the sign-off, across every variation of a step — with a preview of each before anything is written. Or scan every campaign in every workspace you pick and apply the same find & replace everywhere after confirming.",
-    status: "active",
-    color: "amber",
-    Icon: PenIcon,
   },
   {
     slug: "campaign-types",
@@ -230,16 +210,6 @@ export const TOOLS: Tool[] = [
     Icon: ZapIcon,
   },
   {
-    slug: "move-leads",
-    name: "Move Leads to Another Campaign",
-    tagline: "Shift a set number of leads from one campaign to another",
-    description:
-      "Pick a source and destination campaign in the same workspace and move a set number of leads across — added to the destination first, then removed from the source once that's confirmed, carrying their fields and custom variables with them.",
-    status: "active",
-    color: "cyan",
-    Icon: MoveIcon,
-  },
-  {
     slug: "export-leads",
     name: "Export/Remove Not Contacted Leads",
     tagline: "Download the leads not contacted yet as one CSV, or delete them",
@@ -258,16 +228,6 @@ export const TOOLS: Tool[] = [
     status: "active",
     color: "cyan",
     Icon: GaugeIcon,
-  },
-  {
-    slug: "add-signatures",
-    name: "Add Signatures",
-    tagline: "Push unique spintaxed signatures to every inbox in a workspace",
-    description:
-      "Pick a workspace, provide your company / phone / address variations, and generate hundreds of spintax signature combinations — personalized with each inbox's own name — then apply them in one pass.",
-    status: "active",
-    color: "emerald",
-    Icon: PenIcon,
   },
   {
     slug: "inbox-rotation",

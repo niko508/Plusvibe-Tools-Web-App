@@ -3,11 +3,8 @@
 import { getApiKey } from "@/lib/api-key";
 import type { WebhookConfig } from "@/lib/webhooks/config";
 import type { Sentiment } from "@/lib/lead-labels/custom-label";
-import type { CopyEdit } from "@/lib/copy-sections/edit";
 import type { TagInput, TagSpec } from "@/lib/tags/bulk-tags";
-import type { CopyReplaceJob, CopyReplaceStartPayload } from "@/lib/jobs/copy-replace-types";
 import type { InboxTagsJob, InboxTagsStartPayload } from "@/lib/jobs/inbox-tags-types";
-import type { ChangeLimitsJob, ChangeLimitsStartPayload } from "@/lib/jobs/change-limits-types";
 import type { CampaignSettingsJob, CampaignSettingsStartPayload } from "@/lib/jobs/campaign-settings-types";
 import type { DomainTagsJob, DomainTagsStartPayload } from "@/lib/jobs/domain-tags-types";
 import type { StartOutreachJob, StartOutreachStartPayload } from "@/lib/jobs/start-outreach-types";
@@ -40,10 +37,6 @@ import type {
   WorkspacesResponse,
 } from "@/lib/plusvibe-types";
 import type { JobRecord, StartJobPayload } from "@/lib/jobs/types";
-import type {
-  MoveLeadsJob,
-  MoveLeadsStartPayload,
-} from "@/lib/jobs/move-leads-types";
 import type {
   AzureWarmupJob,
   AzureStartPayload,
@@ -200,27 +193,6 @@ export function addTagsToWorkspaces(
   return request<BulkTagsResponse>("/api/bulk-actions/tags", { method: "POST", body: params, signal });
 }
 
-// --- Bulk Find & Replace Copy ------------------------------------------------
-
-export function startCopyReplace(payload: CopyReplaceStartPayload, signal?: AbortSignal) {
-  return request<{ jobId: string }>("/api/jobs/copy-replace/start", { method: "POST", body: payload, signal });
-}
-export function listCopyReplaceJobs(signal?: AbortSignal) {
-  return request<{ jobs: CopyReplaceJob[] }>("/api/jobs/copy-replace/list", { signal });
-}
-export function confirmCopyReplace(jobId: string, signal?: AbortSignal) {
-  return request<{ ok: boolean }>("/api/jobs/copy-replace/confirm", { method: "POST", body: { jobId }, signal });
-}
-export function cancelCopyReplace(jobId: string, signal?: AbortSignal) {
-  return request<{ ok: boolean }>("/api/jobs/copy-replace/cancel", { method: "POST", body: { jobId }, signal });
-}
-export function abortCopyReplace(jobId: string, signal?: AbortSignal) {
-  return request<{ ok: boolean }>("/api/jobs/copy-replace/abort", { method: "POST", body: { jobId }, signal });
-}
-export function deleteCopyReplaceJob(jobId: string, signal?: AbortSignal) {
-  return request<{ ok: boolean }>("/api/jobs/copy-replace/delete", { method: "POST", body: { jobId }, signal });
-}
-
 // --- Update Inbox Tags -------------------------------------------------------
 
 export interface TagCatalogResponse {
@@ -310,21 +282,6 @@ export function cloneWinningVariants(payload: CloneWinnersPayload, signal?: Abor
   return request<import("@/lib/winning-variants/plan").CloneResult>("/api/winning-variants/run", { method: "POST", body: payload, signal });
 }
 
-// --- Change Limits with Best Performing Inboxes -----------------------------
-
-export function startChangeLimits(payload: ChangeLimitsStartPayload, signal?: AbortSignal) {
-  return request<{ jobId: string }>("/api/jobs/change-limits/start", { method: "POST", body: payload, signal });
-}
-export function listChangeLimitsJobs(signal?: AbortSignal) {
-  return request<{ jobs: ChangeLimitsJob[] }>("/api/jobs/change-limits/list", { signal });
-}
-export function abortChangeLimitsJob(jobId: string, signal?: AbortSignal) {
-  return request<{ ok: boolean }>("/api/jobs/change-limits/abort", { method: "POST", body: { jobId }, signal });
-}
-export function deleteChangeLimitsJob(jobId: string, signal?: AbortSignal) {
-  return request<{ ok: boolean }>("/api/jobs/change-limits/delete", { method: "POST", body: { jobId }, signal });
-}
-
 // --- Auto-tag by Domain -----------------------------------------------------
 
 export function startDomainTags(payload: DomainTagsStartPayload, signal?: AbortSignal) {
@@ -355,52 +312,7 @@ export function deleteCampaignSettingsJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/campaign-settings/delete", { method: "POST", body: { jobId }, signal });
 }
 
-// --- Change Email Copy Sections ---------------------------------------------
-
-export interface CopySectionResult {
-  variation: string;
-  changed: boolean;
-  reason?: string;
-  subjectBefore: string;
-  subjectAfter: string;
-  bodyBefore: string;
-  bodyAfter: string;
-  textBefore: string;
-  textAfter: string;
-  subjectMatches: number;
-  bodyMatches: number;
-}
-
-export interface CopySectionsResponse {
-  step: number;
-  campaignName: string;
-  total: number;
-  changed: number;
-  droppedDeleted: number;
-  results: CopySectionResult[];
-  dryRun: boolean;
-  written: boolean;
-  verified: boolean;
-  unverified: string[];
-}
-
-export function editCopySections(
-  params: {
-    workspace_id: string;
-    campaign_id: string;
-    step: number;
-    edit: CopyEdit;
-    dryRun?: boolean;
-    expectedVariationCount?: number;
-  },
-  signal?: AbortSignal
-) {
-  return request<CopySectionsResponse>("/api/plusvibe/copy-sections", {
-    method: "POST",
-    body: params,
-    signal,
-  });
-}
+// --- Campaign copy and variations ------------------------------------------
 
 export function fetchCampaign(
   params: { workspace_id: string; campaign_id: string },
@@ -485,40 +397,6 @@ export function deleteCampaignLeads(params: { workspaceId: string; campaignId: s
   return request<{ deleted: number }>("/api/leads/delete", { method: "POST", body: params, signal });
 }
 
-// --- Move-leads background jobs ---------------------------------------------
-
-export function startMoveLeads(
-  payload: MoveLeadsStartPayload,
-  signal?: AbortSignal
-) {
-  return request<{ jobIds: string[] }>("/api/jobs/move-leads/start", {
-    method: "POST",
-    body: payload,
-    signal,
-  });
-}
-
-export function listMoveLeadsJobs(signal?: AbortSignal) {
-  return request<{ jobs: MoveLeadsJob[] }>("/api/jobs/move-leads/list", {
-    signal,
-  });
-}
-
-export function getMoveLeadsJob(jobId: string, signal?: AbortSignal) {
-  return request<MoveLeadsJob>(
-    `/api/jobs/move-leads/status?jobId=${encodeURIComponent(jobId)}`,
-    { signal }
-  );
-}
-
-export function abortMoveLeads(jobId: string, signal?: AbortSignal) {
-  return request<{ ok: boolean }>("/api/jobs/move-leads/abort", {
-    method: "POST",
-    body: { jobId },
-    signal,
-  });
-}
-
 // --- Azure Start Warmup background jobs -------------------------------------
 
 export interface AzureJobsResponse {
@@ -570,14 +448,6 @@ export function resumeAzureWarmup(jobId: string, signal?: AbortSignal) {
 
 export function deleteBulkDeleteJob(jobId: string, signal?: AbortSignal) {
   return request<{ ok: boolean }>("/api/jobs/bulk-delete/delete", {
-    method: "POST",
-    body: { jobId },
-    signal,
-  });
-}
-
-export function deleteMoveLeadsJob(jobId: string, signal?: AbortSignal) {
-  return request<{ ok: boolean }>("/api/jobs/move-leads/delete", {
     method: "POST",
     body: { jobId },
     signal,
@@ -641,41 +511,6 @@ export function fetchEmailStats(params: EmailStatsParams, signal?: AbortSignal) 
   );
 }
 
-export interface EmailStatsBulkParams {
-  workspace_id: string;
-  start_date: string;
-  end_date: string;
-  /** Comma-separated, at most 100. Omit for every mailbox in the workspace, paged. */
-  email_acc_ids?: string;
-  include_chart?: boolean;
-  page?: number;
-  limit?: number;
-}
-
-export interface EmailStatsBulkResponse {
-  page?: number;
-  limit?: number;
-  total_accounts?: number;
-  has_more?: boolean;
-  accounts?: Array<Record<string, unknown>>;
-}
-
-/** Stats for every sending mailbox individually, 100 per call. */
-export function fetchEmailStatsBulk(params: EmailStatsBulkParams, signal?: AbortSignal) {
-  const qs = new URLSearchParams({
-    workspace_id: params.workspace_id,
-    start_date: params.start_date,
-    end_date: params.end_date,
-    include_chart: params.include_chart === false ? "false" : "true",
-  });
-  if (params.email_acc_ids) qs.set("email_acc_ids", params.email_acc_ids);
-  if (params.page) qs.set("page", String(params.page));
-  if (params.limit) qs.set("limit", String(params.limit));
-  return request<EmailStatsBulkResponse>(`/api/plusvibe/email-stats-bulk?${qs.toString()}`, {
-    signal,
-  });
-}
-
 // --- Bulk-delete (Remove Inboxes) background jobs ---------------------------
 
 export function startBulkDelete(payload: StartJobPayload, signal?: AbortSignal) {
@@ -721,19 +556,6 @@ export function fetchSheetMap(
 ) {
   const qs = new URLSearchParams({ url: params.url, tab: params.tab });
   return request<SheetMapResponse>(`/api/sheet?${qs.toString()}`, { signal });
-}
-
-// --- Bulk signature update -------------------------------------------------
-
-export function bulkUpdateSignature(
-  params: { workspace_id: string; ids: string[]; signature: string },
-  signal?: AbortSignal
-) {
-  return request<{ status?: string }>("/api/plusvibe/bulk-update", {
-    method: "POST",
-    body: params,
-    signal,
-  });
 }
 
 // --- Account delete + warmup settings --------------------------------------
@@ -1283,7 +1105,7 @@ export function addFieldToWorkspaces(
   });
 }
 
-// --- Add Signatures presets --------------------------------------------------
+// --- Signature presets -------------------------------------------------------
 
 export interface SignaturePreset {
   titles: string[];
@@ -1299,31 +1121,6 @@ export function fetchSignaturePreset(workspaceId: string, signal?: AbortSignal) 
     `/api/signatures/presets?${qs.toString()}`,
     { signal }
   );
-}
-
-export function saveSignaturePreset(
-  params: {
-    workspaceId: string;
-    titles: string[];
-    companies: string[];
-    phones: string[];
-    addresses: string[];
-  },
-  signal?: AbortSignal
-) {
-  return request<{ preset: SignaturePreset }>("/api/signatures/presets", {
-    method: "PUT",
-    body: params,
-    signal,
-  });
-}
-
-export function deleteSignaturePreset(workspaceId: string, signal?: AbortSignal) {
-  const qs = new URLSearchParams({ workspace_id: workspaceId });
-  return request<{ ok: boolean }>(`/api/signatures/presets?${qs.toString()}`, {
-    method: "DELETE",
-    signal,
-  });
 }
 
 // --- New Workspace 1st Campaign ---------------------------------------------

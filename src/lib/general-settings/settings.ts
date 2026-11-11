@@ -190,9 +190,9 @@ export const SECTIONS: SectionDef[] = [
       {
         key: "masterInbox",
         label: "Master inbox tag",
-        help: "Inboxes with this tag are never given signatures or offered for removal.",
+        help: "Inboxes with this tag are never offered for removal.",
         kind: "text",
-        usedBy: ["Add Signatures", "Remove Inboxes"],
+        usedBy: ["Remove Inboxes"],
       },
       {
         key: "rotationGroup1",

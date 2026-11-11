@@ -1,7 +1,7 @@
 // Shared types for Start Outreach jobs (client + API routes + job manager).
 // No server-only imports here.
 
-import type { SignatureFields } from "@/app/tools/add-signatures/types";
+import type { SignatureFields } from "@/lib/signatures/types";
 import type { TagInput } from "@/lib/tags/bulk-tags";
 import type {
   MovingInbox,

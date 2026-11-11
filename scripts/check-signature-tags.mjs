@@ -20,7 +20,7 @@ const eq = (label, got, want) => {
   }
 };
 
-const f = await importTs("@/app/tools/add-signatures/filter");
+const f = await importTs("@/lib/signatures/filter");
 const { UNTAGGED, groupInboxes, countByTag, matchesTagFilter } = f;
 
 const MASTER = new Set(["T_MASTER"]);
