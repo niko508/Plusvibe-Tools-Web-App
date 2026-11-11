@@ -132,7 +132,8 @@ export async function fetchInboxStats(
   apiKey: string,
   workspaceId: string,
   inboxes: Inbox[],
-  range: { start: string; end: string }
+  range: { start: string; end: string },
+  opts: { chart?: boolean } = {}
 ): Promise<{ rows: InboxStats[]; source: "bulk" | "per-inbox"; errors: string[] }> {
   const errors: string[] = [];
   const query = { workspace_id: workspaceId, start_date: range.start, end_date: range.end };
@@ -148,7 +149,9 @@ export async function fetchInboxStats(
         query: {
           ...query,
           email_acc_ids: part.map((p) => p.id).join(","),
-          include_chart: "false",
+          // The daily chart is only asked for when the caller needs to know
+          // when sending started; it makes every response a good deal larger.
+          include_chart: opts.chart ? "true" : "false",
           limit: String(STATS_CHUNK),
         },
       });

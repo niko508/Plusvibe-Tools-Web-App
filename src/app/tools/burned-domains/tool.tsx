@@ -8,10 +8,9 @@ import {
   ESPS,
   ESP_LABELS,
   levelOf,
+  parseMinDays,
   parseMinSends,
-  parseReplyOooPct,
-  parseReplyPct,
-  rescueImpossible,
+  parseRelativePct,
   type BurnedSettings,
   type Esp,
 } from "@/lib/burned/settings";
@@ -35,13 +34,15 @@ import { ConnectPrompt } from "@/components/connect-prompt";
 import { EmptyState, Spinner } from "@/components/ui";
 import { AlertIcon, CheckIcon, FireIcon, SettingsIcon } from "@/components/icons";
 import { ResultsCard } from "./results";
+import { WeeklyPanel } from "./weekly-panel";
 
 // Find Burned Domains & Inboxes.
 //
 // One provider at a time, because the two are judged at different levels and
 // carry their own thresholds. The thresholds are saved server-side per
-// provider, so picking Google shows the Google bar and picking Microsoft
-// shows the Microsoft one — each as it was last left.
+// provider, so picking Google shows the Google numbers and picking Microsoft
+// shows the Microsoft ones — each as it was last left. The weekly run reads
+// the same saved numbers.
 
 const POLL_MS = 2000;
 const DEFAULT_PRESET = "30d";
@@ -55,8 +56,8 @@ export function BurnedTool() {
   const [settings, setSettings] = useState<BurnedSettings>(DEFAULT_SETTINGS);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [minSends, setMinSends] = useState("");
-  const [replyOoo, setReplyOoo] = useState("");
-  const [replyPct, setReplyPct] = useState("");
+  const [minDays, setMinDays] = useState("");
+  const [relativePct, setRelativePct] = useState("");
   const [saving, setSaving] = useState(false);
   const [savedNote, setSavedNote] = useState<string | null>(null);
 
@@ -75,8 +76,8 @@ export function BurnedTool() {
   // --- Thresholds: read once, shown per provider ---------------------------
   const showThresholds = useCallback((s: BurnedSettings, which: Esp) => {
     setMinSends(String(s.thresholds[which].minSends));
-    setReplyOoo(String(s.thresholds[which].replyOooPct));
-    setReplyPct(String(s.thresholds[which].replyPct));
+    setMinDays(String(s.thresholds[which].minDays));
+    setRelativePct(String(s.thresholds[which].relativePct));
   }, []);
 
   const loadSettings = useCallback(async () => {
@@ -132,18 +133,14 @@ export function BurnedTool() {
 
   // --- Derived -------------------------------------------------------------
   const sends = parseMinSends(minSends);
-  const ooo = parseReplyOooPct(replyOoo);
-  const real = parseReplyPct(replyPct);
-  const thresholdProblem = sends.error ?? ooo.error ?? real.error ?? null;
+  const days = parseMinDays(minDays);
+  const rel = parseRelativePct(relativePct);
+  const thresholdProblem = sends.error ?? days.error ?? rel.error ?? null;
   const saved = settings.thresholds[esp];
   const dirty =
     !thresholdProblem &&
-    (sends.value !== saved.minSends || ooo.value !== saved.replyOooPct || real.value !== saved.replyPct);
-  // The OOO rate counts the same replies plus the auto-replies, so it can
-  // never be the lower of the two — a Reply % bar at or above it can never
-  // rescue anything, and saying nothing would leave that a mystery.
-  const rescueDead =
-    !thresholdProblem && rescueImpossible({ replyPct: real.value as number, replyOooPct: ooo.value as number });
+    (sends.value !== saved.minSends || days.value !== saved.minDays || rel.value !== saved.relativePct);
+  const edited = { minSends: sends.value as number, minDays: days.value as number, relativePct: rel.value as number };
   const rangeIssue = rangeProblem(start, end);
   const canScan = settingsLoaded && !thresholdProblem && !rangeIssue && !busy && !active;
   const level = levelOf(esp);
@@ -153,12 +150,10 @@ export function BurnedTool() {
     setSaving(true);
     setError(null);
     try {
-      const { settings: s } = await saveBurnedSettings({
-        [esp]: { minSends: sends.value as number, replyOooPct: ooo.value as number, replyPct: real.value as number },
-      } as Partial<Record<Esp, { minSends: number; replyOooPct: number; replyPct: number }>>);
+      const { settings: s } = await saveBurnedSettings({ [esp]: edited });
       setSettings(s);
       showThresholds(s, esp);
-      setSavedNote(`Saved for ${ESP_LABELS[esp]} — every scan uses these until you change them.`);
+      setSavedNote(`Saved for ${ESP_LABELS[esp]} — every scan, and the weekly run, uses these until you change them.`);
     } catch (err) {
       setError(errMessage(err));
     } finally {
@@ -175,9 +170,7 @@ export function BurnedTool() {
       // The scan reads the SAVED thresholds, so an edit left in the boxes is
       // saved first rather than quietly ignored.
       if (dirty) {
-        const { settings: s } = await saveBurnedSettings({
-          [esp]: { minSends: sends.value as number, replyOooPct: ooo.value as number, replyPct: real.value as number },
-        } as Partial<Record<Esp, { minSends: number; replyOooPct: number; replyPct: number }>>);
+        const { settings: s } = await saveBurnedSettings({ [esp]: edited });
         setSettings(s);
       }
       await startBurnedScan({ esp, start, end });
@@ -220,6 +213,8 @@ export function BurnedTool() {
 
   return (
     <div className="space-y-5">
+      <WeeklyPanel onRunStarted={refresh} />
+
       <div className="pv-card space-y-4 p-4 sm:p-5">
         {/* Provider */}
         <div>
@@ -241,8 +236,8 @@ export function BurnedTool() {
           </div>
           <p className="mt-1.5 text-xs text-muted-foreground" data-level-note>
             {esp === "microsoft"
-              ? "Microsoft is judged by domain: a tenant's mailboxes burn together, so the whole domain's figures decide it."
-              : "Google is judged by inbox: Google mailboxes burn one at a time, and a domain average hides the ones that have."}
+              ? "Microsoft is judged by domain: a tenant's mailboxes burn together, so the whole domain's figures decide it, against the rest of its workspace's Microsoft domains."
+              : "Google is judged by inbox: Google mailboxes burn one at a time, so each inbox is measured against the rest of its workspace's Google inboxes."}
           </p>
         </div>
 
@@ -263,60 +258,52 @@ export function BurnedTool() {
               aria-label="Minimum sends"
             />
             <p className="mt-1 text-[11px] text-muted-foreground">
-              Below this there is nothing to judge, so the {level} is listed as too quiet rather than burned.
+              Below this a few unlucky days look like a burned {level}, so it is listed as too quiet instead.
               {sends.error && <span className="block text-warning">{sends.error}</span>}
             </p>
           </div>
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="burned-reply-ooo">
-              Reply % (OOO)
+            <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="burned-min-days">
+              Minimum days of outreach
             </label>
             <input
-              id="burned-reply-ooo"
+              id="burned-min-days"
               type="number"
               className="pv-input"
               min={0}
-              step={0.1}
-              value={replyOoo}
-              onChange={(e) => setReplyOoo(e.target.value)}
-              aria-label="Reply % (OOO)"
+              step={1}
+              value={minDays}
+              onChange={(e) => setMinDays(e.target.value)}
+              aria-label="Minimum days of outreach"
             />
             <p className="mt-1 text-[11px] text-muted-foreground">
-              Replies including out-of-office, over unique leads contacted. Under this is burned.
-              {ooo.error && <span className="block text-warning">{ooo.error}</span>}
+              Counted from the {level}&apos;s first send in the window. Replies come days after the emails, so a new{" "}
+              {level} always reads low at first.
+              {days.error && <span className="block text-warning">{days.error}</span>}
             </p>
           </div>
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="burned-reply-pct">
-              Reply %
+            <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="burned-relative">
+              Burned under % of workspace
             </label>
             <input
-              id="burned-reply-pct"
+              id="burned-relative"
               type="number"
               className="pv-input"
-              min={0}
-              step={0.1}
-              value={replyPct}
-              onChange={(e) => setReplyPct(e.target.value)}
-              aria-label="Reply %"
+              min={1}
+              max={100}
+              step={5}
+              value={relativePct}
+              onChange={(e) => setRelativePct(e.target.value)}
+              aria-label="Burned under % of workspace"
             />
             <p className="mt-1 text-[11px] text-muted-foreground">
-              Real replies, out-of-office not counted. At or above this the {level} is kept whatever the OOO figure says.
-              {real.error && <span className="block text-warning">{real.error}</span>}
+              Compared with the rest of the same workspace&apos;s {ESP_LABELS[esp]} {level === "inbox" ? "inboxes" : "domains"}: burned when
+              both the reply rate with OOO and the real reply rate are under this share of theirs.
+              {rel.error && <span className="block text-warning">{rel.error}</span>}
             </p>
           </div>
         </div>
-
-        {rescueDead && (
-          <p className="flex gap-1.5 text-xs text-muted-foreground" data-rescue-note>
-            <AlertIcon size={13} className="mt-0.5 shrink-0 text-warning" />
-            <span>
-              Reply % sits at or above Reply % (OOO), so it can never rescue anything: the OOO figure counts the same
-              replies plus the auto-replies, so it is never the lower of the two. Set it below {ooo.value}% for it to
-              have an effect.
-            </span>
-          </p>
-        )}
 
         <div className="flex flex-wrap items-center gap-3">
           <button type="button" className="pv-btn-ghost text-xs disabled:opacity-50" disabled={!dirty || saving} onClick={handleSave} data-save-thresholds>
@@ -331,8 +318,8 @@ export function BurnedTool() {
             <span className="text-xs text-muted-foreground">Not saved yet — scanning saves them too.</span>
           ) : (
             <span className="text-xs text-muted-foreground">
-              Saved per provider: {ESP_LABELS[esp]} is under {saved.replyOooPct}% reply (OOO), unless reply % is{" "}
-              {saved.replyPct}% or better, on {formatNumber(saved.minSends)}+ sends.
+              Saved per provider: {ESP_LABELS[esp]} {level === "inbox" ? "inboxes" : "domains"} burn under {saved.relativePct}% of
+              their workspace, once they have {formatNumber(saved.minSends)}+ sends and {saved.minDays}+ days of outreach.
             </span>
           )}
         </div>

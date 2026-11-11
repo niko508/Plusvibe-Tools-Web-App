@@ -134,7 +134,7 @@ export const TOOLS: Tool[] = [
     name: "Find Burned Domains & Inboxes",
     tagline: "Scan every workspace for what has stopped pulling replies",
     description:
-      "Pick a provider and set the bar once: a minimum number of sends, and the reply rate including out-of-office below which something counts as burned. Microsoft is judged domain by domain, Google inbox by inbox, across every workspace at once \u2014 with the list ready to copy or download.",
+      "Compares every Microsoft domain and Google inbox with the rest of its own workspace, once it has enough sends and days of outreach behind it. Microsoft is judged domain by domain, Google inbox by inbox, across every workspace at once \u2014 by hand, or every Monday by the weekly check, which can also remove what it finds.",
     status: "active",
     color: "sky",
     Icon: FireIcon,

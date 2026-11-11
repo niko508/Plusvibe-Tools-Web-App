@@ -32,6 +32,13 @@ export interface BurnedJob {
   finishedAt?: number;
 
   esp: Esp;
+  /**
+   * "relative" for a scan judged against its workspace. Absent on a scan from
+   * the old fixed-bar rule, whose thresholds are then the old shape.
+   */
+  rule?: "relative";
+  /** Started by hand, or by the weekly run. */
+  trigger?: "manual" | "scheduled";
   /** The thresholds as they were when the run started. */
   thresholds: Thresholds;
   start: string;
