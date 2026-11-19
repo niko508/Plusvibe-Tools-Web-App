@@ -1,0 +1,20 @@
+import { NextResponse } from "next/server";
+import { burnedAccess } from "@/lib/burned/access";
+import { errorResponse } from "@/lib/api-response";
+import { abortJob } from "@/lib/jobs/burned";
+
+export const dynamic = "force-dynamic";
+
+// POST /api/jobs/burned/abort  { jobId }
+export async function POST(request: Request) {
+  try {
+    const { who } = await burnedAccess(request);
+    const body = (await request.json()) as { jobId?: string };
+    if (!body.jobId) return NextResponse.json({ error: "jobId is required" }, { status: 400 });
+    const ok = await abortJob(who, body.jobId);
+    if (!ok) return NextResponse.json({ error: "Job not found." }, { status: 404 });
+    return NextResponse.json({ ok });
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
