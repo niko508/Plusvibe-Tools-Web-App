@@ -225,6 +225,9 @@ console.log("--- (Previous Winner) on the best variant");
   eq("an & in the name stays", segmentOf("Manufacturing & Industrial (August)"), "Manufacturing & Industrial");
   eq("a name with nothing to strip is its own segment", segmentOf("General - Evergreen - Step 3"), "General - Evergreen - Step 3");
   eq("the clone is 🟡 and the segment, no month", segmentCloneName("Manufacturing - Product"), "🟡 Manufacturing - Product");
+  eq("with the month picked", segmentCloneName("Manufacturing - Product", "December"), "🟡 Manufacturing - Product (December)");
+  eq("with a version and a month", segmentCloneName("Manufacturing - Product", "December", "V2"), "🟡 Manufacturing - Product V2 (December)");
+  eq("a version's clone is still its segment", segmentOf(segmentCloneName("Manufacturing - Product", "December", "V3")), "Manufacturing - Product");
   eq("a 🔵 name becomes 🟡", withCloneMark("🔵 Roof Repair (August)"), "🟡 Roof Repair (August)");
   eq("…a plain one gets it", withCloneMark("Roof Repair"), "🟡 Roof Repair");
   const camps = [

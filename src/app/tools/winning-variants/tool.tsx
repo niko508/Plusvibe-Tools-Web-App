@@ -28,7 +28,7 @@ import {
   listWinningVariantsJobs,
   startWinningVariantsJob,
 } from "@/lib/api-client";
-import { campaignMonth, cleanTagName, groupBySegment, POOL_TAG, segmentCloneName, type TagRef } from "@/lib/winning-variants/plan";
+import { campaignMonth, cleanTagName, groupBySegment, MONTHS, POOL_TAG, segmentCloneName, type TagRef } from "@/lib/winning-variants/plan";
 import type { SegmentOutcome, WinningVariantsJob } from "@/lib/jobs/winning-variants-types";
 import { MAX_SEGMENTS } from "@/lib/jobs/winning-variants-types";
 import { MAX_WINNER_CAMPAIGNS } from "@/lib/winning-variants/limits";
@@ -60,6 +60,10 @@ export function WinningVariantsTool() {
   const [reloads, setReloads] = useState(0);
   /** The months whose campaigns count, from the "(November)" in their names. */
   const [months, setMonths] = useState<string[]>([]);
+  /** The month the clones are named for; empty for none. */
+  const [nameMonth, setNameMonth] = useState("");
+  /** "V2", "V3" — for a second or third launch in the same month; empty for none. */
+  const [version, setVersion] = useState("");
   const [filter, setFilter] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
   const [open, setOpen] = useState<string | null>(null);
@@ -152,6 +156,12 @@ export function WinningVariantsTool() {
   }, [campaigns]);
   // A workspace starts on its latest month.
   useEffect(() => setMonths(monthList.slice(0, 1)), [monthList]);
+  // The clones are named for the month after the newest one picked: November's winners become December's campaigns.
+  useEffect(() => {
+    const newest = [...months].sort((a, b) => Date.parse(`1 ${b} UTC`) - Date.parse(`1 ${a} UTC`))[0];
+    const at = newest ? MONTHS.indexOf(newest.split(" ")[0]) : -1;
+    setNameMonth(at >= 0 ? MONTHS[(at + 1) % 12] : "");
+  }, [months]);
 
   // Segments: the picked months' campaigns grouped by name.
   const segments: SegmentRow[] = useMemo(() => {
@@ -219,7 +229,7 @@ export function WinningVariantsTool() {
             baseId: s.baseId,
             baseName: s.campaigns.find((c) => c.id === s.baseId)?.name ?? "",
             ids,
-            name: segmentCloneName(s.segment),
+            name: segmentCloneName(s.segment, nameMonth, version),
           };
         }),
         tagIds,
@@ -330,7 +340,7 @@ export function WinningVariantsTool() {
                         <button type="button" className="min-w-0 flex-1 text-left" onClick={() => toggle(s.segment)}>
                           <span className="block truncate text-sm font-medium">{s.segment}</span>
                           <span className="block truncate text-xs text-muted-foreground">
-                            Clones {base?.name ?? "—"} as {segmentCloneName(s.segment)}
+                            Clones {base?.name ?? "—"} as {segmentCloneName(s.segment, nameMonth, version)}
                           </span>
                         </button>
                         <button
@@ -367,6 +377,28 @@ export function WinningVariantsTool() {
 
       {ws && (
         <div className="pv-card space-y-4 p-4 sm:p-5" data-clone-settings>
+          <div data-name-month>
+            <label className="text-xs font-medium text-muted-foreground" htmlFor="wv-name-month">
+              Name the clones for — month, and a version when it&apos;s a second or third launch that month
+            </label>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <select id="wv-name-month" className="pv-input w-auto py-1.5 text-sm" value={nameMonth} onChange={(e) => setNameMonth(e.target.value)}>
+                <option value="">No month</option>
+                {MONTHS.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+              <select id="wv-version" aria-label="Version" className="pv-input w-auto py-1.5 text-sm" value={version} onChange={(e) => setVersion(e.target.value)}>
+                <option value="">No version</option>
+                <option value="V2">V2</option>
+                <option value="V3">V3</option>
+              </select>
+              <span className="text-xs text-muted-foreground">e.g. {segmentCloneName(chosen[0]?.segment ?? segments[0]?.segment ?? "Financial - Advisory", nameMonth, version)}</span>
+            </div>
+          </div>
+
           <div data-tags>
             <p className="text-xs font-medium text-muted-foreground">Tags on every clone</p>
             <div className="mt-2 flex flex-wrap items-center gap-2">

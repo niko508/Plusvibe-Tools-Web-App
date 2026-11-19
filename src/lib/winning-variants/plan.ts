@@ -634,9 +634,14 @@ export function segmentOf(name: string): string {
     .trim();
 }
 
-/** "🟡 Manufacturing - Product": the segment, no month — the clone's own creation date says when. */
-export function segmentCloneName(segment: string): string {
-  return `${CLONE_MARK} ${segment.trim()}`.slice(0, 200);
+/**
+ * "🟡 Manufacturing - Product", with the version and month picked:
+ * "🟡 Manufacturing - Product V2 (December)".
+ */
+export function segmentCloneName(segment: string, month?: string | null, version?: string | null): string {
+  const m = (month ?? "").trim();
+  const v = (version ?? "").trim();
+  return `${CLONE_MARK} ${segment.trim()}${v ? ` ${v}` : ""}${m ? ` (${m})` : ""}`.slice(0, 200);
 }
 
 /** A name with the 🟡 mark in front, whatever colour it started with. */
@@ -686,7 +691,7 @@ export function groupBySegment(campaigns: { id: string; name: string; createdAt?
   });
 }
 
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+export const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 /**
  * The month a campaign's name carries — "🔵 Financial - Platform (November)",
