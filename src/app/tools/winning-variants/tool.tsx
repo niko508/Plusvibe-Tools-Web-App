@@ -318,7 +318,15 @@ export function WinningVariantsTool() {
                   return (
                     <div key={s.segment} className="border-b border-border last:border-b-0" data-segment={s.segment}>
                       <div className="flex items-center gap-3 px-3 py-2.5">
-                        <input type="checkbox" checked={picked.includes(s.segment)} onChange={() => toggle(s.segment)} aria-label={`Tick ${s.segment}`} />
+                        <label className="-m-2 flex shrink-0 cursor-pointer items-center p-2">
+                          <input
+                            type="checkbox"
+                            className="h-5 w-5 cursor-pointer accent-[hsl(var(--accent))]"
+                            checked={picked.includes(s.segment)}
+                            onChange={() => toggle(s.segment)}
+                            aria-label={`Tick ${s.segment}`}
+                          />
+                        </label>
                         <button type="button" className="min-w-0 flex-1 text-left" onClick={() => toggle(s.segment)}>
                           <span className="block truncate text-sm font-medium">{s.segment}</span>
                           <span className="block truncate text-xs text-muted-foreground">
