@@ -686,6 +686,34 @@ export function groupBySegment(campaigns: { id: string; name: string; createdAt?
   });
 }
 
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+/**
+ * The month a campaign's name carries — "🔵 Financial - Platform (November)",
+ * "Personalized (January) V2" — capitalised; null when it has none (a 🟡 clone).
+ */
+export function monthOf(name: string): string | null {
+  const m = /\((january|february|march|april|may|june|july|august|september|october|november|december)\b[^)]*\)/i.exec(name ?? "");
+  return m ? MONTHS.find((x) => x.toLowerCase() === m[1].toLowerCase())! : null;
+}
+
+/**
+ * The month a campaign is for, with its year: "November 2026". The name gives
+ * the month; the year is the one that puts that month closest to when the
+ * campaign was created — "(December)" made on 3 January is last December.
+ * Without a creation date it is the month alone.
+ */
+export function campaignMonth(name: string, createdAt?: number): string | null {
+  const m = monthOf(name);
+  if (!m) return null;
+  if (!createdAt) return m;
+  const made = new Date(createdAt);
+  const idx = MONTHS.indexOf(m);
+  const y = made.getUTCFullYear();
+  const year = [y - 1, y, y + 1].sort((a, b) => Math.abs(Date.UTC(a, idx, 15) - createdAt) - Math.abs(Date.UTC(b, idx, 15) - createdAt))[0];
+  return `${m} ${year}`;
+}
+
 /** The tags a clone starts with: the pool tag, by id when the workspace has it, by name to create when not. */
 export function defaultCloneTags(workspaceTags: TagRef[]): { tagIds: string[]; newTags: string[] } {
   const t = workspaceTags.find((x) => x.name.trim().toLowerCase() === POOL_TAG);

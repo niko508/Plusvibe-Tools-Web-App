@@ -16,7 +16,7 @@ const eq = (label, got, want) => {
   }
 };
 
-const { parseVariationStats, planWinners, planMultiWinners, planProblems, tagChanges, cleanTagName, defaultName, emptyVariant, withWinnerMark, winnerBar, WINNER_MARK, segmentOf, segmentCloneName, withCloneMark, groupBySegment, defaultCloneTags, POOL_TAG, stepOneOf, anchorsOf, matchQuoted, creditStepOne, followUpPositives } = await importTs("@/lib/winning-variants/plan");
+const { parseVariationStats, planWinners, planMultiWinners, planProblems, tagChanges, cleanTagName, defaultName, emptyVariant, withWinnerMark, winnerBar, WINNER_MARK, segmentOf, segmentCloneName, withCloneMark, groupBySegment, defaultCloneTags, POOL_TAG, stepOneOf, anchorsOf, matchQuoted, creditStepOne, followUpPositives, monthOf, campaignMonth } = await importTs("@/lib/winning-variants/plan");
 
 // As the documented endpoint answers, grouped by step.
 const RAW = [
@@ -268,6 +268,21 @@ console.log("--- (Previous Winner) on the best variant");
   eq("…without touching the stats it was given", stats.get(1).get("B").positiveReplies, 0);
   const seq2 = [{ step: 1, wait_time: 0, variations: [{ variation: "A", subject: "a", preheader: "", body: "a" }, { variation: "B", subject: "b", preheader: "", body: "b" }] }, { step: 2, wait_time: 2, variations: [{ variation: "D", subject: "", preheader: "", body: "d" }] }];
   eq("B is now a winner", planWinners(seq2, credited).rows.filter((r) => r.kept).map((r) => r.variation).sort(), ["A", "B"]);
+}
+
+// --- The month in a campaign name --------------------------------------------
+{
+  eq("month at the end", monthOf("🔵 Financial - Platform (November)"), "November");
+  eq("month with a suffix after", monthOf("eCommerce - Personalized (January) V2"), "January");
+  eq("any case", monthOf("Legal (october)"), "October");
+  eq("month with a year", monthOf("Legal (May 2026)"), "May");
+  eq("a 🟡 clone has none", monthOf("🟡 Professional Services - General"), null);
+  eq("not a month", monthOf("Apps (Opt Out)"), null);
+  eq("year from creation", campaignMonth("Legal (November)", Date.UTC(2026, 10, 3)), "November 2026");
+  eq("named ahead, made the month before", campaignMonth("Legal (November)", Date.UTC(2026, 9, 28)), "November 2026");
+  eq("December made in January is last year's", campaignMonth("Legal (December)", Date.UTC(2026, 0, 3)), "December 2025");
+  eq("August made in September", campaignMonth("SaaS (August)", Date.UTC(2026, 8, 23)), "August 2026");
+  eq("no date, month alone", campaignMonth("Legal (May)"), "May");
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);

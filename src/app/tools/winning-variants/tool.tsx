@@ -2,7 +2,9 @@
 
 // Clone Campaign with Winning Variants.
 //
-// Pick a workspace and tick the segments. A segment is a campaign name without
+// Pick a workspace and a month (read from the "(November)" in the campaign
+// names; the latest one to start), then tick the segments. Only the picked
+// months' campaigns count. A segment is a campaign name without
 // its colour, month, version and Signature / Opt Out suffix: "🔵 Professional
 // Services - General (November)" and "🟡 Professional Services - General
 // - Signature (October)" are both "Professional Services - General". For each
@@ -26,7 +28,7 @@ import {
   listWinningVariantsJobs,
   startWinningVariantsJob,
 } from "@/lib/api-client";
-import { cleanTagName, groupBySegment, POOL_TAG, segmentCloneName, type TagRef } from "@/lib/winning-variants/plan";
+import { campaignMonth, cleanTagName, groupBySegment, POOL_TAG, segmentCloneName, type TagRef } from "@/lib/winning-variants/plan";
 import type { SegmentOutcome, WinningVariantsJob } from "@/lib/jobs/winning-variants-types";
 import { MAX_SEGMENTS } from "@/lib/jobs/winning-variants-types";
 import { MAX_WINNER_CAMPAIGNS } from "@/lib/winning-variants/limits";
@@ -40,8 +42,11 @@ type OptOut = "keep" | "add" | "remove";
 
 interface SegmentRow {
   segment: string;
+  /** The campaigns whose winners count. */
   campaigns: CampaignSummary[];
   baseId: string;
+  /** Campaigns of the segment in months not picked. */
+  otherMonths: number;
 }
 
 export function WinningVariantsTool() {
@@ -53,7 +58,8 @@ export function WinningVariantsTool() {
   const [campaigns, setCampaigns] = useState<CampaignSummary[]>([]);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
   const [reloads, setReloads] = useState(0);
-  const [withArchived, setWithArchived] = useState(false);
+  /** The months whose campaigns count, from the "(November)" in their names. */
+  const [months, setMonths] = useState<string[]>([]);
   const [filter, setFilter] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
   const [open, setOpen] = useState<string | null>(null);
@@ -129,15 +135,40 @@ export function WinningVariantsTool() {
     return () => clearInterval(t);
   }, [anyRunning, loadJobs]);
 
-  // Segments: the campaigns grouped by name, newest campaigns first.
+  // The months in the campaign names, newest first (by their newest campaign).
+  const monthList = useMemo(() => {
+    const newest = new Map<string, number>();
+    for (const c of campaigns) {
+      const m = campaignMonth(c.name, c.createdAt);
+      if (m) newest.set(m, Math.max(newest.get(m) ?? 0, c.createdAt ?? 0));
+    }
+    return [...newest.entries()].sort((a, b) => b[1] - a[1]).map(([m]) => m);
+  }, [campaigns]);
+  // A workspace starts on its latest month.
+  useEffect(() => setMonths(monthList.slice(0, 1)), [monthList]);
+
+  // Segments: the picked months' campaigns grouped by name.
   const segments: SegmentRow[] = useMemo(() => {
-    const usable = campaigns.filter((c) => withArchived || c.status?.toUpperCase() !== "ARCHIVED");
-    const sorted = [...usable].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+    const sorted = [...campaigns].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+    const inMonths = (c: CampaignSummary) => {
+      const m = campaignMonth(c.name, c.createdAt);
+      return !!m && months.includes(m);
+    };
     const byId = new Map(sorted.map((c) => [c.id, c]));
     return groupBySegment(sorted.map((c) => ({ id: c.id, name: c.name, createdAt: c.createdAt })))
-      .map((g) => ({ segment: g.segment, baseId: g.baseId, campaigns: g.ids.map((id) => byId.get(id)!).filter(Boolean) }))
+      .map((g) => {
+        const all = g.ids.map((id) => byId.get(id)!).filter(Boolean);
+        const used = all.filter(inMonths);
+        // The base: the newest plain 🟡 campaign of the months picked.
+        const base = groupBySegment(used.map((c) => ({ id: c.id, name: c.name, createdAt: c.createdAt })))[0]?.baseId ?? "";
+        return { segment: g.segment, baseId: base, campaigns: used, otherMonths: all.length - used.length };
+      })
+      .filter((x) => x.campaigns.length > 0)
       .sort((a, b) => a.segment.localeCompare(b.segment));
-  }, [campaigns, withArchived]);
+  }, [campaigns, months]);
+
+  // Ticks on segments the months no longer cover drop away.
+  useEffect(() => setPicked((p) => p.filter((x) => segments.some((sg) => sg.segment === x))), [segments]);
 
   const shown = segments.filter((s) => !filter.trim() || s.segment.toLowerCase().includes(filter.trim().toLowerCase()));
   const chosen = segments.filter((s) => picked.includes(s.segment));
@@ -249,10 +280,23 @@ export function WinningVariantsTool() {
                 </button>
               </div>
             </div>
-            <label className="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground">
-              <input type="checkbox" checked={withArchived} onChange={(e) => setWithArchived(e.target.checked)} data-with-archived />
-              Count archived campaigns too
-            </label>
+            <div className="mt-3" data-months>
+              <p className="text-xs font-medium text-muted-foreground">Month — only campaigns with it in their name count</p>
+              <div className="mt-1.5 flex flex-wrap gap-2">
+                {monthList.length === 0 && !campaignsLoading && <span className="text-xs text-muted-foreground">No campaign name here carries a month.</span>}
+                {monthList.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    data-month={m}
+                    className={`pv-chip text-xs ${months.includes(m) ? "border-accent bg-accent text-accent-foreground" : ""}`}
+                    onClick={() => setMonths((cur) => (cur.includes(m) ? cur.filter((x) => x !== m) : [...cur, m]))}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
 
             <div className="mt-3 max-h-[28rem] overflow-y-auto rounded-xl border border-border">
               {campaignsLoading ? (
@@ -260,7 +304,7 @@ export function WinningVariantsTool() {
                   <Spinner /> Reading the campaigns…
                 </div>
               ) : shown.length === 0 ? (
-                <p className="p-4 text-sm text-muted-foreground">{segments.length === 0 ? "No campaigns here." : "No segment matches."}</p>
+                <p className="p-4 text-sm text-muted-foreground">{segments.length === 0 ? (months.length === 0 ? "Pick a month." : "No campaigns in that month.") : "No segment matches."}</p>
               ) : (
                 shown.map((s) => {
                   const base = s.campaigns.find((c) => c.id === s.baseId);
@@ -282,6 +326,7 @@ export function WinningVariantsTool() {
                           aria-expanded={isOpen}
                         >
                           {s.campaigns.length} campaign{s.campaigns.length === 1 ? "" : "s"}
+                          {s.otherMonths > 0 ? ` · ${s.otherMonths} in other months` : ""}
                           <ChevronDownIcon size={12} className={isOpen ? "rotate-180" : ""} />
                         </button>
                       </div>

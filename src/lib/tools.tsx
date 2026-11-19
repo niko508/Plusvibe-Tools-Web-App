@@ -164,7 +164,7 @@ export const TOOLS: Tool[] = [
     name: "Clone Campaign with Winning Variants",
     tagline: "Tick segments: each gets a 🟡 clone with only the first emails that got positive replies",
     description:
-      "Pick a workspace and tick its segments — a segment is a campaign name without its colour, month and Signature / Opt Out suffix. For each one, every campaign of the segment is read (a positive reply to a follow-up counts for the first email), and its newest 🟡 campaign is cloned as “🟡 <segment>” with only the step-1 variants that got a positive reply, tagged google-pool. It runs in the background on the server; segments without a winner yet are skipped.",
+      "Pick a workspace and tick its segments — a segment is a campaign name without its colour, month and Signature / Opt Out suffix. For each one, the segment\u2019s campaigns from that month are read (a positive reply to a follow-up counts for the first email), and its newest 🟡 campaign is cloned as “🟡 <segment>” with only the step-1 variants that got a positive reply, tagged google-pool. It runs in the background on the server; segments without a winner yet are skipped.",
     status: "active",
     color: "emerald",
     Icon: SparklesIcon,
