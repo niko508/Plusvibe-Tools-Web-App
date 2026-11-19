@@ -135,14 +135,20 @@ export function WinningVariantsTool() {
     return () => clearInterval(t);
   }, [anyRunning, loadJobs]);
 
-  // The months in the campaign names, newest first (by their newest campaign).
+  // The months in the campaign names: this month and the two before it (and
+  // any later one already named), newest first. Each is held with its year —
+  // "November 2026" — so last year's November never mixes in; only the month
+  // is shown.
   const monthList = useMemo(() => {
-    const newest = new Map<string, number>();
+    const now = new Date();
+    const from = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 2, 1);
+    const when = (key: string) => Date.parse(`1 ${key} UTC`);
+    const keys = new Set<string>();
     for (const c of campaigns) {
       const m = campaignMonth(c.name, c.createdAt);
-      if (m) newest.set(m, Math.max(newest.get(m) ?? 0, c.createdAt ?? 0));
+      if (m && /\d{4}$/.test(m) && when(m) >= from) keys.add(m);
     }
-    return [...newest.entries()].sort((a, b) => b[1] - a[1]).map(([m]) => m);
+    return [...keys].sort((a, b) => when(b) - when(a));
   }, [campaigns]);
   // A workspace starts on its latest month.
   useEffect(() => setMonths(monthList.slice(0, 1)), [monthList]);
@@ -283,7 +289,7 @@ export function WinningVariantsTool() {
             <div className="mt-3" data-months>
               <p className="text-xs font-medium text-muted-foreground">Month — only campaigns with it in their name count</p>
               <div className="mt-1.5 flex flex-wrap gap-2">
-                {monthList.length === 0 && !campaignsLoading && <span className="text-xs text-muted-foreground">No campaign name here carries a month.</span>}
+                {monthList.length === 0 && !campaignsLoading && <span className="text-xs text-muted-foreground">No campaign here is named for this month or the two before it.</span>}
                 {monthList.map((m) => (
                   <button
                     key={m}
@@ -292,7 +298,7 @@ export function WinningVariantsTool() {
                     className={`pv-chip text-xs ${months.includes(m) ? "border-accent bg-accent text-accent-foreground" : ""}`}
                     onClick={() => setMonths((cur) => (cur.includes(m) ? cur.filter((x) => x !== m) : [...cur, m]))}
                   >
-                    {m}
+                    {m.split(" ")[0]}
                   </button>
                 ))}
               </div>
