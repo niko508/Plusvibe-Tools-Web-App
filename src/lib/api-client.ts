@@ -259,6 +259,19 @@ export function deleteStartOutreachJob(jobId: string, signal?: AbortSignal) {
 
 // --- Clone Campaign with Winning Variants -----------------------------------
 
+export function startWinningVariantsJob(payload: Omit<import("@/lib/jobs/winning-variants-types").WinningVariantsStartPayload, "optOut"> & { optOut: boolean | null }, signal?: AbortSignal) {
+  return request<{ jobId: string }>("/api/jobs/winning-variants/start", { method: "POST", body: payload, signal });
+}
+export function listWinningVariantsJobs(signal?: AbortSignal) {
+  return request<{ jobs: import("@/lib/jobs/winning-variants-types").WinningVariantsJob[] }>("/api/jobs/winning-variants/list", { signal });
+}
+export function abortWinningVariantsJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/winning-variants/abort", { method: "POST", body: { jobId }, signal });
+}
+export function deleteWinningVariantsJob(jobId: string, signal?: AbortSignal) {
+  return request<{ ok: boolean }>("/api/jobs/winning-variants/delete", { method: "POST", body: { jobId }, signal });
+}
+
 export type { CloneResult, WinnersPreview } from "@/lib/winning-variants/plan";
 
 /** A campaign's step-1 variants with their all-time figures, and its tags. Creates nothing. */

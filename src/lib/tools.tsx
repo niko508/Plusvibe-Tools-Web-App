@@ -162,9 +162,9 @@ export const TOOLS: Tool[] = [
   {
     slug: "winning-variants",
     name: "Clone Campaign with Winning Variants",
-    tagline: "A copy of a campaign with only the first emails that got positive replies — from one campaign or several",
+    tagline: "Tick segments: each gets a 🟡 clone with only the first emails that got positive replies",
     description:
-      "Pick a campaign, or several, and see every first-step variant with its sends, replies and positive replies, and the top three. With several, the winners of all of them go into one first step, the same email counted once. The campaign is cloned in its own workspace — settings, sender accounts, follow-ups and sub-sequences as they are — with step 1 cut down to the variants that got at least one positive reply, under a name and tags you choose.",
+      "Pick a workspace and tick its segments — a segment is a campaign name without its colour, month and Signature / Opt Out suffix. For each one, every campaign of the segment is read (a positive reply to a follow-up counts for the first email), and its newest 🟡 campaign is cloned as “🟡 <segment>” with only the step-1 variants that got a positive reply, tagged google-pool. It runs in the background on the server; segments without a winner yet are skipped.",
     status: "active",
     color: "emerald",
     Icon: SparklesIcon,

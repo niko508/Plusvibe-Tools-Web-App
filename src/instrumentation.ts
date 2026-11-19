@@ -57,5 +57,9 @@ export async function register() {
     // finishing the split it had started.
     const campaignTypes = await import("@/lib/jobs/campaign-types");
     void campaignTypes.bootResume().catch(() => undefined);
+
+    // Clone Campaign with Winning Variants: a run a deploy cut off goes on.
+    const winningVariants = await import("@/lib/jobs/winning-variants");
+    void winningVariants.bootResume().catch(() => undefined);
   }
 }

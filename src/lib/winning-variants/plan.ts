@@ -725,4 +725,6 @@ export interface CloneResult {
   verified: boolean;
   problems: string[];
   warnings: string[];
+  /** Positive replies to follow-ups credited to the first email, and those that couldn't be traced. */
+  followUps?: { credited: number; untraced: number };
 }

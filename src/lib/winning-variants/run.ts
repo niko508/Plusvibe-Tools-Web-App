@@ -2,6 +2,7 @@ import "server-only";
 
 import { plusvibeGet, plusvibePatch, plusvibePost } from "@/lib/plusvibe-server";
 import { acquireSlot } from "@/lib/jobs/rate-limit";
+import { MAX_WINNER_CAMPAIGNS } from "@/lib/winning-variants/limits";
 import { fetchCampaignRaw, listCampaigns, normalizeSequences, toWriteStep } from "@/lib/plusvibe-campaigns";
 import { listTags, type Tag } from "@/lib/plusvibe-tags";
 import { resolveTag } from "@/lib/inbox-tags/api";
@@ -62,8 +63,7 @@ async function readCampaign(apiKey: string, workspaceId: string, campaignId: str
 
 const summarizePlan = ({ steps: _steps, ...rest }: WinnerPlan): PlanSummary => rest;
 
-/** At most this many campaigns' winners in one clone. */
-export const MAX_WINNER_CAMPAIGNS = 20;
+export { MAX_WINNER_CAMPAIGNS };
 
 const nameOf = (raw: Record<string, unknown>) => String(raw.camp_name ?? raw.name ?? "").trim() || "(untitled)";
 
@@ -278,7 +278,7 @@ export async function cloneWithWinners(input: CloneInput): Promise<CloneResult> 
   const warnings: string[] = [];
 
   // --- 1. Read it all first: a failure here leaves nothing behind ---------
-  const { plan } = await planFor(apiKey, workspaceId, campaignId, input.alsoIds ?? [], input.optOut);
+  const { plan, credit } = await planFor(apiKey, workspaceId, campaignId, input.alsoIds ?? [], input.optOut);
   if (plan.steps.length === 0) throw new Error("That campaign has no sequence steps, so there is nothing to clone.");
   if (plan.noWinners && !input.confirmEmpty) throw new NeedsConfirmError();
   if (plan.overLimit) warnings.push(`${plan.overLimit} more winning variant${plan.overLimit === 1 ? "" : "s"} didn't fit in one step and ${plan.overLimit === 1 ? "was" : "were"} left out — the weakest.`);
@@ -379,5 +379,5 @@ export async function cloneWithWinners(input: CloneInput): Promise<CloneResult> 
     // Only a count for the report.
   }
 
-  return { createdId, name, plan: summarizePlan(plan), subsequences, tags: finalTags, createdTags, verified, problems, warnings };
+  return { createdId, name, plan: summarizePlan(plan), subsequences, tags: finalTags, createdTags, verified, problems, warnings, followUps: credit };
 }
