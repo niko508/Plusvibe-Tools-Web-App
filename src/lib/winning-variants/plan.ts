@@ -148,14 +148,21 @@ function shortSubject(s: string | undefined): string {
 export const WINNER_MARK = "(Previous Winner)";
 
 /**
- * A variant's name in the clone: as it was, with "(Previous Winner)" after it
- * when it is a winner — and a mark left over from an earlier clone taken off
- * when it isn't, so the mark only ever means this round.
+ * A variant's name in the clone: as it was, with how many positive replies it
+ * got in the campaigns read — "Angle (3 positive)" — and "Previous Winner" on
+ * the one(s) that did best: "Angle (Previous Winner · 5 positive)". What an
+ * earlier clone added is taken off first, so the marks only ever mean this
+ * round and never stack.
  */
-export function withWinnerMark(name: string, isWinner: boolean): string {
-  const bare = (name ?? "").replace(/\s*\(previous winner\)\s*$/i, "").trim();
-  if (!isWinner) return bare;
-  return bare ? `${bare} ${WINNER_MARK}` : WINNER_MARK;
+export function withWinnerMark(name: string, isWinner: boolean, positives?: number): string {
+  const bare = (name ?? "")
+    .replace(/\s*\((?:previous winner)?(?:\s*·\s*)?(?:\d+ positive)?\)\s*$/i, "")
+    .replace(/\s*\(previous winner\)\s*$/i, "")
+    .trim();
+  const count = positives !== undefined ? `${positives} positive` : "";
+  const mark = [isWinner ? "Previous Winner" : "", count].filter(Boolean).join(" · ");
+  if (!mark) return bare;
+  return bare ? `${bare} (${mark})` : `(${mark})`;
 }
 
 /**
@@ -258,7 +265,7 @@ export function planWinners(sequence: SequenceStep[], stats: StatsByStep, optOut
     const isTop = (letter: string) => bar !== null && winners.find((w) => w.variation === letter)!.positiveReplies === bar;
     let kept = s.variations
       .filter((v) => keptLetters.has(v.variation))
-      .map((v) => ({ ...v, name: withWinnerMark(v.name ?? "", isTop(v.variation)) }));
+      .map((v) => ({ ...v, name: withWinnerMark(v.name ?? "", isTop(v.variation), winners.find((w) => w.variation === v.variation)!.positiveReplies) }));
     // The Previous Winner(s) go first: lettered A (B, … for a tie), the other
     // kept variants after them in their own order, lettered on from there.
     // With no winner marked, every variant keeps its letter.
@@ -414,7 +421,7 @@ export function planMultiWinners(base: CampaignInput, campaigns: CampaignInput[]
       fits.map((g, j) => ({
         ...g.lead.v,
         variation: VARIATION_LABELS[j],
-        name: withWinnerMark(g.lead.v.name ?? "", bar !== null && g.total.positiveReplies === bar),
+        name: withWinnerMark(g.lead.v.name ?? "", bar !== null && g.total.positiveReplies === bar, g.total.positiveReplies),
       })),
       optOut
     );

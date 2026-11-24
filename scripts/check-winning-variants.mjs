@@ -200,19 +200,24 @@ console.log("--- (Previous Winner) on the best variant");
   eq("no name: the mark alone", withWinnerMark("", true), WINNER_MARK);
   eq("not stacked on a clone of a clone", withWinnerMark("Angle (Previous Winner)", true), "Angle (Previous Winner)");
   eq("taken off one that isn't the winner this time", withWinnerMark("Angle (previous winner)", false), "Angle");
+  eq("the positive replies after the name", withWinnerMark("Angle", false, 3), "Angle (3 positive)");
+  eq("a winner with its count", withWinnerMark("Angle", true, 5), "Angle (Previous Winner · 5 positive)");
+  eq("an earlier clone's count is replaced, not stacked", withWinnerMark("Angle (Previous Winner · 5 positive)", false, 2), "Angle (2 positive)");
+  eq("…and an earlier count alone too", withWinnerMark("Angle (4 positive)", true, 7), "Angle (Previous Winner · 7 positive)");
+  eq("no name: the count alone", withWinnerMark("", false, 1), "(1 positive)");
   eq("the bar: the most positive replies, when more than one", [winnerBar([3, 2, 1]), winnerBar([2, 2, 1]), winnerBar([1, 1, 1]), winnerBar([])], [3, 2, null, null]);
   const v = (variation, name) => ({ variation, subject: variation, preheader: "", name, body: `<p>${variation}</p>` });
   const seq = [{ step: 1, wait_time: 0, variations: [v("A", "Angle A"), v("B", "Angle B"), v("C", ""), v("D", "Old (Previous Winner)")] }];
   const at = (rows) => parseVariationStats([{ step: 1, variations: rows.map(([variation, pos]) => ({ variation, sent: 100, pos_reply: pos })) }]);
   const names = (p) => p.steps[0].variations.map((x) => [x.variation, x.name]);
-  eq("3 and 2: only the 3 is marked; an old mark comes off", names(planWinners(seq, at([["A", 3], ["B", 2], ["C", 0], ["D", 1]]))), [["A", "Angle A (Previous Winner)"], ["B", "Angle B"], ["C", "Old"]]);
-  eq("the winner goes first as A, the rest after in their own order", names(planWinners(seq, at([["A", 1], ["B", 2], ["C", 0], ["D", 3]]))), [["A", "Old (Previous Winner)"], ["B", "Angle A"], ["C", "Angle B"]]);
+  eq("3 and 2: only the 3 is marked; an old mark comes off", names(planWinners(seq, at([["A", 3], ["B", 2], ["C", 0], ["D", 1]]))), [["A", "Angle A (Previous Winner · 3 positive)"], ["B", "Angle B (2 positive)"], ["C", "Old (1 positive)"]]);
+  eq("the winner goes first as A, the rest after in their own order", names(planWinners(seq, at([["A", 1], ["B", 2], ["C", 0], ["D", 3]]))), [["A", "Old (Previous Winner · 3 positive)"], ["B", "Angle A (1 positive)"], ["C", "Angle B (2 positive)"]]);
   eq("…its body comes with it", planWinners(seq, at([["A", 1], ["B", 2], ["C", 0], ["D", 3]])).steps[0].variations[0].body, "<p>D</p>");
   eq("…and the rows say their new letter", planWinners(seq, at([["A", 1], ["B", 2], ["C", 0], ["D", 3]])).rows.map((r) => [r.variation, r.newLetter ?? null]), [["A", "B"], ["B", "C"], ["C", null], ["D", "A"]]);
   eq("…and the plan says which", planWinners(seq, at([["A", 3], ["B", 2], ["C", 0], ["D", 1]])).marked, ["A"]);
-  eq("two tied at 2: both marked, both first", names(planWinners(seq, at([["A", 1], ["B", 2], ["C", 0], ["D", 2]]))), [["A", "Angle B (Previous Winner)"], ["B", "Old (Previous Winner)"], ["C", "Angle A"]]);
+  eq("two tied at 2: both marked, both first", names(planWinners(seq, at([["A", 1], ["B", 2], ["C", 0], ["D", 2]]))), [["A", "Angle B (Previous Winner · 2 positive)"], ["B", "Old (Previous Winner · 2 positive)"], ["C", "Angle A (1 positive)"]]);
   eq("…and the plan names them by their new letters", planWinners(seq, at([["A", 1], ["B", 2], ["C", 0], ["D", 2]])).marked, ["A", "B"]);
-  eq("none marked: letters as they were", names(planWinners(seq, at([["A", 0], ["B", 1], ["C", 0], ["D", 1]]))), [["B", "Angle B"], ["D", "Old"]]);
+  eq("none marked: letters as they were", names(planWinners(seq, at([["A", 0], ["B", 1], ["C", 0], ["D", 1]]))), [["B", "Angle B (1 positive)"], ["D", "Old (1 positive)"]]);
   eq("all at one positive reply: none marked", planWinners(seq, at([["A", 1], ["B", 1], ["C", 0], ["D", 0]])).marked, []);
 }
 
