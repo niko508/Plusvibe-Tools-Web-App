@@ -659,13 +659,16 @@ export interface SegmentGroup {
 }
 
 const isPlain = (name: string) => !/\b(signature|opt[ -]?out|unsub)/i.test(name);
-const isYellow = (name: string) => name.trim().startsWith(CLONE_MARK);
+/** A Google campaign: 🟡, or no colour mark at all as older names have. 🔵 and 🟦 are Microsoft. */
+const isGoogle = (name: string) => !/^\s*(🔵|🟦)/u.test(name ?? "");
 
 /**
  * The picked campaigns, one group per segment, in the order the segments were
- * first met. Each is cloned from its newest 🟡 campaign without a signature or
- * opt-out variant — the closest to what the clone will be — falling back to
- * the newest plain one, then the newest of all. Newest is by creation time;
+ * first met. Each is cloned from its newest Google campaign (🟡, or unmarked)
+ * without a signature or opt-out variant — the closest to what the clone will
+ * be — then its newest Google campaign of any kind, so the 🟡 clone keeps
+ * Google sender accounts; only a segment with no Google campaign falls back to
+ * its newest plain one, then the newest of all. Newest is by creation time;
  * without one, the list's own order (newest first) decides.
  */
 export function groupBySegment(campaigns: { id: string; name: string; createdAt?: number }[]): SegmentGroup[] {
@@ -684,7 +687,8 @@ export function groupBySegment(campaigns: { id: string; name: string; createdAt?
     const list = by.get(segment.toLowerCase())!;
     const newest = (a: (typeof list)[number], b: (typeof list)[number]) => (b.createdAt ?? 0) - (a.createdAt ?? 0) || a.at - b.at;
     const pick =
-      [...list].filter((c) => isYellow(c.name) && isPlain(c.name)).sort(newest)[0] ??
+      [...list].filter((c) => isGoogle(c.name) && isPlain(c.name)).sort(newest)[0] ??
+      [...list].filter((c) => isGoogle(c.name)).sort(newest)[0] ??
       [...list].filter((c) => isPlain(c.name)).sort(newest)[0] ??
       [...list].sort(newest)[0];
     return { segment, ids: list.map((c) => c.id), baseId: pick.id };
