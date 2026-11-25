@@ -821,7 +821,7 @@ export function CampaignTypesTool() {
           <>
           <p className="mb-2 text-xs text-muted-foreground">
             Before anything is built, every lead is moved to the campaign its Segment field names. Only the originals picked
-            above can be chosen. A segment on no row stays where it is.
+            above can be chosen, and several segments can go to the same one. A segment on no row stays where it is.
           </p>
           <div className="space-y-2">
             {rows.map((r, i) => (
@@ -857,6 +857,16 @@ export function CampaignTypesTool() {
                 </button>
               </div>
             ))}
+            {rows.length < MAX_SEGMENTS && (
+              <button
+                type="button"
+                className="pv-btn-ghost px-2 py-1 text-xs"
+                onClick={() => setRows((prev) => (prev.length < MAX_SEGMENTS ? [...prev, emptyRow()] : prev))}
+                data-add-segment
+              >
+                + Add segment
+              </button>
+            )}
             <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]" data-segment-row="empty">
               <div className="pv-input flex items-center text-sm text-muted-foreground">Leads with no segment</div>
               <div className="relative">
