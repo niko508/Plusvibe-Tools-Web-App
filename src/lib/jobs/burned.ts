@@ -8,7 +8,7 @@ import { fetchInboxStats, listInboxes, listWorkspaces, type Inbox } from "@/lib/
 import { indexStats } from "@/lib/blocked-domains/performance";
 import { bucketOf } from "@/lib/plusvibe-providers";
 import { ESP_LABELS, levelOf, normalizeThresholds, type Esp, type Thresholds } from "@/lib/burned/settings";
-import { countRows, emptyCounts, rowsFor, sortRows, type ScanRow } from "@/lib/burned/scan";
+import { applyFleetBar, countRows, emptyCounts, rowsFor, sortRows, type ScanRow } from "@/lib/burned/scan";
 import { thresholdsFor } from "@/lib/burned/store";
 import type { BurnedJob, BurnedStartPayload, WorkspaceScan } from "@/lib/jobs/burned-types";
 import { MAX_STORED_ERRORS } from "@/lib/jobs/burned-types";
@@ -352,6 +352,21 @@ async function runJob(id: string) {
       // Burned first as the run goes, so a long scan is useful before it ends.
       rec.rows = sortRows(all).slice(0, MAX_ROWS);
       rec.rowsTruncated = all.length > MAX_ROWS;
+      await touch();
+    }
+
+    // The second bar needs every workspace's figures, so it is applied once
+    // they are all in: rows trailing a strong workspace but replying well by
+    // the provider's own standard are kept.
+    const fleet = applyFleetBar(all, rec.thresholds.fleetPct ?? 0);
+    if (fleet.fleet) {
+      rec.fleet = fleet.fleet;
+      if (fleet.fleet.kept > 0) {
+        all.splice(0, all.length, ...fleet.rows);
+        for (const ws of rec.workspaces) ws.counts = countRows(all.filter((r) => r.workspaceId === ws.workspaceId));
+        rec.progress.burned = all.filter((r) => r.verdict === "burned").length;
+        rec.rows = sortRows(all).slice(0, MAX_ROWS);
+      }
       await touch();
     }
 

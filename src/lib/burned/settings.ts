@@ -92,6 +92,14 @@ export interface Thresholds {
    * rule off.
    */
   zeroReplySends: number;
+  /**
+   * A second bar, against EVERY workspace on the provider: a row under its own
+   * workspace's bar is still kept when its reply rate (OOO included) is at
+   * least this share of the average across all workspaces. So an inbox in a
+   * client doing very well isn't burned for merely trailing its neighbours.
+   * 0 switches it off.
+   */
+  fleetPct: number;
 }
 
 /**
@@ -101,8 +109,8 @@ export interface Thresholds {
  * under half the rest of their workspace.
  */
 export const DEFAULT_THRESHOLDS: Record<Esp, Thresholds> = {
-  google: { minSends: 250, minDays: 14, relativePct: 50, windowDays: 60, zeroReplySends: 150 },
-  microsoft: { minSends: 750, minDays: 14, relativePct: 50, windowDays: 30, zeroReplySends: 0 },
+  google: { minSends: 250, minDays: 14, relativePct: 50, windowDays: 60, zeroReplySends: 150, fleetPct: 50 },
+  microsoft: { minSends: 750, minDays: 14, relativePct: 50, windowDays: 30, zeroReplySends: 0, fleetPct: 50 },
 };
 
 /**
@@ -207,6 +215,11 @@ export function parseZeroReplySends(raw: unknown): { value: number | null; error
   return r.error ? { value: null, error: r.error.replace("Minimum sends", "Zero replies after") } : r;
 }
 
+/** The all-workspaces share, 0 to 100; 0 is off. */
+export function parseFleetPct(raw: unknown): { value: number | null; error?: string } {
+  return parsePercent(raw, "% of all workspaces");
+}
+
 /** Problems with one provider's numbers, in reading order. Empty when they can be saved. */
 export function validateThresholds(raw: {
   minSends?: unknown;
@@ -214,12 +227,14 @@ export function validateThresholds(raw: {
   relativePct?: unknown;
   windowDays?: unknown;
   zeroReplySends?: unknown;
+  fleetPct?: unknown;
 }): string[] {
   const problems: string[] = [];
   const checks = [parseMinSends(raw.minSends), parseMinDays(raw.minDays), parseRelativePct(raw.relativePct)];
   // The two newer numbers are optional in a save: left out, they keep what they had.
   if (raw.windowDays !== undefined) checks.push(parseWindowDays(raw.windowDays));
   if (raw.zeroReplySends !== undefined) checks.push(parseZeroReplySends(raw.zeroReplySends));
+  if (raw.fleetPct !== undefined) checks.push(parseFleetPct(raw.fleetPct));
   for (const r of checks) if (r.error) problems.push(r.error);
   return problems;
 }
@@ -230,7 +245,7 @@ export function validateThresholds(raw: {
  * except the minimum sends, and reads as that provider's defaults.
  */
 export function normalizeThresholds(raw: unknown, esp: Esp): Thresholds {
-  const r = (raw ?? {}) as { minSends?: unknown; minDays?: unknown; relativePct?: unknown; windowDays?: unknown; zeroReplySends?: unknown };
+  const r = (raw ?? {}) as { minSends?: unknown; minDays?: unknown; relativePct?: unknown; windowDays?: unknown; zeroReplySends?: unknown; fleetPct?: unknown };
   const legacy = r.relativePct === undefined;
   const sends = parseMinSends(r.minSends);
   const days = parseMinDays(r.minDays);
@@ -244,6 +259,7 @@ export function normalizeThresholds(raw: unknown, esp: Esp): Thresholds {
     relativePct: rel.value ?? d.relativePct,
     windowDays: win.value ?? d.windowDays,
     zeroReplySends: r.zeroReplySends === undefined ? d.zeroReplySends : zero.value ?? d.zeroReplySends,
+    fleetPct: r.fleetPct === undefined ? d.fleetPct : parseFleetPct(r.fleetPct).value ?? d.fleetPct,
   };
 }
 
@@ -278,5 +294,6 @@ export function normalizeSettings(raw: Partial<BurnedSettings> | null | undefine
 export function describeThresholds(esp: Esp, t: Thresholds): string {
   const what = levelOf(esp) === "inbox" ? "inboxes" : "domains";
   const zero = t.zeroReplySends > 0 ? `, or no replies at all on ${t.zeroReplySends.toLocaleString()}+ sends` : "";
-  return `${ESP_LABELS[esp]} ${what} · under ${t.relativePct}% of their workspace's reply rate, on ${t.minSends.toLocaleString()}+ sends and ${t.minDays}+ days${zero}`;
+  const fleet = t.fleetPct > 0 ? ` and ${t.fleetPct}% of all workspaces'` : "";
+  return `${ESP_LABELS[esp]} ${what} · under ${t.relativePct}% of their workspace's${fleet} reply rate, on ${t.minSends.toLocaleString()}+ sends and ${t.minDays}+ days${zero}`;
 }

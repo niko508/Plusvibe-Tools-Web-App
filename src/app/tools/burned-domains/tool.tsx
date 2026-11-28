@@ -9,6 +9,7 @@ import {
   ESP_LABELS,
   levelOf,
   parseMinDays,
+  parseFleetPct,
   parseMinSends,
   parseWindowDays,
   parseZeroReplySends,
@@ -70,6 +71,7 @@ export function BurnedTool() {
   const [relativePct, setRelativePct] = useState("");
   const [windowDays, setWindowDays] = useState("");
   const [zeroSends, setZeroSends] = useState("");
+  const [fleetPct, setFleetPct] = useState("");
   const [saving, setSaving] = useState(false);
   const [savedNote, setSavedNote] = useState<string | null>(null);
 
@@ -92,6 +94,7 @@ export function BurnedTool() {
     setRelativePct(String(s.thresholds[which].relativePct));
     setWindowDays(String(s.thresholds[which].windowDays));
     setZeroSends(String(s.thresholds[which].zeroReplySends));
+    setFleetPct(String(s.thresholds[which].fleetPct));
     // The window starts on the provider's weekly window when there is a preset for it.
     const key = presetForDays(s.thresholds[which].windowDays);
     const preset = key ? PRESETS.find((p) => p.key === key) : null;
@@ -160,7 +163,8 @@ export function BurnedTool() {
   const rel = parseRelativePct(relativePct);
   const win = parseWindowDays(windowDays);
   const zero = parseZeroReplySends(zeroSends);
-  const thresholdProblem = sends.error ?? days.error ?? rel.error ?? win.error ?? zero.error ?? null;
+  const fleet = parseFleetPct(fleetPct);
+  const thresholdProblem = sends.error ?? days.error ?? rel.error ?? win.error ?? zero.error ?? fleet.error ?? null;
   const saved = settings.thresholds[esp];
   const dirty =
     !thresholdProblem &&
@@ -168,13 +172,15 @@ export function BurnedTool() {
       days.value !== saved.minDays ||
       rel.value !== saved.relativePct ||
       win.value !== saved.windowDays ||
-      zero.value !== saved.zeroReplySends);
+      zero.value !== saved.zeroReplySends ||
+      fleet.value !== saved.fleetPct);
   const edited = {
     minSends: sends.value as number,
     minDays: days.value as number,
     relativePct: rel.value as number,
     windowDays: win.value as number,
     zeroReplySends: zero.value as number,
+    fleetPct: fleet.value as number,
   };
   const rangeIssue = rangeProblem(start, end);
   const canScan = settingsLoaded && !thresholdProblem && !rangeIssue && !busy && !active;
@@ -339,6 +345,28 @@ export function BurnedTool() {
             </p>
           </div>
           <div>
+            <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="burned-fleet">
+              …and under % of all workspaces
+            </label>
+            <input
+              id="burned-fleet"
+              type="number"
+              className="pv-input"
+              min={0}
+              max={100}
+              step={5}
+              value={fleetPct}
+              onChange={(e) => setFleetPct(e.target.value)}
+              aria-label="And under this % of all workspaces"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              A second bar: something under its workspace&apos;s bar is still kept when its reply rate with OOO is at least this
+              share of the average across every workspace — so a client doing very well doesn&apos;t lose healthy{" "}
+              {level === "inbox" ? "inboxes" : "domains"}. 0 switches it off.
+              {fleet.error && <span className="block text-warning">{fleet.error}</span>}
+            </p>
+          </div>
+          <div>
             <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="burned-zero">
               Burned on zero replies after (sends)
             </label>
@@ -394,7 +422,7 @@ export function BurnedTool() {
           ) : (
             <span className="text-xs text-muted-foreground">
               Saved per provider: {ESP_LABELS[esp]} {level === "inbox" ? "inboxes" : "domains"} burn under {saved.relativePct}% of
-              their workspace, once they have {formatNumber(saved.minSends)}+ sends and {saved.minDays}+ days of outreach
+              their workspace{saved.fleetPct > 0 ? ` and ${saved.fleetPct}% of all workspaces` : ""}, once they have {formatNumber(saved.minSends)}+ sends and {saved.minDays}+ days of outreach
               {saved.zeroReplySends > 0 ? `, or with no replies at all on ${formatNumber(saved.zeroReplySends)}+ sends` : ""}. The
               weekly run reads {saved.windowDays} days.
             </span>

@@ -57,6 +57,8 @@ export interface ScanRow {
   rescued?: true;
   /** Burned on the zero-replies rule: enough sends and not one reply, OOO included. */
   zeroReplies?: true;
+  /** Under its workspace's bar, but kept: at or above the share of every workspace's rate. */
+  aboveFleet?: true;
   workspaceId: string;
   workspaceName: string;
   /** The inbox address, or the domain — whichever this run judges. */
@@ -339,6 +341,44 @@ export interface ScanCounts {
 
 export function emptyCounts(): ScanCounts {
   return { scanned: 0, burned: 0, ok: 0, rescued: 0, fewSends: 0, tooNew: 0, noBaseline: 0, noFigures: 0 };
+}
+
+/** The provider's rate across every workspace, OOO included: what the second bar is a share of. */
+export interface FleetBar {
+  /** Percent, over unique leads contacted. */
+  replyRateOoo: number;
+  /** The share asked for, and the rate a row had to reach to be kept. */
+  pct: number;
+  bar: number;
+  /** Rows kept by it. */
+  kept: number;
+}
+
+/**
+ * The second bar, once every workspace is in: a row its workspace called
+ * burned is kept when its rate, OOO included, reaches `pct`% of the rate
+ * across all workspaces. The zero-replies rule is never overruled — no
+ * reply at all is no reply however the rest are doing. Off at 0.
+ */
+export function applyFleetBar(rows: ScanRow[], pct: number): { rows: ScanRow[]; fleet: FleetBar | null } {
+  if (!(pct > 0)) return { rows, fleet: null };
+  let contacted = 0;
+  let any = 0;
+  for (const r of rows) {
+    if (r.contacted <= 0) continue;
+    contacted += r.contacted;
+    any += r.replies + r.oooReplies;
+  }
+  if (contacted <= 0) return { rows, fleet: null };
+  const replyRateOoo = round((any / contacted) * 100);
+  const bar = round((replyRateOoo * pct) / 100);
+  let kept = 0;
+  const out = rows.map((r) => {
+    if (r.verdict !== "burned" || r.zeroReplies || r.replyRateOoo < bar) return r;
+    kept += 1;
+    return { ...r, verdict: "ok" as const, aboveFleet: true as const };
+  });
+  return { rows: out, fleet: { replyRateOoo, pct, bar, kept } };
 }
 
 export function countRows(rows: ScanRow[]): ScanCounts {

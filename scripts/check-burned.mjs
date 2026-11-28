@@ -34,7 +34,7 @@ eq("anything else is not a provider", [isEsp("google"), isEsp("microsoft"), isEs
 console.log("--- thresholds");
 eq("the defaults: Google inboxes 250 sends over 60 days with the zero-replies rule at 150, Microsoft domains 750 over 30",
   [DEFAULT_THRESHOLDS.google, DEFAULT_THRESHOLDS.microsoft],
-  [{ minSends: 250, minDays: 14, relativePct: 50, windowDays: 60, zeroReplySends: 150 }, { minSends: 750, minDays: 14, relativePct: 50, windowDays: 30, zeroReplySends: 0 }]);
+  [{ minSends: 250, minDays: 14, relativePct: 50, windowDays: 60, zeroReplySends: 150, fleetPct: 50 }, { minSends: 750, minDays: 14, relativePct: 50, windowDays: 30, zeroReplySends: 0, fleetPct: 50 }]);
 eq("a whole number of sends is fine", [parseMinSends(100).value, parseMinSends("250").value, parseMinSends(0).value], [100, 250, 0]);
 // Number("") is 0, and a minimum of 0 would judge every quiet mailbox, so
 // blank must be refused rather than read as none.
@@ -51,9 +51,9 @@ eq("a good set has no problems", validateThresholds({ minSends: 750, minDays: 14
 eq("…and a bad one names each, in reading order", validateThresholds({ minSends: "", minDays: -1, relativePct: 0 }),
   ["Minimum sends: enter a number.", "Minimum days: can't be negative.", "% of workspace: must be more than 0."]);
 eq("junk falls back to that provider's default", normalizeThresholds({ minSends: "x", minDays: null, relativePct: "y" }, "microsoft"), DEFAULT_THRESHOLDS.microsoft);
-eq("…and a good set reads as itself", normalizeThresholds({ minSends: 400, minDays: 21, relativePct: 40, windowDays: 45, zeroReplySends: 0 }, "google"), { minSends: 400, minDays: 21, relativePct: 40, windowDays: 45, zeroReplySends: 0 });
+eq("…and a good set reads as itself", normalizeThresholds({ minSends: 400, minDays: 21, relativePct: 40, windowDays: 45, zeroReplySends: 0, fleetPct: 0 }, "google"), { minSends: 400, minDays: 21, relativePct: 40, windowDays: 45, zeroReplySends: 0, fleetPct: 0 });
 eq("a set saved before the window and zero-replies rule existed gets their defaults",
-  normalizeThresholds({ minSends: 300, minDays: 14, relativePct: 50 }, "google"), { minSends: 300, minDays: 14, relativePct: 50, windowDays: 60, zeroReplySends: 150 });
+  normalizeThresholds({ minSends: 300, minDays: 14, relativePct: 50 }, "google"), { minSends: 300, minDays: 14, relativePct: 50, windowDays: 60, zeroReplySends: 150, fleetPct: 50 });
 eq("the weekly window is 7 to 90 whole days", [
   validateThresholds({ minSends: 1, minDays: 1, relativePct: 50, windowDays: 6 }).length,
   validateThresholds({ minSends: 1, minDays: 1, relativePct: 50, windowDays: 91 }).length,
@@ -66,7 +66,7 @@ eq("a stored set from the old fixed-bar rule reads as the defaults",
   normalizeThresholds({ minSends: 100, replyOooPct: 1.5, replyPct: 0.5 }, "microsoft"), DEFAULT_THRESHOLDS.microsoft);
 eq("a stored file with one provider set keeps the other's default",
   normalizeSettings({ thresholds: { google: { minSends: 500, minDays: 7, relativePct: 60 } }, updatedAt: 7 }),
-  { thresholds: { google: { minSends: 500, minDays: 7, relativePct: 60, windowDays: 60, zeroReplySends: 150 }, microsoft: DEFAULT_THRESHOLDS.microsoft }, schedule: DEFAULT_SCHEDULE, updatedAt: 7 });
+  { thresholds: { google: { minSends: 500, minDays: 7, relativePct: 60, windowDays: 60, zeroReplySends: 150, fleetPct: 50 }, microsoft: DEFAULT_THRESHOLDS.microsoft }, schedule: DEFAULT_SCHEDULE, updatedAt: 7 });
 eq("…and nothing stored reads as the defaults, schedule off and report only",
   normalizeSettings(null), { thresholds: DEFAULT_SETTINGS.thresholds, schedule: { enabled: false, mode: "report", sheetUrl: "" }, updatedAt: 0 });
 eq("the schedule reads what it can", [normalizeSchedule({ enabled: true, mode: "remove", sheetUrl: " x " }), normalizeSchedule({ enabled: "yes", mode: "nuke" })],
@@ -74,7 +74,7 @@ eq("the schedule reads what it can", [normalizeSchedule({ enabled: true, mode: "
 eq("a count reads with the right noun", [S.countNoun(1, "google"), S.countNoun(11, "google"), S.countNoun(1, "microsoft"), S.countNoun(2, "microsoft")],
   ["1 inbox", "11 inboxes", "1 domain", "2 domains"]);
 eq("the bar reads as a sentence", describeThresholds("microsoft", DEFAULT_THRESHOLDS.microsoft),
-  "Microsoft domains · under 50% of their workspace's reply rate, on 750+ sends and 14+ days");
+  "Microsoft domains · under 50% of their workspace's and 50% of all workspaces' reply rate, on 750+ sends and 14+ days");
 
 // --- first send, from the daily chart --------------------------------------
 console.log("--- first send");
@@ -106,6 +106,20 @@ eq("…but not under 150 sends", z({ sent: 149 }), { verdict: "quiet", reason: "
 eq("…nor before the minimum days", z({ days: 10 }), { verdict: "quiet", reason: "few-sends" });
 eq("…nor with a single reply, OOO included", z({ anyReplies: 1 }), { verdict: "quiet", reason: "few-sends" });
 eq("…and 0 switches the rule off", judge({ sent: 400, days: 30, replyRate: 0, replyRateOoo: 0, hasFigures: true, baseline: null, anyReplies: 0 }, { ...ZT, zeroReplySends: 0 }), { verdict: "quiet", reason: "no-baseline" });
+// The all-workspaces bar: applied once every workspace is in.
+const row = (o) => ({ workspaceId: "w", workspaceName: "W", name: "x", domain: "d", inboxes: 1, sent: 300, contacted: 100, replies: 0, oooReplies: 0, replyRate: 0, replyRateOoo: 0, verdict: "ok", ...o });
+const fleetRows = [
+  row({ name: "strong-ws-trailing", contacted: 100, replies: 1, oooReplies: 2, replyRate: 1, replyRateOoo: 3, verdict: "burned" }),
+  row({ name: "weak", contacted: 100, replies: 0, oooReplies: 1, replyRate: 0, replyRateOoo: 1, verdict: "burned" }),
+  row({ name: "no-replies", contacted: 100, sent: 200, verdict: "burned", zeroReplies: true }),
+  row({ name: "fine", contacted: 700, replies: 7, oooReplies: 26, replyRate: 1, replyRateOoo: 4.71 }),
+];
+const fl = scan.applyFleetBar(fleetRows, 50);
+eq("the fleet rate is every row's replies + OOO over every row's contacted", [fl.fleet.replyRateOoo, fl.fleet.bar], [3.7, 1.85]);
+eq("a burned row at or above the bar is kept, marked as such", fl.rows.map((r) => [r.name, r.verdict, !!r.aboveFleet]),
+  [["strong-ws-trailing", "ok", true], ["weak", "burned", false], ["no-replies", "burned", false], ["fine", "ok", false]]);
+eq("…the zero-replies rule is never overruled, and the count says how many were kept", fl.fleet.kept, 1);
+eq("0 switches it off", [scan.applyFleetBar(fleetRows, 0).fleet, scan.applyFleetBar(fleetRows, 0).rows === fleetRows], [null, true]);
 // Real replies overrule a low OOO figure: something people answer is not burned.
 eq("real replies at half the workspace's real rate keep it", j({ replyRateOoo: 0.6, replyRate: 0.5 }), { verdict: "ok", rescued: true });
 eq("…but just under does not", j({ replyRateOoo: 0.6, replyRate: 0.49 }), { verdict: "burned" });

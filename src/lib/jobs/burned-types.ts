@@ -6,7 +6,7 @@
 // Nothing is written; the run only reports.
 
 import type { Esp, Thresholds } from "@/lib/burned/settings";
-import type { ScanCounts, ScanRow } from "@/lib/burned/scan";
+import type { FleetBar, ScanCounts, ScanRow } from "@/lib/burned/scan";
 
 export const MAX_STORED_ERRORS = 50;
 
@@ -45,6 +45,8 @@ export interface BurnedJob {
   end: string;
 
   workspaces: WorkspaceScan[];
+  /** The all-workspaces bar, once the run has read every workspace. */
+  fleet?: FleetBar;
   /** Every row judged, burned first. Capped so one run can't fill the disk. */
   rows: ScanRow[];
   rowsTruncated?: boolean;
