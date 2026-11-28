@@ -13,7 +13,7 @@ import { AlertIcon, ClockIcon, PlayIcon } from "@/components/icons";
 // The weekly run: on or off, report or remove, and how the last one went.
 //
 // It runs on the server with the server's key, every Monday at 06:00 Helsinki
-// over the last 30 days, on the thresholds saved below. Report only keeps the
+// over each provider's own window, on the thresholds saved below. Report only keeps the
 // scans here for someone to look at; Remove also records the burned rows in
 // the sheet and deletes their inboxes, exactly as the Remove button would.
 
@@ -105,8 +105,8 @@ export function WeeklyPanel({ onRunStarted }: { onRunStarted: () => void }) {
             <ClockIcon size={15} /> Weekly check
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Every Monday at 06:00 Helsinki, scans Microsoft domains and Google inboxes in every workspace over the last 30
-            days, using the numbers saved below for each provider.
+            Every Monday at 06:00 Helsinki, scans Microsoft domains and Google inboxes in every workspace, each over its own
+            window (Weekly run reads, below), using the numbers saved below for each provider.
           </p>
         </div>
         <button
