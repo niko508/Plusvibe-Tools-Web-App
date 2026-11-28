@@ -22,7 +22,9 @@ import {
   headerIndex,
   matchWorkspaceByClient,
   planGoogleTabWrites,
+  planQueueFill,
   planQueueTabWrites,
+  type QueueEntry,
 } from "@/lib/blocked-domains/sheet-plan";
 import { deleteInbox, fetchInboxStats, listInboxes, listWorkspaces, quarantineInboxes, type Inbox } from "@/lib/blocked-domains/api";
 import type { Workspace } from "@/lib/plusvibe-types";
@@ -33,7 +35,8 @@ import { findExisting } from "@/lib/tags/bulk-tags";
 import type { InboxLite } from "@/lib/inbox-tags/plan";
 import { listTags } from "@/lib/plusvibe-tags";
 import { JUDGE_WINDOW_DAYS, describeRemovalRule, judgeInbox, ratesOf, type InboxFigures } from "@/lib/blocked-inboxes/rules";
-import { isLastOnDomain, planCancellation, shouldCancel } from "@/lib/blocked-inboxes/domain-endings";
+import { blockingReason, isLastOnDomain, planCancellation, shouldCancel, workspaceCell } from "@/lib/blocked-inboxes/domain-endings";
+import { tenantFillEntries } from "@/lib/jobs/blocked-domains";
 import { bucketOf } from "@/lib/plusvibe-providers";
 import { daysAgo, toApiDate } from "@/lib/format";
 import {
@@ -242,6 +245,7 @@ const googleStopId = (domain: string) => `google-stop:${domain}`;
 export async function bootResume(): Promise<void> {
   await loadOnce();
   void backfillGoogleStops().catch(() => undefined);
+  void backfillTenantReasons().catch(() => undefined);
   // A registry that didn't answer is asked again later, so a domain's
   // platform is found even when the first lookup failed.
   const g = globalThis as { __pvPlatformBackfill?: ReturnType<typeof setInterval> };
@@ -961,26 +965,66 @@ async function writeNotActive(
   };
 }
 
-/** The domain and its tenant onto 🚯 Tenants to Cancel, once. */
-async function queueTenant(domain: string, tenant: string, source: string): Promise<{ queued: boolean; already: boolean; error?: string }> {
+/**
+ * The domain and its tenant onto 🚯 Tenants to Cancel, once — with why it was
+ * blocked and the Plusvibe workspace its inboxes were in, where the tab has
+ * a column for them.
+ */
+async function queueTenant(entry: QueueEntry): Promise<{ queued: boolean; already: boolean; error?: string }> {
   const sheetId = envSpreadsheetId();
   if (!sheetId || !isSheetWritingConfigured()) return { queued: false, already: false, error: "the sheet isn't set up for writing" };
-  return withSheet(() => writeTenant(sheetId, domain, tenant, source));
+  return withSheet(() => writeTenant(sheetId, entry));
 }
 
-async function writeTenant(sheetId: string, domain: string, tenant: string, source: string): Promise<{ queued: boolean; already: boolean; error?: string }> {
+async function writeTenant(sheetId: string, entry: QueueEntry): Promise<{ queued: boolean; already: boolean; error?: string }> {
   const grid = await readTab(sheetId, tenantsToCancelTab());
-  const plan = planQueueTabWrites(grid, [{ key: tenant, source, domain }], TENANT_QUEUE);
+  const plan = planQueueTabWrites(grid, [entry], TENANT_QUEUE);
   if (plan.problem) return { queued: false, already: false, error: plan.problem };
-  if (plan.already.length > 0) return { queued: false, already: true };
+  // A tenant already listed still has its blank reason and workspace filled.
   if (plan.updates.length > 0) {
     await batchUpdateCells(
       sheetId,
       plan.updates.map((u) => ({ range: `${quoteTab(tenantsToCancelTab())}!${columnLetter(u.column)}${u.row}`, value: u.value }))
     );
   }
+  if (plan.already.length > 0) return { queued: false, already: true };
   if (plan.append.length > 0) await appendRows(sheetId, tenantsToCancelTab(), plan.append);
   return { queued: true, already: false };
+}
+
+/** The Plusvibe workspaces a domain's inboxes are or were in, as the sheet shows them. */
+function workspacesOf(d: InboxDomainState, places: { workspaceName: string }[] = []): string {
+  return workspaceCell([
+    ...places.map((p) => p.workspaceName),
+    d.workspaceName,
+    ...[...records.values()].filter((r) => r.domain === d.domain).map((r) => r.workspaceName),
+  ]);
+}
+
+/**
+ * Tenants queued before 🚯 Tenants to Cancel had a Blocking Reason and a
+ * Plusvibe Workspace column: the blank cells of their rows are filled from
+ * the log. Only rows still on the tab, and only cells that are blank.
+ */
+async function backfillTenantReasons(): Promise<void> {
+  const sheetId = envSpreadsheetId();
+  if (!sheetId || !isSheetWritingConfigured()) return;
+  const entries: QueueEntry[] = [];
+  for (const d of domains.values()) {
+    if (!d.tenantEmail || d.cancelledAt === undefined) continue;
+    entries.push({ key: d.tenantEmail, source: "", domain: d.domain, reason: blockingReason(d), workspace: workspacesOf(d) });
+  }
+  // The domains the older, domain-level automation wrote off.
+  entries.push(...(await tenantFillEntries()));
+  if (entries.length === 0) return;
+  await withSheet(async () => {
+    const plan = planQueueFill(await readTab(sheetId, tenantsToCancelTab()), entries, TENANT_QUEUE);
+    if (plan.updates.length === 0) return;
+    await batchUpdateCells(
+      sheetId,
+      plan.updates.map((u) => ({ range: `${quoteTab(tenantsToCancelTab())}!${columnLetter(u.column)}${u.row}`, value: u.value }))
+    );
+  });
 }
 
 const DOMAIN_RE = /^(?=.{3,253}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
@@ -1334,7 +1378,13 @@ async function cancelDomain(domain: string): Promise<void> {
       for (const j of jobs) j.tenantSource = j.tenantSource ?? r.tenantSource;
       if (r.tenantEmail) {
         d.tenantEmail = r.tenantEmail;
-        const t = await queueTenant(domain, r.tenantEmail, r.tenantSource ?? "");
+        const t = await queueTenant({
+          key: r.tenantEmail,
+          source: r.tenantSource ?? "",
+          domain,
+          reason: blockingReason(d),
+          workspace: workspacesOf(d, places),
+        });
         d.tenantQueued = t.queued;
         d.tenantAlreadyQueued = t.already;
         if (t.error) domainError(d, `Could not queue the tenant on "${tenantsToCancelTab()}": ${t.error}`);

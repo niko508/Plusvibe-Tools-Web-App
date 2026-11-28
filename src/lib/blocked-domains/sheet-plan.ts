@@ -5,7 +5,8 @@
 //
 // Microsoft (and anything that isn't Google):
 //   📋 Domains             the domain's row → Status = "Not Active"
-//   🚯 Tenants to Cancel   a new row → Tenant, Tenant / Inbox Source
+//   🚯 Tenants to Cancel   a new row → Domain, Tenant, Blocking Reason,
+//                          Plusvibe Workspace, Tenant / Inbox Source
 //
 // Google Workspace has no tenant to cancel — each inbox is its own seat — so:
 //   🛑 Google Inboxes to Cancel  one row per burned inbox → Email Address,
@@ -35,6 +36,14 @@ export const COL_CANCEL_SOURCE = "Tenant / Inbox Source";
  * unrecognisable once a few dozen are queued.
  */
 export const COL_CANCEL_DOMAIN = "Domain";
+
+/**
+ * Why the tenant is on 🚯 Tenants to Cancel, and which Plusvibe workspace the
+ * domain's inboxes were in. Both are optional columns: a tab without them is
+ * filled exactly as before.
+ */
+export const COL_CANCEL_REASON = "Blocking Reason";
+export const COL_CANCEL_WORKSPACE = "Plusvibe Workspace";
 
 export const COL_GOOGLE_EMAIL = "Email Address";
 
@@ -205,7 +214,7 @@ export function buildGoogleCancelRow(
  */
 export function buildQueueRow(
   header: string[],
-  values: { key: string; source: string; domain?: string },
+  values: { key: string; source: string; domain?: string; reason?: string; workspace?: string },
   queue: QueueTab
 ): string[] {
   const width = Math.max(header.length, 1);
@@ -216,7 +225,23 @@ export function buildQueueRow(
   if (iKey >= 0) row[iKey] = values.key;
   if (iSource >= 0) row[iSource] = values.source;
   if (iDomain >= 0 && values.domain) row[iDomain] = values.domain;
+  for (const x of extraColumns(header, queue)) {
+    const v = (values[x.field] ?? "").trim();
+    if (v) row[x.column] = v;
+  }
   return row;
+}
+
+type ExtraField = "reason" | "workspace";
+
+/** The optional columns this tab has, and which value each takes. */
+function extraColumns(header: string[], queue: QueueTab): { field: ExtraField; column: number }[] {
+  const out: { field: ExtraField; column: number }[] = [];
+  const iReason = queue.reasonColumn ? headerIndex(header, queue.reasonColumn) : -1;
+  const iWorkspace = queue.workspaceColumn ? headerIndex(header, queue.workspaceColumn) : -1;
+  if (iReason >= 0) out.push({ field: "reason", column: iReason });
+  if (iWorkspace >= 0) out.push({ field: "workspace", column: iWorkspace });
+  return out;
 }
 
 export interface GoogleTabWrite {
@@ -237,6 +262,8 @@ export interface GoogleTabPlan {
   already: string[];
   /** Found stranded below blank rows and moved up into them. */
   moved: string[];
+  /** Already on the tab, with a blank reason or workspace cell beside them now filled. */
+  filled: string[];
   problem?: string;
 }
 
@@ -249,6 +276,10 @@ export interface QueueTab {
   sourceColumn: string;
   /** Where the domain goes, on the tabs that carry one. */
   domainColumn?: string;
+  /** Why the row is there, on the tabs that say. */
+  reasonColumn?: string;
+  /** The Plusvibe workspace the inboxes were in, on the tabs that say. */
+  workspaceColumn?: string;
   /** What the values are, for the problem text: "inboxes", "tenants". */
   noun: string;
 }
@@ -271,6 +302,8 @@ export const TENANT_QUEUE: QueueTab = {
   keyColumn: COL_CANCEL_TENANT,
   sourceColumn: COL_CANCEL_SOURCE,
   domainColumn: COL_CANCEL_DOMAIN,
+  reasonColumn: COL_CANCEL_REASON,
+  workspaceColumn: COL_CANCEL_WORKSPACE,
   noun: "tenants",
 };
 
@@ -300,6 +333,10 @@ export interface QueueEntry {
   source: string;
   /** The domain this came from, for the tabs that have a column for it. */
   domain?: string;
+  /** Why it is being queued, for the tabs that have a column for it. */
+  reason?: string;
+  /** The Plusvibe workspace its inboxes were in, likewise. */
+  workspace?: string;
 }
 
 /**
@@ -321,7 +358,8 @@ export function planQueueTabWrites(
   const iEmail = headerIndex(header, queue.keyColumn);
   const iSource = headerIndex(header, queue.sourceColumn);
   const iDomain = queue.domainColumn ? headerIndex(header, queue.domainColumn) : -1;
-  const out: GoogleTabPlan = { updates: [], append: [], queued: [], already: [], moved: [] };
+  const extras = extraColumns(header, queue);
+  const out: GoogleTabPlan = { updates: [], append: [], queued: [], already: [], moved: [], filled: [] };
   if (iEmail < 0) {
     out.problem = `The "${queue.tab}" tab has no ${queue.keyColumn} column, so no ${queue.noun} were listed there.`;
     return out;
@@ -339,6 +377,10 @@ export function planQueueTabWrites(
     out.updates.push({ row: slot, column: iEmail, value: email });
     if (iSource >= 0 && entry.source) out.updates.push({ row: slot, column: iSource, value: entry.source });
     if (iDomain >= 0 && entry.domain) out.updates.push({ row: slot, column: iDomain, value: entry.domain });
+    for (const x of extras) {
+      const v = (entry[x.field] ?? "").trim();
+      if (v) out.updates.push({ row: slot, column: x.column, value: v });
+    }
   };
   const seen = new Set<string>();
   for (const entry of entries) {
@@ -348,6 +390,12 @@ export function planQueueTabWrites(
     const existing = rowOf.get(email);
     if (existing !== undefined && existing < firstBlank) {
       out.already.push(email);
+      // Queued before the tab said why: the blank cells beside it are filled.
+      const fills = blankExtras(grid, existing, entry, extras, iDomain);
+      if (fills.length > 0) {
+        out.updates.push(...fills);
+        out.filled.push(email);
+      }
       continue;
     }
     const slot = blanks.shift();
@@ -357,16 +405,88 @@ export function planQueueTabWrites(
         out.already.push(email);
         continue;
       }
-      place(entry, email, slot);
+      // What the old row already said goes with it when this entry says nothing.
+      const carried: QueueEntry = { ...entry };
+      for (const x of extras) carried[x.field] = (entry[x.field] ?? "").trim() || cell(existing, x.column);
+      place(carried, email, slot);
       out.updates.push({ row: existing, column: iEmail, value: "" });
       if (iSource >= 0) out.updates.push({ row: existing, column: iSource, value: "" });
       if (iDomain >= 0) out.updates.push({ row: existing, column: iDomain, value: "" });
+      for (const x of extras) if (cell(existing, x.column)) out.updates.push({ row: existing, column: x.column, value: "" });
       out.moved.push(email);
       continue;
     }
     if (slot !== undefined) place(entry, email, slot);
-    else out.append.push(buildQueueRow(header, { key: email, source: entry.source, domain: entry.domain }, queue));
+    else
+      out.append.push(
+        buildQueueRow(header, { key: email, source: entry.source, domain: entry.domain, reason: entry.reason, workspace: entry.workspace }, queue)
+      );
     out.queued.push(email);
+  }
+  return out;
+}
+
+/**
+ * The writes that fill a row's blank reason and workspace cells from an entry.
+ *
+ * Only blank cells: what someone typed there stays. And only when the row is
+ * about the same domain as the entry, where both say — a tenant can carry
+ * more than one domain, and the reason one was blocked is not the other's.
+ */
+function blankExtras(
+  grid: string[][],
+  row: number,
+  entry: QueueEntry,
+  extras: { field: ExtraField; column: number }[],
+  iDomain: number
+): GoogleTabWrite[] {
+  const at = (c: number) => String(grid[row - 1]?.[c] ?? "").trim();
+  if (iDomain >= 0 && entry.domain) {
+    const there = normalizeDomain(at(iDomain));
+    if (there && there !== normalizeDomain(entry.domain)) return [];
+  }
+  const out: GoogleTabWrite[] = [];
+  for (const x of extras) {
+    const v = (entry[x.field] ?? "").trim();
+    if (v && !at(x.column)) out.push({ row, column: x.column, value: v });
+  }
+  return out;
+}
+
+/**
+ * Fills the blank reason and workspace cells of rows ALREADY on a cancel tab.
+ *
+ * For rows queued before the tab had those columns. Nothing is added: an
+ * entry that isn't on the tab is left off it — someone may have cancelled the
+ * tenant and removed the row, and this must not put it back.
+ */
+export function planQueueFill(
+  grid: string[][],
+  entries: QueueEntry[],
+  queue: QueueTab
+): { updates: GoogleTabWrite[]; filled: string[] } {
+  const header = grid[0] ?? [];
+  const iKey = headerIndex(header, queue.keyColumn);
+  const iDomain = queue.domainColumn ? headerIndex(header, queue.domainColumn) : -1;
+  const extras = extraColumns(header, queue);
+  const out = { updates: [] as GoogleTabWrite[], filled: [] as string[] };
+  if (iKey < 0 || extras.length === 0) return out;
+  const rowsOf = new Map<string, number[]>();
+  for (let r = 2; r <= grid.length; r++) {
+    const key = String(grid[r - 1]?.[iKey] ?? "").trim().toLowerCase();
+    if (key) rowsOf.set(key, [...(rowsOf.get(key) ?? []), r]);
+  }
+  // A cell is filled once, by the first entry that has something for it.
+  const taken = new Set<string>();
+  for (const entry of entries) {
+    const key = entry.key.trim().toLowerCase();
+    for (const row of rowsOf.get(key) ?? []) {
+      const fills = blankExtras(grid, row, entry, extras, iDomain).filter((u) => !taken.has(`${u.row}:${u.column}`));
+      if (fills.length === 0) continue;
+      for (const u of fills) taken.add(`${u.row}:${u.column}`);
+      out.updates.push(...fills);
+      if (!out.filled.includes(key)) out.filled.push(key);
+    }
   }
   return out;
 }
@@ -403,11 +523,11 @@ export function googleInboxesToQueue(
  */
 export function buildCancelRow(
   header: string[],
-  values: { tenant: string; source: string; domain?: string }
+  values: { tenant: string; source: string; domain?: string; reason?: string; workspace?: string }
 ): string[] {
   return buildQueueRow(
     header,
-    { key: values.tenant, source: values.source, domain: values.domain },
+    { key: values.tenant, source: values.source, domain: values.domain, reason: values.reason, workspace: values.workspace },
     TENANT_QUEUE
   );
 }

@@ -31,6 +31,7 @@ import {
   planGoogleTabWrites,
   planQueueTabWrites,
   matchWorkspaceByClient,
+  type QueueEntry,
 } from "@/lib/blocked-domains/sheet-plan";
 import { loadSettings } from "@/lib/blocked-domains/settings";
 import {
@@ -1110,15 +1111,16 @@ async function runSheet(rec: BlockedDomainJob) {
             key: hit.row.tenantEmail,
             source: hit.row.tenantSource,
             domain: rec.domain,
+            ...tenantRowExtras(rec),
           },
         ],
         TENANT_QUEUE
       );
       if (tenantPlan.problem) {
         pushError(rec, tenantPlan.problem);
-      } else if (tenantPlan.already.length > 0) {
-        outcome.tenantAlreadyQueued = true;
       } else {
+        // Written for a tenant already listed too: its blank Blocking Reason
+        // and Plusvibe Workspace cells are filled, nothing else.
         if (tenantPlan.updates.length > 0) {
           await batchUpdateCells(
             sheetId,
@@ -1128,10 +1130,14 @@ async function runSheet(rec: BlockedDomainJob) {
             }))
           );
         }
-        if (tenantPlan.append.length > 0) {
-          await appendRows(sheetId, tenantsToCancelTab(), tenantPlan.append);
+        if (tenantPlan.already.length > 0) {
+          outcome.tenantAlreadyQueued = true;
+        } else {
+          if (tenantPlan.append.length > 0) {
+            await appendRows(sheetId, tenantsToCancelTab(), tenantPlan.append);
+          }
+          outcome.tenantQueued = true;
         }
-        outcome.tenantQueued = true;
       }
     }
 
@@ -1141,6 +1147,31 @@ async function runSheet(rec: BlockedDomainJob) {
     rec.phaseStates.sheet = "error";
     pushError(rec, `Sheet update failed: ${msg(err)}`);
   }
+}
+
+/**
+ * What a domain's row on 🚯 Tenants to Cancel says beside the tenant: why it
+ * was blocked, and the Plusvibe workspace its inboxes were in. Every run of
+ * this automation started from Clay's Domain Blocked, or by hand on the page.
+ */
+function tenantRowExtras(rec: BlockedDomainJob): { reason: string; workspace: string } {
+  return { reason: "Domain Blocked", workspace: rec.workspaceName?.trim() ?? "" };
+}
+
+/**
+ * The tenants this automation queued, with what their rows should say — for
+ * filling the blank Blocking Reason and Plusvibe Workspace cells of rows
+ * queued before the tab had those columns.
+ */
+export async function tenantFillEntries(): Promise<QueueEntry[]> {
+  await loadOnce();
+  const out: QueueEntry[] = [];
+  for (const rec of records.values()) {
+    const tenant = rec.sheet?.tenantEmail;
+    if (!tenant || !(rec.sheet?.tenantQueued || rec.sheet?.tenantAlreadyQueued)) continue;
+    out.push({ key: tenant, source: "", domain: rec.domain, ...tenantRowExtras(rec) });
+  }
+  return out;
 }
 
 // --- Repeat checks ---------------------------------------------------------

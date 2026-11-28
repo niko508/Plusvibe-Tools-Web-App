@@ -16,7 +16,7 @@ const eq = (label, got, want) => {
   }
 };
 
-const { isLastOnDomain, shouldCancel, planCancellation } = await importTs("@/lib/blocked-inboxes/domain-endings");
+const { isLastOnDomain, shouldCancel, planCancellation, blockingReason, workspaceCell } = await importTs("@/lib/blocked-inboxes/domain-endings");
 
 console.log("--- the last Google inbox");
 const onDomain = ["a@g.com", "b@g.com", "c@g.com"];
@@ -43,6 +43,14 @@ const plan = planCancellation([
 eq("kept: at or above the 1% bar, OOO replies counted", plan.keep.map((k) => [k.email, k.oooReplyRate]), [["replying@m.com", 1], ["ooo-only@m.com", 2]]);
 eq("cancelled: under the bar, no figures, or nothing sent", plan.cancel.map((c) => c.email), ["quiet@m.com", "just-under@m.com", "unread@m.com", "idle@m.com"]);
 eq("the bar is the setting's", planCancellation([{ inbox: 1, email: "x@m.com", figures: f(100, 100, 2, 0) }], 3).keep.length, 0);
+
+console.log("--- what 🚯 Tenants to Cancel says beside the tenant");
+eq("Clay's Tenant Block", blockingReason({ cancelReason: "tenant-block", blockColumn: "tenant-block" }), "Tenant Block");
+eq("Clay's Domain Blocked", blockingReason({ cancelReason: "tenant-block", blockColumn: "domain-blocked" }), "Domain Blocked");
+eq("an older record, from before the column was kept, was a Tenant Block", blockingReason({ cancelReason: "tenant-block" }), "Tenant Block");
+eq("cancelled after too many deletions is a Tenant Block", [blockingReason({ cancelReason: "deleted-count" }), blockingReason({})], ["Tenant Block", "Tenant Block"]);
+eq("workspaces: each once, in order, blanks dropped", workspaceCell(["Acme", undefined, " acme ", "", "Beta"]), "Acme, Beta");
+eq("no workspace known leaves the cell blank", workspaceCell([undefined, ""]), "");
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

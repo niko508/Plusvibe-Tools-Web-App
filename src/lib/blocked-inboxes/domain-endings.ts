@@ -38,6 +38,35 @@ export function shouldCancel(state: { deletedByRules: number; cancelledAt?: numb
   return state.deletedByRules > after && state.cancelledAt === undefined && !state.cancelling;
 }
 
+/**
+ * The Blocking Reason column of 🚯 Tenants to Cancel. The sheet's dropdown has
+ * exactly two values, and they follow the tool's own two lists: a domain on
+ * Blocked Domains (Clay's Domain Blocked) is "Domain Blocked"; everything on
+ * Tenant Blocks — Clay's Tenant Block, a block by hand, a Microsoft domain
+ * cancelled after too many deletions — is "Tenant Block".
+ */
+export type BlockingReason = "Domain Blocked" | "Tenant Block";
+
+export function blockingReason(state: {
+  cancelReason?: "deleted-count" | "tenant-block";
+  blockColumn?: "domain-blocked" | "tenant-block";
+}): BlockingReason {
+  return state.cancelReason === "tenant-block" && state.blockColumn === "domain-blocked" ? "Domain Blocked" : "Tenant Block";
+}
+
+/** Workspace names as one cell: each once, in the order given, blanks dropped. */
+export function workspaceCell(names: Iterable<string | undefined>): string {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of names) {
+    const name = (raw ?? "").trim();
+    if (!name || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    out.push(name);
+  }
+  return out.join(", ");
+}
+
 export interface CancelCandidate<T> {
   inbox: T;
   email: string;

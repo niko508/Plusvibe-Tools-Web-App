@@ -165,6 +165,85 @@ eq("…and a moved row leaves no domain behind",
     { row: 3, column: 0, value: "" },
   ]);
 
+// The tab as it is laid out now: why the tenant is there, and which Plusvibe
+// workspace the domain's inboxes were in, between the tenant and its source.
+const CANCEL_FULL = ["Domain", "Tenant", "Blocking Reason", "Plusvibe Workspace", "Tenant / Inbox Source"];
+const FULL_ENTRY = { key: "a@t.onmicrosoft.com", source: "CGC", domain: "lavasi.pro", reason: "Tenant Block", workspace: "Acme" };
+eq("the reason and the workspace land in their columns",
+  sp.buildCancelRow(CANCEL_FULL, { tenant: "a@t.onmicrosoft.com", source: "CGC", domain: "lavasi.pro", reason: "Tenant Block", workspace: "Acme" }),
+  ["lavasi.pro", "a@t.onmicrosoft.com", "Tenant Block", "Acme", "CGC"]);
+eq("…and into the first blank row with the rest",
+  sp.planQueueTabWrites([CANCEL_FULL, ["", "", "", "", "–"]], [FULL_ENTRY], sp.TENANT_QUEUE).updates,
+  [
+    { row: 2, column: 1, value: "a@t.onmicrosoft.com" },
+    { row: 2, column: 4, value: "CGC" },
+    { row: 2, column: 0, value: "lavasi.pro" },
+    { row: 2, column: 2, value: "Tenant Block" },
+    { row: 2, column: 3, value: "Acme" },
+  ]);
+eq("an appended row carries them too",
+  sp.planQueueTabWrites([CANCEL_FULL], [FULL_ENTRY], sp.TENANT_QUEUE).append,
+  [["lavasi.pro", "a@t.onmicrosoft.com", "Tenant Block", "Acme", "CGC"]]);
+eq("a tab without the two columns is written exactly as before",
+  sp.planQueueTabWrites([CANCEL_WITH_DOMAIN, ["", "", "–"]], [FULL_ENTRY], sp.TENANT_QUEUE).updates.length, 3);
+eq("an entry that says neither leaves both cells alone",
+  sp.planQueueTabWrites([CANCEL_FULL, ["", "", "", "", "–"]],
+    [{ key: "a@t.onmicrosoft.com", source: "CGC", domain: "lavasi.pro" }], sp.TENANT_QUEUE).updates.map((u) => u.column),
+  [1, 4, 0]);
+// A tenant queued before the tab said why: it is not queued again, but the
+// blank cells beside it are filled.
+const queuedBare = sp.planQueueTabWrites(
+  [CANCEL_FULL, ["lavasi.pro", "a@t.onmicrosoft.com", "", "", "CGC"], ["", "", "", "", "–"]], [FULL_ENTRY], sp.TENANT_QUEUE);
+eq("an already-queued tenant has its blank reason and workspace filled",
+  [queuedBare.already, queuedBare.queued, queuedBare.filled, queuedBare.updates],
+  [["a@t.onmicrosoft.com"], [], ["a@t.onmicrosoft.com"], [
+    { row: 2, column: 2, value: "Tenant Block" },
+    { row: 2, column: 3, value: "Acme" },
+  ]]);
+eq("…but what someone typed there stays",
+  sp.planQueueTabWrites([CANCEL_FULL, ["lavasi.pro", "a@t.onmicrosoft.com", "my note", "", "CGC"]], [FULL_ENTRY], sp.TENANT_QUEUE).updates,
+  [{ row: 2, column: 3, value: "Acme" }]);
+eq("…and a row queued for another domain on the same tenant is left alone",
+  sp.planQueueTabWrites([CANCEL_FULL, ["other.pro", "a@t.onmicrosoft.com", "", "", "CGC"]], [FULL_ENTRY], sp.TENANT_QUEUE).updates,
+  []);
+// A stranded row moved up keeps what it said, and leaves nothing behind.
+const movedFull = sp.planQueueTabWrites(
+  [CANCEL_FULL, ["", "", "", "", "–"], ["lavasi.pro", "a@t.onmicrosoft.com", "Domain Blocked", "Old WS", "CGC"]],
+  [{ key: "a@t.onmicrosoft.com", source: "CGC", domain: "lavasi.pro" }], sp.TENANT_QUEUE);
+eq("a moved row takes its reason and workspace with it",
+  movedFull.updates.filter((u) => u.row === 2 && u.column >= 2 && u.column <= 3),
+  [{ row: 2, column: 2, value: "Domain Blocked" }, { row: 2, column: 3, value: "Old WS" }]);
+eq("…and clears them where it was",
+  movedFull.updates.filter((u) => u.row === 3 && u.column >= 2 && u.column <= 3),
+  [{ row: 3, column: 2, value: "" }, { row: 3, column: 3, value: "" }]);
+// Filling the rows queued before the columns existed: only rows on the tab,
+// only blank cells.
+const fill = sp.planQueueFill(
+  [CANCEL_FULL,
+    ["lavasi.pro", "a@t.onmicrosoft.com", "", "", "CGC"],
+    ["kept.pro", "b@t.onmicrosoft.com", "Tenant Block", "", "CGC"],
+    ["", "", "", "", "–"]],
+  [
+    FULL_ENTRY,
+    { key: "B@t.onmicrosoft.com", source: "", domain: "kept.pro", reason: "Tenant Block", workspace: "Beta" },
+    { key: "gone@t.onmicrosoft.com", source: "", domain: "gone.pro", reason: "Tenant Block", workspace: "Gamma" },
+    { key: "a@t.onmicrosoft.com", source: "", domain: "lavasi.pro", reason: "Domain Blocked", workspace: "Older" },
+  ], sp.TENANT_QUEUE);
+eq("old rows have their blank cells filled, the first entry winning",
+  fill.updates,
+  [
+    { row: 2, column: 2, value: "Tenant Block" },
+    { row: 2, column: 3, value: "Acme" },
+    { row: 3, column: 3, value: "Beta" },
+  ]);
+eq("…and a tenant no longer on the tab is not put back", fill.filled, ["a@t.onmicrosoft.com", "b@t.onmicrosoft.com"]);
+eq("a tab without the two columns has nothing to fill",
+  sp.planQueueFill([CANCEL_WITH_DOMAIN, ["lavasi.pro", "a@t.onmicrosoft.com", "CGC"]], [FULL_ENTRY], sp.TENANT_QUEUE).updates, []);
+eq("the Google cancel tab never takes a reason or a workspace",
+  sp.planQueueTabWrites([["Domain", "Email Address", "Blocking Reason", "Tenant / Inbox Source"], ["", "", "", "–"]],
+    [{ key: "a@x.com", source: "", domain: "x.com", reason: "Tenant Block", workspace: "Acme" }], sp.GOOGLE_QUEUE).updates.map((u) => u.column),
+  [1, 0]);
+
 // The tab is append-only, so a second blocked domain on the same tenant must
 // not queue it twice.
 const CANCEL_GRID = [CANCEL_HEADER, ["admin@lava.onmicrosoft.com", "CGC", "", ""]];
