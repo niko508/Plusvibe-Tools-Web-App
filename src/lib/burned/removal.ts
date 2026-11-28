@@ -211,10 +211,15 @@ export function planDomainsTab(
  * the rest record that it was already accounted for. That first domain is
  * also the one written into the tab's Domain column.
  */
+/** The Blocking Reason a burned domain's tenant is queued with — one of the sheet's dropdown values. */
+export const BURNED_REASON = "Burned Domain";
+
 export function tenantsToQueue(
-  lookups: DomainLookup[]
-): { entries: { key: string; source: string; domain: string }[]; missing: string[] } {
-  const entries: { key: string; source: string; domain: string }[] = [];
+  lookups: DomainLookup[],
+  /** Domain → the Plusvibe workspace its inboxes were in, for the Plusvibe Workspace column. */
+  workspaceOf: Map<string, string> = new Map()
+): { entries: { key: string; source: string; domain: string; reason: string; workspace: string }[]; missing: string[] } {
+  const entries: { key: string; source: string; domain: string; reason: string; workspace: string }[] = [];
   const missing: string[] = [];
   const seen = new Set<string>();
   for (const l of lookups) {
@@ -229,7 +234,7 @@ export function tenantsToQueue(
     seen.add(key);
     // The domain is the one whose row named this tenant — the whole point of
     // the column is to say what sent it to the cancellation list.
-    entries.push({ key: tenant, source: l.tenantSource, domain: l.domain });
+    entries.push({ key: tenant, source: l.tenantSource, domain: l.domain, reason: BURNED_REASON, workspace: workspaceOf.get(l.domain) ?? "" });
   }
   return { entries, missing };
 }

@@ -132,14 +132,17 @@ eq("a header with stray padding still matches",
 
 // --- 🚯 Tenants to Cancel ---------------------------------------------------
 console.log("--- the tenants");
+eq("a burned domain's tenant is queued as Burned Domain, with its workspace",
+  tenantsToQueue([{ domain: "a.io", rowNumber: 2, matches: 1, status: "", tenantEmail: "t@x.onmicrosoft.com", tenantSource: "CGC" }], new Map([["a.io", "Acme"]])).entries,
+  [{ key: "t@x.onmicrosoft.com", source: "CGC", domain: "a.io", reason: "Burned Domain", workspace: "Acme" }]);
 const tq = tenantsToQueue(plan.lookups);
 eq("a domain with no tenant is reported, not queued blank", tq.missing, ["notenant.io"]);
 eq("every tenant that was found is queued with its own source and domain",
   tq.entries,
   [
-    { key: "admin@burnedco.onmicrosoft.com", source: "Cheap Inboxes", domain: "burned.io" },
-    { key: "admin@alreadyco.onmicrosoft.com", source: "Cheap Inboxes", domain: "already.io" },
-    { key: "admin@twiceco.onmicrosoft.com", source: "Cheap Inboxes", domain: "twice.io" },
+    { key: "admin@burnedco.onmicrosoft.com", source: "Cheap Inboxes", domain: "burned.io", reason: "Burned Domain", workspace: "" },
+    { key: "admin@alreadyco.onmicrosoft.com", source: "Cheap Inboxes", domain: "already.io", reason: "Burned Domain", workspace: "" },
+    { key: "admin@twiceco.onmicrosoft.com", source: "Cheap Inboxes", domain: "twice.io", reason: "Burned Domain", workspace: "" },
   ]);
 // Several burned domains normally sit on one tenant, and cancelling it once
 // is the point.
@@ -147,7 +150,7 @@ eq("one tenant behind two domains is queued once, under the first domain",
   tenantsToQueue([
     { domain: "a.io", rowNumber: 2, matches: 1, status: "", tenantEmail: "t@x.com", tenantSource: "S" },
     { domain: "b.io", rowNumber: 3, matches: 1, status: "", tenantEmail: "T@X.com", tenantSource: "S" },
-  ]).entries, [{ key: "t@x.com", source: "S", domain: "a.io" }]);
+  ]).entries, [{ key: "t@x.com", source: "S", domain: "a.io", reason: "Burned Domain", workspace: "" }]);
 eq("a domain that was never found has no tenant to queue",
   tenantsToQueue([{ domain: "a.io", matches: 0, status: "", tenantEmail: "", tenantSource: "" }]),
   { entries: [], missing: [] });

@@ -449,7 +449,14 @@ async function runSheet(rec: BurnedRemovalJob, targets: RemovalTarget[], check: 
   // The tenants. Deliberately independent of the status above: a domain that
   // was already "Not Active" still has a tenant to cancel, and one marked by
   // hand is exactly where the tenant is most likely to have been forgotten.
-  const { entries, missing } = tenantsToQueue(plan.lookups);
+  // Each tenant goes on with why (Burned Domain) and the workspace its domain was in.
+  const workspaceOf = new Map<string, string>();
+  for (const t of targets) {
+    const d = t.domain || t.name;
+    const names = new Set([...(workspaceOf.get(d)?.split(", ") ?? []), t.workspaceName].filter(Boolean));
+    workspaceOf.set(d, [...names].join(", "));
+  }
+  const { entries, missing } = tenantsToQueue(plan.lookups, workspaceOf);
   for (const domain of missing) {
     pushError(
       rec,
