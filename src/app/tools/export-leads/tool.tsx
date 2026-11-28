@@ -1,0 +1,458 @@
+"use client";
+
+// The Export tab of Export/Remove Not Contacted Leads. The campaigns are read
+// one page at a time from the browser — a campaign of tens of thousands of leads never has to fit in
+// one request — then combined into one CSV and downloaded. Downloading only
+// reads; deleting the exported leads is a separate, confirmed step offered
+// once a complete download has happened.
+
+import { useRef, useState } from "react";
+import { deleteCampaignLeads, fetchNotContactedPage } from "@/lib/api-client";
+import { withRetry } from "@/lib/client-retry";
+import { CampaignPick, errMessage, useCampaignPick } from "@/components/campaign-pick";
+import { columnsOf, combineLeads, deletionPlan, DELETE_CHUNK, fileName, toCsv, type CampaignLeads } from "@/lib/export-leads/rows";
+import { useApiKey } from "@/lib/use-api-key";
+import { formatNumber } from "@/lib/format";
+import { ConnectPrompt } from "@/components/connect-prompt";
+import { Spinner } from "@/components/ui";
+import { AlertIcon, CheckIcon, DownloadIcon, TrashIcon } from "@/components/icons";
+
+
+interface Progress {
+  campaign: string;
+  index: number;
+  total: number;
+  read: number;
+  /** Seconds until a failed page is tried again. */
+  retry?: number;
+}
+
+/** Where an export is: kept when it fails, so it can carry on from there. */
+interface RunState {
+  order: { id: string; name: string }[];
+  collected: CampaignLeads[];
+  /** The campaign and page to read next. */
+  i: number;
+  page: number;
+  wrongStatus: number;
+}
+
+interface Done {
+  rows: number;
+  merged: number;
+  columns: number;
+  perCampaign: { name: string; leads: number }[];
+  wrongStatus: number;
+  stopped: boolean;
+  file: string;
+}
+
+/** What a complete download exported, per campaign — what a delete may remove. */
+interface Exported {
+  campaignId: string;
+  campaignName: string;
+  emails: string[];
+}
+
+interface DeleteProgress {
+  campaign: string;
+  index: number;
+  total: number;
+  step: "checking" | "deleting";
+  done: number;
+  retry?: number;
+}
+
+interface DeleteResult {
+  campaignName: string;
+  deleted: number;
+  /** Exported but no longer not-contacted (contacted since, or already gone): kept. */
+  skipped: number;
+  error?: string;
+}
+
+export function ExportLeadsTool() {
+  const { hasKey, ready } = useApiKey();
+  const [onePerEmail, setOnePerEmail] = useState(true);
+  const [progress, setProgress] = useState<Progress | null>(null);
+  const [done, setDone] = useState<Done | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [exported, setExported] = useState<Exported[] | null>(null);
+  const [confirmText, setConfirmText] = useState("");
+  const [delProgress, setDelProgress] = useState<DeleteProgress | null>(null);
+  const [delResults, setDelResults] = useState<{ results: DeleteResult[]; stopped: boolean } | null>(null);
+  const [failed, setFailed] = useState<{ message: string; read: number } | null>(null);
+  const resumeRef = useRef<RunState | null>(null);
+  const ctrl = useRef<AbortController | null>(null);
+  const delCtrl = useRef<AbortController | null>(null);
+  const pick = useCampaignPick({
+    enabled: ready && hasKey,
+    onError: setError,
+    // Results, a delete offer and a failed run all belong to the old pick.
+    onChange: () => {
+      setDone(null);
+      setExported(null);
+      setDelResults(null);
+      setFailed(null);
+      resumeRef.current = null;
+    },
+  });
+  const { workspaces, ws, campaigns, picked, expected } = pick;
+
+  const deleting = delProgress !== null;
+  const running = progress !== null || deleting;
+  const toDelete = exported?.reduce((n, x) => n + x.emails.length, 0) ?? 0;
+  const confirmed = confirmText.trim().toUpperCase() === "DELETE" || confirmText.trim().replace(/[,\s]/g, "") === String(toDelete);
+
+  /** Starts a fresh export, or picks up a failed one where it stopped. */
+  async function run(resume = false) {
+    if (running) return;
+    let st = resume ? resumeRef.current : null;
+    if (!st) {
+      if (picked.length === 0) return;
+      st = { order: campaigns.filter((x) => picked.includes(x.id)).map((x) => ({ id: x.id, name: x.name })), collected: [], i: 0, page: 1, wrongStatus: 0 };
+    }
+    resumeRef.current = null;
+    const c = new AbortController();
+    ctrl.current = c;
+    setError(null);
+    setFailed(null);
+    setDone(null);
+    setExported(null);
+    setDelResults(null);
+    setConfirmText("");
+    let stopped = false;
+    try {
+      for (; st.i < st.order.length; ) {
+        const camp = st.order[st.i];
+        if (!st.collected[st.i]) st.collected[st.i] = { campaignName: camp.name, rows: [] };
+        const rows = st.collected[st.i].rows;
+        const at = { campaign: camp.name, index: st.i, total: st.order.length, read: rows.length };
+        setProgress(at);
+        const page = st.page;
+        const r = await withRetry(
+          () => fetchNotContactedPage({ workspace_id: ws, campaign_id: camp.id, page }, c.signal),
+          c.signal,
+          (secs) => setProgress({ ...at, retry: secs })
+        );
+        // The position moves on only once a page is in, so a resume never
+        // reads a page twice or skips one.
+        rows.push(...r.leads);
+        st.wrongStatus += r.wrongStatus;
+        if (r.more) st.page += 1;
+        else {
+          st.i += 1;
+          st.page = 1;
+        }
+      }
+    } catch (err) {
+      if (c.signal.aborted) stopped = true;
+      else {
+        resumeRef.current = st;
+        setFailed({ message: errMessage(err), read: st.collected.reduce((n, x) => n + x.rows.length, 0) });
+        setProgress(null);
+        ctrl.current = null;
+        return;
+      }
+    }
+    finish(st, stopped);
+  }
+
+  /** Builds and downloads the CSV from what a run read; `partial` when it didn't finish. */
+  function finish(st: RunState, partial: boolean) {
+    resumeRef.current = null;
+    setFailed(null);
+    const collected = st.collected.filter(Boolean);
+    const { rows, merged } = combineLeads(collected, onePerEmail);
+    const columns = columnsOf(rows);
+    const name = fileName(workspaces.find((w) => w._id === ws)?.name ?? "workspace", new Date().toISOString().slice(0, 10));
+    if (rows.length > 0) {
+      const blob = new Blob(["\uFEFF" + toCsv(rows, columns)], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
+    // Only a complete download can be followed by a delete: after a stop, the
+    // CSV is missing leads the delete would otherwise have to guess at.
+    if (!partial && rows.length > 0) {
+      setExported(
+        st.order.map((camp, i) => ({
+          campaignId: camp.id,
+          campaignName: camp.name,
+          emails: st.collected[i].rows.map((r) => String(r.email ?? "").trim()).filter(Boolean),
+        }))
+      );
+    }
+    setDone({
+      rows: rows.length,
+      merged,
+      columns: columns.length,
+      perCampaign: collected.map((x) => ({ name: x.campaignName, leads: x.rows.length })),
+      wrongStatus: st.wrongStatus,
+      stopped: partial,
+      file: name,
+    });
+    setProgress(null);
+    ctrl.current = null;
+  }
+
+  /**
+   * Deletes the exported leads, each from the campaign it was exported from.
+   * Every campaign's not-contacted leads are read again first and only leads
+   * that are still not contacted are deleted — one contacted since the
+   * download keeps its history in the campaign.
+   */
+  async function deleteExported() {
+    if (!exported || running || !confirmed) return;
+    const c = new AbortController();
+    delCtrl.current = c;
+    setError(null);
+    const results: DeleteResult[] = [];
+    let stopped = false;
+    for (let i = 0; i < exported.length; i++) {
+      const camp = exported[i];
+      if (camp.emails.length === 0) continue;
+      const result: DeleteResult = { campaignName: camp.campaignName, deleted: 0, skipped: 0 };
+      results.push(result);
+      try {
+        const current: string[] = [];
+        for (let page = 1; ; page++) {
+          const at: DeleteProgress = { campaign: camp.campaignName, index: i, total: exported.length, step: "checking", done: current.length };
+          setDelProgress(at);
+          const r = await withRetry(
+            () => fetchNotContactedPage({ workspace_id: ws, campaign_id: camp.campaignId, page }, c.signal),
+            c.signal,
+            (secs) => setDelProgress({ ...at, retry: secs })
+          );
+          for (const l of r.leads) if (l.email) current.push(String(l.email));
+          if (!r.more) break;
+        }
+        const plan = deletionPlan(camp.emails, current);
+        result.skipped = plan.skipped;
+        for (let k = 0; k < plan.remove.length; k += DELETE_CHUNK) {
+          const at: DeleteProgress = { campaign: camp.campaignName, index: i, total: exported.length, step: "deleting", done: result.deleted };
+          setDelProgress(at);
+          const chunk = plan.remove.slice(k, k + DELETE_CHUNK);
+          // Deleting the same addresses twice is harmless, so a retry after a
+          // lost response is safe.
+          await withRetry(
+            () => deleteCampaignLeads({ workspaceId: ws, campaignId: camp.campaignId, emails: chunk }, c.signal),
+            c.signal,
+            (secs) => setDelProgress({ ...at, retry: secs })
+          );
+          result.deleted += chunk.length;
+        }
+      } catch (err) {
+        if (c.signal.aborted) {
+          stopped = true;
+          break;
+        }
+        result.error = errMessage(err);
+      }
+    }
+    setDelResults({ results, stopped });
+    setDelProgress(null);
+    setConfirmText("");
+    // What was deleted can't be deleted again; a stopped or failed run can be
+    // finished by downloading afresh.
+    setExported(null);
+    pick.refreshCounts();
+    delCtrl.current = null;
+  }
+
+  if (!ready) return <div className="pv-card h-40 animate-pulse" />;
+  if (!hasKey) return <ConnectPrompt onConnected={pick.loadWorkspaces} />;
+
+  return (
+    <div className="space-y-5">
+      <div className="pv-card space-y-4 p-4 sm:p-5">
+        <CampaignPick pick={pick} disabled={running} idPrefix="el" />
+
+        <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+          <input type="checkbox" className="mt-0.5 h-4 w-4 accent-accent" checked={onePerEmail} disabled={running} onChange={(e) => setOnePerEmail(e.target.checked)} aria-label="One row per email" />
+          <span>
+            <span className="font-medium">One row per email</span>
+            <span className="block text-xs text-muted-foreground">
+              A lead in several campaigns — a 🟡 campaign and its 🔵 copy, say — comes out once, with every campaign it is in.
+              Unticked, it comes out once per campaign.
+            </span>
+          </span>
+        </label>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="button" className="pv-btn-primary disabled:opacity-50" disabled={running || picked.length === 0} onClick={() => run()} data-download>
+            {running ? <Spinner /> : <DownloadIcon size={16} />}
+            {running ? "Reading the leads…" : `Download CSV${expected > 0 ? ` · about ${formatNumber(expected)} leads` : ""}`}
+          </button>
+          {running && progress && (
+            <>
+              <span className="text-xs text-muted-foreground" data-progress>
+                {progress.campaign} ({progress.index + 1} of {progress.total}) · {formatNumber(progress.read)} read
+                {progress.retry ? ` · no answer, trying again in ${progress.retry}s` : ""}
+              </span>
+              <button type="button" className="pv-btn-ghost text-xs" onClick={() => ctrl.current?.abort()}>
+                Stop and download what&apos;s read
+              </button>
+            </>
+          )}
+          {!running && picked.length === 0 && ws && <span className="text-xs text-muted-foreground">Tick the campaigns to export.</span>}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Only leads not contacted yet. Every field and custom variable comes along (segment, opening line…), plus a campaign
+          column; the campaign&apos;s own bookkeeping — ids, send counts, status — doesn&apos;t. Downloading changes nothing in
+          Plusvibe; once it&apos;s done you can delete the exported leads from their campaigns.
+        </p>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
+          <AlertIcon size={16} className="mt-0.5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {failed && !running && (
+        <div className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm" data-failed>
+          <p className="flex items-start gap-2 font-medium">
+            <AlertIcon size={16} className="mt-0.5 shrink-0 text-warning" />
+            <span>
+              The export stopped after {formatNumber(failed.read)} lead{failed.read === 1 ? "" : "s"}: {failed.message}
+            </span>
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            It was tried again for about a minute and a half. What&apos;s read is kept — carry on from where it stopped, or
+            download it as it is.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button type="button" className="pv-btn-primary" onClick={() => run(true)} data-resume>
+              Carry on
+            </button>
+            <button type="button" className="pv-btn-ghost" disabled={failed.read === 0} onClick={() => resumeRef.current && finish(resumeRef.current, true)} data-partial>
+              Download what&apos;s read
+            </button>
+          </div>
+        </div>
+      )}
+
+      {done && (
+        <div className="pv-card p-4 sm:p-5" data-done>
+          <p className="flex items-center gap-2 text-sm font-medium">
+            {done.rows > 0 ? <CheckIcon size={16} className="text-success" /> : <AlertIcon size={16} className="text-warning" />}
+            {done.rows > 0
+              ? `${done.stopped ? "Stopped — downloaded what was read: " : "Downloaded "}${formatNumber(done.rows)} lead${done.rows === 1 ? "" : "s"} · ${done.file}`
+              : "No not-contacted leads in those campaigns, so there was nothing to download."}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {formatNumber(done.columns)} columns
+            {done.merged > 0 ? ` · ${formatNumber(done.merged)} in more than one campaign, kept once` : ""}.
+          </p>
+          <ul className="mt-2 space-y-0.5 text-xs">
+            {done.perCampaign.map((p) => (
+              <li key={p.name} className="flex justify-between gap-3">
+                <span className="truncate">{p.name}</span>
+                <span className="shrink-0 tabular-nums text-muted-foreground">{formatNumber(p.leads)}</span>
+              </li>
+            ))}
+          </ul>
+          {done.wrongStatus > 0 && (
+            <p className="mt-2 text-xs text-warning">
+              Plusvibe also sent {formatNumber(done.wrongStatus)} lead{done.wrongStatus === 1 ? "" : "s"} that had been contacted; they were left out.
+            </p>
+          )}
+          {done.stopped && done.rows > 0 && (
+            <p className="mt-2 text-xs text-muted-foreground">Deleting is only offered after a complete download — run it again without stopping to get that option.</p>
+          )}
+        </div>
+      )}
+
+      {exported && toDelete > 0 && !delResults && (
+        <div className="pv-card space-y-3 border-danger/30 p-4 sm:p-5" data-delete-card>
+          <div>
+            <p className="flex items-center gap-2 text-sm font-medium">
+              <TrashIcon size={16} className="text-danger" />
+              Delete these {formatNumber(toDelete)} lead{toDelete === 1 ? "" : "s"} from their campaigns
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Check the CSV first — deleted leads can&apos;t be brought back. Each lead is deleted only from the campaign it was
+              exported from{exported.length > 1 ? " (a lead in two campaigns is deleted from both)" : ""}. The campaigns are read
+              again just before: a lead contacted since the download is kept. Keep this tab open while it runs.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              className="pv-input w-60 py-1.5 text-sm"
+              placeholder={`Type DELETE or ${toDelete}`}
+              value={confirmText}
+              disabled={running}
+              onChange={(e) => setConfirmText(e.target.value)}
+              aria-label="Confirm delete"
+              data-delete-confirm
+            />
+            <button
+              type="button"
+              className="pv-btn bg-danger text-white shadow-soft hover:brightness-110 disabled:opacity-50"
+              disabled={running || !confirmed}
+              onClick={deleteExported}
+              data-delete-run
+            >
+              {deleting ? <Spinner /> : <TrashIcon size={16} />}
+              {deleting ? "Deleting…" : `Delete ${formatNumber(toDelete)} lead${toDelete === 1 ? "" : "s"}`}
+            </button>
+            {deleting && delProgress && (
+              <>
+                <span className="text-xs text-muted-foreground" data-delete-progress>
+                  {delProgress.campaign} ({delProgress.index + 1} of {delProgress.total}) ·{" "}
+                  {delProgress.step === "checking" ? `checking, ${formatNumber(delProgress.done)} still not contacted` : `${formatNumber(delProgress.done)} deleted`}
+                  {delProgress.retry ? ` · Plusvibe didn't answer, trying again in ${delProgress.retry}s` : ""}
+                </span>
+                <button type="button" className="pv-btn-ghost text-xs" onClick={() => delCtrl.current?.abort()}>
+                  Stop
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {delResults && (
+        <div className="pv-card p-4 sm:p-5" data-delete-done>
+          {(() => {
+            const deleted = delResults.results.reduce((n, r) => n + r.deleted, 0);
+            const skipped = delResults.results.reduce((n, r) => n + r.skipped, 0);
+            const failed = delResults.results.filter((r) => r.error).length;
+            return (
+              <>
+                <p className="flex items-center gap-2 text-sm font-medium">
+                  {failed || delResults.stopped ? <AlertIcon size={16} className="text-warning" /> : <CheckIcon size={16} className="text-success" />}
+                  {delResults.stopped ? "Stopped — " : ""}Deleted {formatNumber(deleted)} lead{deleted === 1 ? "" : "s"}
+                  {skipped > 0 ? ` · kept ${formatNumber(skipped)} no longer not contacted` : ""}
+                </p>
+                <ul className="mt-2 space-y-0.5 text-xs">
+                  {delResults.results.map((r) => (
+                    <li key={r.campaignName} className="flex justify-between gap-3">
+                      <span className="truncate">{r.campaignName}</span>
+                      <span className={`shrink-0 tabular-nums ${r.error ? "text-danger" : "text-muted-foreground"}`}>
+                        {formatNumber(r.deleted)} deleted{r.skipped > 0 ? ` · ${formatNumber(r.skipped)} kept` : ""}
+                        {r.error ? ` · ${r.error}` : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {(failed > 0 || delResults.stopped) && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    To finish, download the same campaigns again — what&apos;s left is what wasn&apos;t deleted — and delete from there.
+                  </p>
+                )}
+              </>
+            );
+          })()}
+        </div>
+      )}
+    </div>
+  );
+}
