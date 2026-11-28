@@ -32,9 +32,9 @@ eq("anything else is not a provider", [isEsp("google"), isEsp("microsoft"), isEs
 
 // --- the thresholds --------------------------------------------------------
 console.log("--- thresholds");
-eq("the defaults: Google inboxes 300 sends, Microsoft domains 750, both 14 days and half the workspace",
+eq("the defaults: Google inboxes 250 sends over 60 days with the zero-replies rule at 150, Microsoft domains 750 over 30",
   [DEFAULT_THRESHOLDS.google, DEFAULT_THRESHOLDS.microsoft],
-  [{ minSends: 300, minDays: 14, relativePct: 50 }, { minSends: 750, minDays: 14, relativePct: 50 }]);
+  [{ minSends: 250, minDays: 14, relativePct: 50, windowDays: 60, zeroReplySends: 150 }, { minSends: 750, minDays: 14, relativePct: 50, windowDays: 30, zeroReplySends: 0 }]);
 eq("a whole number of sends is fine", [parseMinSends(100).value, parseMinSends("250").value, parseMinSends(0).value], [100, 250, 0]);
 // Number("") is 0, and a minimum of 0 would judge every quiet mailbox, so
 // blank must be refused rather than read as none.
@@ -51,14 +51,22 @@ eq("a good set has no problems", validateThresholds({ minSends: 750, minDays: 14
 eq("…and a bad one names each, in reading order", validateThresholds({ minSends: "", minDays: -1, relativePct: 0 }),
   ["Minimum sends: enter a number.", "Minimum days: can't be negative.", "% of workspace: must be more than 0."]);
 eq("junk falls back to that provider's default", normalizeThresholds({ minSends: "x", minDays: null, relativePct: "y" }, "microsoft"), DEFAULT_THRESHOLDS.microsoft);
-eq("…and a good set reads as itself", normalizeThresholds({ minSends: 400, minDays: 21, relativePct: 40 }, "google"), { minSends: 400, minDays: 21, relativePct: 40 });
+eq("…and a good set reads as itself", normalizeThresholds({ minSends: 400, minDays: 21, relativePct: 40, windowDays: 45, zeroReplySends: 0 }, "google"), { minSends: 400, minDays: 21, relativePct: 40, windowDays: 45, zeroReplySends: 0 });
+eq("a set saved before the window and zero-replies rule existed gets their defaults",
+  normalizeThresholds({ minSends: 300, minDays: 14, relativePct: 50 }, "google"), { minSends: 300, minDays: 14, relativePct: 50, windowDays: 60, zeroReplySends: 150 });
+eq("the weekly window is 7 to 90 whole days", [
+  validateThresholds({ minSends: 1, minDays: 1, relativePct: 50, windowDays: 6 }).length,
+  validateThresholds({ minSends: 1, minDays: 1, relativePct: 50, windowDays: 91 }).length,
+  validateThresholds({ minSends: 1, minDays: 1, relativePct: 50, windowDays: 60, zeroReplySends: 0 }).length,
+  validateThresholds({ minSends: 1, minDays: 1, relativePct: 50, zeroReplySends: -1 }).length,
+], [1, 1, 0, 1]);
 // The old fixed-bar rule's minimum sends was 100 — far too few for the new
 // rule — so a file from before is read whole as the new defaults.
 eq("a stored set from the old fixed-bar rule reads as the defaults",
   normalizeThresholds({ minSends: 100, replyOooPct: 1.5, replyPct: 0.5 }, "microsoft"), DEFAULT_THRESHOLDS.microsoft);
 eq("a stored file with one provider set keeps the other's default",
   normalizeSettings({ thresholds: { google: { minSends: 500, minDays: 7, relativePct: 60 } }, updatedAt: 7 }),
-  { thresholds: { google: { minSends: 500, minDays: 7, relativePct: 60 }, microsoft: DEFAULT_THRESHOLDS.microsoft }, schedule: DEFAULT_SCHEDULE, updatedAt: 7 });
+  { thresholds: { google: { minSends: 500, minDays: 7, relativePct: 60, windowDays: 60, zeroReplySends: 150 }, microsoft: DEFAULT_THRESHOLDS.microsoft }, schedule: DEFAULT_SCHEDULE, updatedAt: 7 });
 eq("…and nothing stored reads as the defaults, schedule off and report only",
   normalizeSettings(null), { thresholds: DEFAULT_SETTINGS.thresholds, schedule: { enabled: false, mode: "report", sheetUrl: "" }, updatedAt: 0 });
 eq("the schedule reads what it can", [normalizeSchedule({ enabled: true, mode: "remove", sheetUrl: " x " }), normalizeSchedule({ enabled: "yes", mode: "nuke" })],
@@ -90,6 +98,14 @@ const j = (o) => judge({ sent: 1000, days: 30, replyRate: 0, replyRateOoo: 0, ha
 eq("days count both ends", [daysBetween("2026-10-01", "2026-10-14"), daysBetween("2026-10-14", "2026-10-14"), daysBetween("x", "2026-10-14")], [14, 1, null]);
 eq("under half the workspace on both rates is burned", j({ replyRateOoo: 0.9, replyRate: 0.4 }), { verdict: "burned" });
 eq("exactly half the workspace's OOO rate is not", j({ replyRateOoo: 1, replyRate: 0 }), { verdict: "ok" });
+const ZT = { minSends: 250, minDays: 14, relativePct: 50, windowDays: 60, zeroReplySends: 150 };
+const z = (o) => judge({ sent: 160, days: 30, replyRate: 0, replyRateOoo: 0, hasFigures: true, baseline: B, anyReplies: 0, ...o }, ZT);
+eq("zero replies on 150+ sends is burned, under the minimum sends too", z({}), { verdict: "burned", zeroReplies: true });
+eq("…even with no workspace to compare with", z({ baseline: null }), { verdict: "burned", zeroReplies: true });
+eq("…but not under 150 sends", z({ sent: 149 }), { verdict: "quiet", reason: "few-sends" });
+eq("…nor before the minimum days", z({ days: 10 }), { verdict: "quiet", reason: "few-sends" });
+eq("…nor with a single reply, OOO included", z({ anyReplies: 1 }), { verdict: "quiet", reason: "few-sends" });
+eq("…and 0 switches the rule off", judge({ sent: 400, days: 30, replyRate: 0, replyRateOoo: 0, hasFigures: true, baseline: null, anyReplies: 0 }, { ...ZT, zeroReplySends: 0 }), { verdict: "quiet", reason: "no-baseline" });
 // Real replies overrule a low OOO figure: something people answer is not burned.
 eq("real replies at half the workspace's real rate keep it", j({ replyRateOoo: 0.6, replyRate: 0.5 }), { verdict: "ok", rescued: true });
 eq("…but just under does not", j({ replyRateOoo: 0.6, replyRate: 0.49 }), { verdict: "burned" });
@@ -219,6 +235,7 @@ eq("…and a missed run is due now", W.nextRunAt(WED, "2026-11-02"), WED);
 // Summer time: Helsinki is +3, so 06:00 is 03:00 UTC.
 eq("it stays at 06:00 Helsinki in summer", W.dueThisWeek(Date.UTC(2026, 5, 10, 12, 0, 0)), Date.UTC(2026, 5, 8, 3, 0, 0));
 eq("the window is the 30 days that ended yesterday", W.windowFor(MON_DUE + 60_000), { start: "2026-10-10", end: "2026-11-08" });
+eq("…or the provider's own number of days", W.windowFor(MON_DUE + 60_000, undefined, 60), { start: "2026-09-10", end: "2026-11-08" });
 eq("removal is allowed for a normal week", [W.removalGuard(0, 0), W.removalGuard(5, 10), W.removalGuard(20, 400)], [null, null, null]);
 eq("…and refused when an implausible share came out burned", typeof W.removalGuard(30, 100), "string");
 

@@ -80,6 +80,18 @@ export interface Thresholds {
    * workspace's on the same provider: 50 means "under half".
    */
   relativePct: number;
+  /**
+   * Days of figures the weekly run reads for this provider, ending yesterday.
+   * Google inboxes send about 175 a month and get about 3 replies, OOO
+   * included — too few to judge on 30 days — so Google reads 60.
+   */
+  windowDays: number;
+  /**
+   * Burned outright, whatever the workspace does: this many sends or more and
+   * not one reply, OOO included, once past the minimum days. 0 switches the
+   * rule off.
+   */
+  zeroReplySends: number;
 }
 
 /**
@@ -89,8 +101,8 @@ export interface Thresholds {
  * under half the rest of their workspace.
  */
 export const DEFAULT_THRESHOLDS: Record<Esp, Thresholds> = {
-  google: { minSends: 300, minDays: 14, relativePct: 50 },
-  microsoft: { minSends: 750, minDays: 14, relativePct: 50 },
+  google: { minSends: 250, minDays: 14, relativePct: 50, windowDays: 60, zeroReplySends: 150 },
+  microsoft: { minSends: 750, minDays: 14, relativePct: 50, windowDays: 30, zeroReplySends: 0 },
 };
 
 /**
@@ -173,12 +185,42 @@ export function parseRelativePct(raw: unknown): { value: number | null; error?: 
   return p;
 }
 
-/** Problems with one provider's numbers, in reading order. Empty when they can be saved. */
-export function validateThresholds(raw: { minSends?: unknown; minDays?: unknown; relativePct?: unknown }): string[] {
-  const problems: string[] = [];
-  for (const r of [parseMinSends(raw.minSends), parseMinDays(raw.minDays), parseRelativePct(raw.relativePct)]) {
-    if (r.error) problems.push(r.error);
+export const MIN_WINDOW_DAYS = 7;
+export const MAX_WINDOW_DAYS = 90;
+
+/** Whole days, 7 to 90: the weekly run's window. */
+export function parseWindowDays(raw: unknown): { value: number | null; error?: string } {
+  if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
+    return { value: null, error: "Weekly window: enter a number of days." };
   }
+  const n = typeof raw === "number" ? raw : Number(String(raw).trim());
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return { value: null, error: "Weekly window: use a whole number of days." };
+  if (n < MIN_WINDOW_DAYS || n > MAX_WINDOW_DAYS) {
+    return { value: null, error: `Weekly window: ${MIN_WINDOW_DAYS} to ${MAX_WINDOW_DAYS} days.` };
+  }
+  return { value: n };
+}
+
+/** Sends for the zero-replies rule: a whole number, 0 for off. */
+export function parseZeroReplySends(raw: unknown): { value: number | null; error?: string } {
+  const r = parseMinSends(raw);
+  return r.error ? { value: null, error: r.error.replace("Minimum sends", "Zero replies after") } : r;
+}
+
+/** Problems with one provider's numbers, in reading order. Empty when they can be saved. */
+export function validateThresholds(raw: {
+  minSends?: unknown;
+  minDays?: unknown;
+  relativePct?: unknown;
+  windowDays?: unknown;
+  zeroReplySends?: unknown;
+}): string[] {
+  const problems: string[] = [];
+  const checks = [parseMinSends(raw.minSends), parseMinDays(raw.minDays), parseRelativePct(raw.relativePct)];
+  // The two newer numbers are optional in a save: left out, they keep what they had.
+  if (raw.windowDays !== undefined) checks.push(parseWindowDays(raw.windowDays));
+  if (raw.zeroReplySends !== undefined) checks.push(parseZeroReplySends(raw.zeroReplySends));
+  for (const r of checks) if (r.error) problems.push(r.error);
   return problems;
 }
 
@@ -188,15 +230,20 @@ export function validateThresholds(raw: { minSends?: unknown; minDays?: unknown;
  * except the minimum sends, and reads as that provider's defaults.
  */
 export function normalizeThresholds(raw: unknown, esp: Esp): Thresholds {
-  const r = (raw ?? {}) as { minSends?: unknown; minDays?: unknown; relativePct?: unknown };
+  const r = (raw ?? {}) as { minSends?: unknown; minDays?: unknown; relativePct?: unknown; windowDays?: unknown; zeroReplySends?: unknown };
   const legacy = r.relativePct === undefined;
   const sends = parseMinSends(r.minSends);
   const days = parseMinDays(r.minDays);
   const rel = parseRelativePct(r.relativePct);
+  const win = parseWindowDays(r.windowDays);
+  const zero = parseZeroReplySends(r.zeroReplySends);
+  const d = DEFAULT_THRESHOLDS[esp];
   return {
-    minSends: legacy ? DEFAULT_THRESHOLDS[esp].minSends : sends.value ?? DEFAULT_THRESHOLDS[esp].minSends,
-    minDays: days.value ?? DEFAULT_THRESHOLDS[esp].minDays,
-    relativePct: rel.value ?? DEFAULT_THRESHOLDS[esp].relativePct,
+    minSends: legacy ? d.minSends : sends.value ?? d.minSends,
+    minDays: days.value ?? d.minDays,
+    relativePct: rel.value ?? d.relativePct,
+    windowDays: win.value ?? d.windowDays,
+    zeroReplySends: r.zeroReplySends === undefined ? d.zeroReplySends : zero.value ?? d.zeroReplySends,
   };
 }
 
@@ -230,5 +277,6 @@ export function normalizeSettings(raw: Partial<BurnedSettings> | null | undefine
 /** "Google inboxes · under 50% of their workspace's reply rate, on 300+ sends and 14+ days" */
 export function describeThresholds(esp: Esp, t: Thresholds): string {
   const what = levelOf(esp) === "inbox" ? "inboxes" : "domains";
-  return `${ESP_LABELS[esp]} ${what} · under ${t.relativePct}% of their workspace's reply rate, on ${t.minSends.toLocaleString()}+ sends and ${t.minDays}+ days`;
+  const zero = t.zeroReplySends > 0 ? `, or no replies at all on ${t.zeroReplySends.toLocaleString()}+ sends` : "";
+  return `${ESP_LABELS[esp]} ${what} · under ${t.relativePct}% of their workspace's reply rate, on ${t.minSends.toLocaleString()}+ sends and ${t.minDays}+ days${zero}`;
 }

@@ -73,6 +73,7 @@ export function ResultsCard({
   // Rows the OOO bar would have burned, kept because real replies cleared
   // their own bar. Worth its own number: it is the new rule doing its job.
   const rescued = rows.filter((r) => r.rescued).length;
+  const zeroBurned = rows.filter((r) => r.zeroReplies).length;
   const errors = job.errors ?? [];
   const open = listOpen ?? rows.length <= FOLD_ABOVE;
   // A scan from before the workspace comparison carries the old numbers.
@@ -138,7 +139,7 @@ export function ResultsCard({
         <StatCard
           label="Burned"
           value={formatNumber(burned.length)}
-          sub={`${relative ? `under ${job.thresholds.relativePct}% of workspace` : "under both bars"}${rescued > 0 ? ` · ${formatNumber(rescued)} kept on real replies` : ""}`}
+          sub={`${relative ? `under ${job.thresholds.relativePct}% of workspace` : "under both bars"}${zeroBurned > 0 ? ` · ${formatNumber(zeroBurned)} on zero replies` : ""}${rescued > 0 ? ` · ${formatNumber(rescued)} kept on real replies` : ""}`}
           health={burned.length > 0 ? "bad" : "good"}
         />
         <StatCard
@@ -428,7 +429,7 @@ function Row({ row, showInboxes }: { row: ScanRow; showInboxes: boolean }) {
       <td className="px-3 py-2 text-right">
         <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${meta.className}`} title={verdictText(row)}>
           {row.verdict === "burned" && <FireIcon size={11} className="mr-0.5 inline" />}
-          {row.rescued ? "ok · replying" : row.verdict === "quiet" ? verdictText(row) : meta.label}
+          {row.rescued ? "ok · replying" : row.zeroReplies ? "burned · no replies" : row.verdict === "quiet" ? verdictText(row) : meta.label}
         </span>
       </td>
     </tr>
@@ -439,7 +440,8 @@ function Row({ row, showInboxes }: { row: ScanRow; showInboxes: boolean }) {
 function barText(job: BurnedJob): string {
   if (job.rule === "relative") {
     const t = job.thresholds;
-    return `under ${t.relativePct}% of workspace · ${formatNumber(t.minSends)}+ sends · ${t.minDays}+ days`;
+    const zero = (t.zeroReplySends ?? 0) > 0 ? ` · no replies on ${formatNumber(t.zeroReplySends)}+` : "";
+    return `under ${t.relativePct}% of workspace · ${formatNumber(t.minSends)}+ sends · ${t.minDays}+ days${zero}`;
   }
   // The old fixed bars, as the record kept them.
   const old = job.thresholds as Partial<Thresholds> & { replyOooPct?: number; replyPct?: number };

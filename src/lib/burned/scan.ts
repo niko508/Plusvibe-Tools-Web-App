@@ -55,6 +55,8 @@ export interface ScanRow {
    * one the bar missed.
    */
   rescued?: true;
+  /** Burned on the zero-replies rule: enough sends and not one reply, OOO included. */
+  zeroReplies?: true;
   workspaceId: string;
   workspaceName: string;
   /** The inbox address, or the domain — whichever this run judges. */
@@ -121,10 +123,19 @@ export function judge(
     replyRateOoo: number;
     hasFigures: boolean;
     baseline: Baseline | null;
+    /** Replies plus OOO replies. Absent: the zero-replies rule is not applied. */
+    anyReplies?: number;
   },
   t: Thresholds
-): { verdict: Verdict; reason?: QuietReason; rescued?: true } {
+): { verdict: Verdict; reason?: QuietReason; rescued?: true; zeroReplies?: true } {
   if (!row.hasFigures) return { verdict: "quiet", reason: "no-figures" };
+  // Not one reply, OOO included, on this many sends is burned on its own — no
+  // workspace needed to compare with. Still only once past the minimum days,
+  // since a new inbox's latest emails haven't had time to be answered.
+  const zeroBar = t.zeroReplySends ?? 0;
+  if (zeroBar > 0 && row.anyReplies === 0 && row.sent >= zeroBar && row.days !== null && row.days >= t.minDays) {
+    return { verdict: "burned", zeroReplies: true };
+  }
   if (row.sent < t.minSends) return { verdict: "quiet", reason: "few-sends" };
   if (row.days === null) return { verdict: "quiet", reason: "no-history" };
   if (row.days < t.minDays) return { verdict: "quiet", reason: "too-new" };
@@ -257,7 +268,13 @@ function judgeUnits(
       ...(baseline && baseline.replyRateOoo > 0 ? { vsWorkspace: Math.round((u.replyRateOoo / baseline.replyRateOoo) * 100) } : {}),
       verdict: "quiet",
     };
-    return { ...row, ...judge({ sent: u.sent, days, replyRate: u.replyRate, replyRateOoo: u.replyRateOoo, hasFigures, baseline }, t) };
+    return {
+      ...row,
+      ...judge(
+        { sent: u.sent, days, replyRate: u.replyRate, replyRateOoo: u.replyRateOoo, hasFigures, baseline, anyReplies: u.replies + u.oooReplies },
+        t
+      ),
+    };
   });
 }
 

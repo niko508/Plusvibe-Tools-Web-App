@@ -10,6 +10,8 @@ import {
   levelOf,
   parseMinDays,
   parseMinSends,
+  parseWindowDays,
+  parseZeroReplySends,
   parseRelativePct,
   type BurnedSettings,
   type Esp,
@@ -29,7 +31,7 @@ import {
 } from "@/lib/api-client";
 import { MAX_RANGE_DAYS, rangeProblem } from "@/lib/inbox-performance/metrics";
 import { useApiKey } from "@/lib/use-api-key";
-import { DATE_PRESETS, formatNumber } from "@/lib/format";
+import { DATE_PRESETS, daysAgo, formatNumber, toApiDate } from "@/lib/format";
 import { ConnectPrompt } from "@/components/connect-prompt";
 import { EmptyState, Spinner } from "@/components/ui";
 import { AlertIcon, CheckIcon, FireIcon, SettingsIcon } from "@/components/icons";
@@ -47,7 +49,15 @@ import { WeeklyPanel } from "./weekly-panel";
 const POLL_MS = 2000;
 const DEFAULT_PRESET = "30d";
 /** The ranges the bulk stats endpoint can answer in one go. */
-const PRESETS = DATE_PRESETS.filter((p) => ["7d", "14d", "21d", "30d"].includes(p.key));
+const PRESETS = [
+  ...DATE_PRESETS.filter((p) => ["7d", "14d", "21d", "30d"].includes(p.key)),
+  { key: "60d", label: "Last 60 days", range: () => ({ start: toApiDate(daysAgo(59)), end: toApiDate(new Date()) }) },
+];
+
+/** The preset matching a provider's weekly window, so a manual scan reads what the weekly run reads. */
+function presetForDays(days: number): string | null {
+  return PRESETS.find((p) => p.key === `${days}d`)?.key ?? null;
+}
 
 export function BurnedTool() {
   const { hasKey, ready } = useApiKey();
@@ -58,6 +68,8 @@ export function BurnedTool() {
   const [minSends, setMinSends] = useState("");
   const [minDays, setMinDays] = useState("");
   const [relativePct, setRelativePct] = useState("");
+  const [windowDays, setWindowDays] = useState("");
+  const [zeroSends, setZeroSends] = useState("");
   const [saving, setSaving] = useState(false);
   const [savedNote, setSavedNote] = useState<string | null>(null);
 
@@ -78,6 +90,17 @@ export function BurnedTool() {
     setMinSends(String(s.thresholds[which].minSends));
     setMinDays(String(s.thresholds[which].minDays));
     setRelativePct(String(s.thresholds[which].relativePct));
+    setWindowDays(String(s.thresholds[which].windowDays));
+    setZeroSends(String(s.thresholds[which].zeroReplySends));
+    // The window starts on the provider's weekly window when there is a preset for it.
+    const key = presetForDays(s.thresholds[which].windowDays);
+    const preset = key ? PRESETS.find((p) => p.key === key) : null;
+    if (preset) {
+      const r = preset.range();
+      setStart(r.start);
+      setEnd(r.end);
+      setPreset(preset.key);
+    }
   }, []);
 
   const loadSettings = useCallback(async () => {
@@ -135,12 +158,24 @@ export function BurnedTool() {
   const sends = parseMinSends(minSends);
   const days = parseMinDays(minDays);
   const rel = parseRelativePct(relativePct);
-  const thresholdProblem = sends.error ?? days.error ?? rel.error ?? null;
+  const win = parseWindowDays(windowDays);
+  const zero = parseZeroReplySends(zeroSends);
+  const thresholdProblem = sends.error ?? days.error ?? rel.error ?? win.error ?? zero.error ?? null;
   const saved = settings.thresholds[esp];
   const dirty =
     !thresholdProblem &&
-    (sends.value !== saved.minSends || days.value !== saved.minDays || rel.value !== saved.relativePct);
-  const edited = { minSends: sends.value as number, minDays: days.value as number, relativePct: rel.value as number };
+    (sends.value !== saved.minSends ||
+      days.value !== saved.minDays ||
+      rel.value !== saved.relativePct ||
+      win.value !== saved.windowDays ||
+      zero.value !== saved.zeroReplySends);
+  const edited = {
+    minSends: sends.value as number,
+    minDays: days.value as number,
+    relativePct: rel.value as number,
+    windowDays: win.value as number,
+    zeroReplySends: zero.value as number,
+  };
   const rangeIssue = rangeProblem(start, end);
   const canScan = settingsLoaded && !thresholdProblem && !rangeIssue && !busy && !active;
   const level = levelOf(esp);
@@ -303,6 +338,46 @@ export function BurnedTool() {
               {rel.error && <span className="block text-warning">{rel.error}</span>}
             </p>
           </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="burned-zero">
+              Burned on zero replies after (sends)
+            </label>
+            <input
+              id="burned-zero"
+              type="number"
+              className="pv-input"
+              min={0}
+              step={10}
+              value={zeroSends}
+              onChange={(e) => setZeroSends(e.target.value)}
+              aria-label="Burned on zero replies after this many sends"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Not one reply, OOO included, on this many sends or more is burned whatever the workspace does — still only after
+              the minimum days. 0 switches it off.
+              {zero.error && <span className="block text-warning">{zero.error}</span>}
+            </p>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="burned-window">
+              Weekly run reads (days)
+            </label>
+            <input
+              id="burned-window"
+              type="number"
+              className="pv-input"
+              min={7}
+              max={90}
+              step={1}
+              value={windowDays}
+              onChange={(e) => setWindowDays(e.target.value)}
+              aria-label="Days the weekly run reads"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              The Monday run reads this many days of figures, ending yesterday. A scan from here reads the window below.
+              {win.error && <span className="block text-warning">{win.error}</span>}
+            </p>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -319,7 +394,9 @@ export function BurnedTool() {
           ) : (
             <span className="text-xs text-muted-foreground">
               Saved per provider: {ESP_LABELS[esp]} {level === "inbox" ? "inboxes" : "domains"} burn under {saved.relativePct}% of
-              their workspace, once they have {formatNumber(saved.minSends)}+ sends and {saved.minDays}+ days of outreach.
+              their workspace, once they have {formatNumber(saved.minSends)}+ sends and {saved.minDays}+ days of outreach
+              {saved.zeroReplySends > 0 ? `, or with no replies at all on ${formatNumber(saved.zeroReplySends)}+ sends` : ""}. The
+              weekly run reads {saved.windowDays} days.
             </span>
           )}
         </div>

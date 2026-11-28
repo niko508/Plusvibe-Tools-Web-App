@@ -4,6 +4,9 @@ import type { Esp, ScheduleMode, ScheduleSettings } from "@/lib/burned/settings"
 
 export interface WeeklyStep {
   esp: Esp;
+  /** The window this provider's scan read. */
+  start?: string;
+  end?: string;
   scanJobId?: string;
   /** How the scan finished. */
   scanStatus?: string;

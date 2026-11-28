@@ -55,9 +55,9 @@ export function nextRunAt(now: number, lastWeek: string | undefined, tz: string 
   return instantAt(dateAfter(due, 7, tz), RUN_HOUR, tz);
 }
 
-/** The window a run at `at` reads: the 30 days that ended yesterday. */
-export function windowFor(at: number, tz: string = RUN_TIMEZONE): { start: string; end: string } {
-  return { start: dateAfter(at, -WINDOW_DAYS, tz), end: dateAfter(at, -1, tz) };
+/** The window a run at `at` reads: the `days` (30 unless said) that ended yesterday. */
+export function windowFor(at: number, tz: string = RUN_TIMEZONE, days: number = WINDOW_DAYS): { start: string; end: string } {
+  return { start: dateAfter(at, -days, tz), end: dateAfter(at, -1, tz) };
 }
 
 /**

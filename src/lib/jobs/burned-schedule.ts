@@ -123,7 +123,12 @@ async function runStep(apiKey: string, run: WeeklyRun, esp: Esp, sheetUrl: strin
 
   let scanId: string;
   try {
-    scanId = await createScan(apiKey, { esp, start: run.start, end: run.end }, { scheduled: true });
+    // Each provider reads its own window: Google's inboxes need longer to say anything.
+    const { thresholds } = await loadSettings();
+    const range = windowFor(Date.parse(`${run.end}T12:00:00Z`) + 86_400_000, undefined, thresholds[esp].windowDays);
+    step.start = range.start;
+    step.end = range.end;
+    scanId = await createScan(apiKey, { esp, start: range.start, end: range.end }, { scheduled: true });
   } catch (err) {
     step.note = `The scan could not start: ${msg(err)}`;
     pushError(run, `${esp}: ${step.note}`);
@@ -182,9 +187,10 @@ export async function runWeekly(trigger: "scheduled" | "manual", now = Date.now(
   shared.running = true;
   try {
     const state = await load();
-    const { schedule } = await loadSettings();
+    const { schedule, thresholds } = await loadSettings();
     const week = weekOf(now);
-    const range = windowFor(now);
+    // The run's own dates span the longest provider window; each step says its own.
+    const range = windowFor(now, undefined, Math.max(...ESPS.map((e) => thresholds[e].windowDays)));
     const run: WeeklyRun = {
       week,
       trigger,
