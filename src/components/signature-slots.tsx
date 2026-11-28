@@ -9,32 +9,9 @@ export const COMPANY_SLOTS = 3;
 export const PHONE_SLOTS = 5;
 export const ADDRESS_SLOTS = 3;
 
-// Default pool of roles; the title slots start pre-filled with a random pick.
-export const DEFAULT_ROLES = [
-  "Account Executive",
-  "Key Account Executive",
-  "Growth Manager",
-  "Business Development",
-  "Head of Growth",
-  "Growth Director",
-  "Growth Lead",
-  "Head of Business Development",
-  "BDR Manager",
-  "BDR",
-  "Business Development Representative",
-  "Partnerships Manager",
-];
-
-export function pickRandomRoles(n: number): string[] {
-  const pool = [...DEFAULT_ROLES];
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
-  }
-  const picked = pool.slice(0, n);
-  while (picked.length < n) picked.push("");
-  return picked;
-}
+// The role pool lives in lib so server code (the automated Start Outreach
+// run) picks titles the same way.
+export { DEFAULT_ROLES, pickRandomRoles } from "@/lib/signatures/roles";
 
 /** Spreads saved values across a fixed number of slots, padding the rest. */
 export function padSlots(values: string[], slots: number): string[] {

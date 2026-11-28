@@ -19,6 +19,20 @@ point it at a workspace, and run work that would otherwise take dozens of clicks
 | Mailbox Health Audit | 🔜 Planned | Scan every mailbox for warmup health, bounce rates and disconnects. |
 | Bulk Mailbox Actions | 🔜 Planned | Apply daily-limit, warmup and tagging changes across many mailboxes at once. |
 
+## Start Outreach from another app (`POST /api/jobs/start-outreach/auto`)
+
+Outengine Bulk Actions' **Replace Domains (Automated)** hands a replaced domain
+back to its client once it has warmed for 15 days. It calls this endpoint with
+the account's Plusvibe key (`x-pv-key`) and
+`{ sourceWorkspaceId, destWorkspaceId, domains }`. Every inbox on those
+domains in the source workspace goes into one ordinary Start Outreach run,
+built the way the page builds it: the saved week 1 / week 2 numbers for each
+category, the destination's saved signature details (else the source's;
+signatures are skipped when neither has a title and a company), the active tag
+and TLD / platform tags from General Settings, and the Domains sheet update.
+The run is queued like any other, shows on the Start Outreach page, and books
+its week 2 switch.
+
 ## How Azure Start Warmup works
 
 A run has three phases and can span days, so it lives entirely server-side:
