@@ -706,6 +706,10 @@ export function saveBurnedSchedule(patch: Partial<ScheduleSettings>, signal?: Ab
   });
 }
 
+export function skipBurnedScheduleNext(skipNext: boolean, signal?: AbortSignal) {
+  return request<WeeklyStatus>("/api/jobs/burned/schedule", { method: "POST", body: { skipNext }, signal });
+}
+
 export function runBurnedScheduleNow(signal?: AbortSignal) {
   return request<{ started: boolean }>("/api/jobs/burned/schedule/run", { method: "POST", body: {}, signal });
 }

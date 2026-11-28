@@ -39,6 +39,8 @@ export interface WeeklyRun {
 export interface WeeklyState {
   /** The last week the scheduled run started for, so it never runs twice in one. */
   lastWeek?: string;
+  /** A week (its Monday) someone chose to skip: that Monday passes without a run. */
+  skipWeek?: string;
   lastRun?: WeeklyRun;
 }
 

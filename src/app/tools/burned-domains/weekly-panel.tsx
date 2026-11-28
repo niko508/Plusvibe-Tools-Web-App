@@ -5,7 +5,7 @@ import type { WeeklyRun, WeeklyStatus, WeeklyStep } from "@/lib/jobs/burned-sche
 import { ESP_LABELS, NOUNS, levelOf, type ScheduleMode } from "@/lib/burned/settings";
 import { MAX_BURNED_SHARE } from "@/lib/burned/schedule";
 import { describeDue } from "@/lib/start-outreach/schedule";
-import { ApiClientError, fetchBurnedSchedule, runBurnedScheduleNow, saveBurnedSchedule } from "@/lib/api-client";
+import { ApiClientError, fetchBurnedSchedule, runBurnedScheduleNow, saveBurnedSchedule, skipBurnedScheduleNext } from "@/lib/api-client";
 import { formatNumber } from "@/lib/format";
 import { Spinner } from "@/components/ui";
 import { AlertIcon, ClockIcon, PlayIcon } from "@/components/icons";
@@ -66,6 +66,18 @@ export function WeeklyPanel({ onRunStarted }: { onRunStarted: () => void }) {
     try {
       await saveBurnedSchedule(patch);
       await load();
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function skipNext(skip: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      setStatus(await skipBurnedScheduleNext(skip));
     } catch (err) {
       setError(errMessage(err));
     } finally {
@@ -231,6 +243,22 @@ export function WeeklyPanel({ onRunStarted }: { onRunStarted: () => void }) {
           <span data-weekly-next>
             Next run: <span className="font-medium text-foreground">{describeDue(status.nextRunAt)}</span>
             {removeMode ? " · removes automatically" : " · report only"}
+            {status.state.skipWeek ? (
+              <>
+                {" · "}
+                <span className="text-warning">skipping Mon {status.state.skipWeek.slice(8, 10)}.{status.state.skipWeek.slice(5, 7)}</span>{" "}
+                <button type="button" className="underline disabled:opacity-50" disabled={busy} onClick={() => void skipNext(false)}>
+                  undo
+                </button>
+              </>
+            ) : (
+              <>
+                {" · "}
+                <button type="button" className="underline disabled:opacity-50" disabled={busy || running} onClick={() => void skipNext(true)} data-weekly-skip>
+                  skip this run
+                </button>
+              </>
+            )}
           </span>
         ) : (
           <span>Off — nothing runs on its own.</span>

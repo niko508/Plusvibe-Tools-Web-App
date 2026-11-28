@@ -101,7 +101,7 @@ export async function status(now = Date.now()): Promise<WeeklyStatus> {
   return {
     schedule,
     state,
-    nextRunAt: schedule.enabled ? nextRunAt(now, state.lastWeek) : null,
+    nextRunAt: schedule.enabled ? nextScheduled(now, state) : null,
     serverKey: serverApiKey() !== null,
     sheetWriting: isSheetWritingConfigured(),
     running: shared.running,
@@ -234,6 +234,24 @@ export async function runWeekly(trigger: "scheduled" | "manual", now = Date.now(
   }
 }
 
+/** The next run, past a week someone chose to skip. */
+function nextScheduled(now: number, state: WeeklyState): number {
+  const next = nextRunAt(now, state.lastWeek);
+  if (!state.skipWeek || weekOf(next) !== state.skipWeek) return next;
+  return nextRunAt(next, state.skipWeek);
+}
+
+/**
+ * Skips the next scheduled run, or takes the skip back. The week after runs
+ * as usual; "Run now" still works any time.
+ */
+export async function skipNextRun(skip: boolean, now = Date.now()): Promise<WeeklyStatus> {
+  const state = await load();
+  state.skipWeek = skip ? weekOf(nextRunAt(now, state.lastWeek)) : undefined;
+  await save();
+  return status(now);
+}
+
 /**
  * Called when the schedule is switched on. Past this week's time, the week
  * counts as done, so the first run is next Monday — switching it on midweek
@@ -254,6 +272,13 @@ async function tick() {
     if (!schedule.enabled || !serverApiKey()) return;
     const state = await load();
     if (!isDue(Date.now(), state.lastWeek)) return;
+    // A skipped week passes as done, without a run.
+    if (state.skipWeek && state.skipWeek === weekOf(Date.now())) {
+      state.lastWeek = state.skipWeek;
+      state.skipWeek = undefined;
+      await save();
+      return;
+    }
     await runWeekly("scheduled");
   } catch {
     // the next tick tries again; the run itself records what went wrong
